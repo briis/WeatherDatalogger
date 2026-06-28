@@ -30,7 +30,6 @@ import math
 import socket
 import sys
 import time
-from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -236,8 +235,6 @@ _WC_WIND_MIN_MPH = 3.0  # wind chill valid above this (mph)
 _PRESSURE_TREND_MB = 1.0  # threshold for Rising/Falling label
 _PRESSURE_TREND_TOL_S = 600  # ±10 min tolerance when finding 3h-old reading
 
-_pressure_history: deque[tuple[int, float]] = deque(maxlen=200)
-
 
 def _c_to_f(t: float) -> float:
     return t * 9.0 / 5.0 + 32.0
@@ -335,19 +332,76 @@ def _sea_level_pressure_mb(p_sta: float, h_el: float, h_ag: float) -> float:
     return round(p_sta * (1.0 + inner) ** _SLP_EXPONENT, 1)
 
 
-def _update_pressure_trend(ts: int, p_mb: float) -> tuple[float | None, str | None]:
-    _pressure_history.append((ts, p_mb))
-    target_ts = ts - 3 * 3600
+# Pressure history (persisted across restarts for 3-hour trend)
+
+_PRESSURE_KEEP_S = 24 * 3600
+
+_pressure_history: list[dict] = []
+_pressure_file: list[Path | None] = [None]  # mutable cell avoids `global`
+
+
+def _pressure_data_path(cfg: configparser.ConfigParser, config_path: str) -> Path:
+    data_dir = cfg["station"].get("data_dir", "").strip()
+    if data_dir:
+        return Path(data_dir) / "tempest_pressure.json"
+    return Path(config_path).resolve().parent / "tempest_pressure.json"
+
+
+def _load_pressure(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        cutoff = int(time.time()) - _PRESSURE_KEEP_S
+        return [e for e in data.get("history", []) if e.get("ts", 0) >= cutoff]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_pressure() -> None:
+    path = _pressure_file[0]
+    if path is None:
+        return
+    with contextlib.suppress(Exception):
+        path.write_text(json.dumps({"history": _pressure_history}))
+
+
+def init_pressure(
+    cfg: configparser.ConfigParser, config_path: str, log: logging.Logger
+) -> None:
+    """Load persisted pressure history from disk and configure the storage path."""
+    path = _pressure_data_path(cfg, config_path)
+    _pressure_file[0] = path
+    history = _load_pressure(path)
+    _pressure_history.clear()
+    _pressure_history.extend(history)
+    log.info("Pressure history: %d reading(s) loaded from %s", len(history), path)
+
+
+def record_pressure(ts: int, stn_mb: float, slp_mb: float) -> None:
+    """Record a station + sea-level pressure pair and persist the history."""
+    _pressure_history.append({"ts": ts, "stn": stn_mb, "slp": slp_mb})
+    cutoff = ts - _PRESSURE_KEEP_S
+    while _pressure_history and _pressure_history[0]["ts"] < cutoff:
+        _pressure_history.pop(0)
+    _save_pressure()
+
+
+def _pressure_trend(now_ts: int, field: str) -> tuple[float | None, str | None]:
+    target_ts = now_ts - 3 * 3600
     best_diff = float("inf")
     p_3h: float | None = None
-    for h_ts, h_p in _pressure_history:
-        diff = abs(h_ts - target_ts)
+    for entry in _pressure_history:
+        diff = abs(entry["ts"] - target_ts)
         if diff < best_diff:
             best_diff = diff
-            p_3h = h_p
+            p_3h = entry.get(field)
     if p_3h is None or best_diff > _PRESSURE_TREND_TOL_S:
         return None, None
-    delta = round(p_mb - p_3h, 1)
+    current = _pressure_history[-1].get(field) if _pressure_history else None
+    if current is None:
+        return None, None
+    delta = round(current - p_3h, 1)
     if delta <= -_PRESSURE_TREND_MB:
         return delta, "Falling"
     if delta >= _PRESSURE_TREND_MB:
@@ -459,15 +513,21 @@ def compute_obs_derived(obs: dict, cfg: configparser.ConfigParser) -> dict:
     }
 
     st = cfg["station"]
-    derived["sea_level_pressure_mb"] = _sea_level_pressure_mb(
+    slp = _sea_level_pressure_mb(
         p_mb, float(st["elevation_m"]), float(st["height_above_ground_m"])
     )
+    derived["sea_level_pressure_mb"] = slp
 
     now_ts = int(ts) if ts is not None else int(time.time())
+    record_pressure(now_ts, p_mb, slp)
 
-    trend_delta, trend_label = _update_pressure_trend(now_ts, p_mb)
-    derived["pressure_trend_mb"] = trend_delta
-    derived["pressure_trend"] = trend_label
+    stn_delta, stn_label = _pressure_trend(now_ts, "stn")
+    derived["pressure_trend_mb"] = stn_delta
+    derived["pressure_trend"] = stn_label
+
+    slp_delta, slp_label = _pressure_trend(now_ts, "slp")
+    derived["sea_level_pressure_trend_mb"] = slp_delta
+    derived["sea_level_pressure_trend"] = slp_label
 
     derived.update(lightning_summary(now_ts))
 
@@ -599,6 +659,20 @@ _ST_OBS_SENSORS = [
         "measurement",
     ),
     ("pressure_trend", "Pressure Trend Description", None, None, None),
+    (
+        "sea_level_pressure_trend_mb",
+        "Sea Level Pressure Trend",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    (
+        "sea_level_pressure_trend",
+        "Sea Level Pressure Trend Description",
+        None,
+        None,
+        None,
+    ),
     # Lightning history (persisted across restarts)
     ("lightning_last_detected", "Lightning Last Detected", None, "timestamp", None),
     ("lightning_count_3h", "Lightning Strikes (3h)", None, None, "measurement"),
@@ -833,6 +907,7 @@ def main() -> None:
     log_cfg = cfg["logging"]
     log = setup_logging(log_cfg["level"], log_cfg["file"])
 
+    init_pressure(cfg, args.config, log)
     init_lightning(cfg, args.config, log)
     run(cfg, log)
 

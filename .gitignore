@@ -222,3 +222,4 @@ config.ini
 
 # Persisted runtime data
 tempest_lightning.json
+tempest_pressure.json
