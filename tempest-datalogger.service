@@ -1,0 +1,19 @@
+[Unit]
+Description=WeatherFlow Tempest UDP → MQTT Datalogger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tempest
+Group=tempest
+WorkingDirectory=/opt/tempest-datalogger
+ExecStart=/opt/tempest-datalogger/venv/bin/python3 tempest_datalogger.py --config /opt/tempest-datalogger/config.ini
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tempest-datalogger
+
+[Install]
+WantedBy=multi-user.target

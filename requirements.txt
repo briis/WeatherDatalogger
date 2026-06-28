@@ -1,0 +1,10 @@
+paho-mqtt
+black
+coverage
+flake8
+mock
+mysql-connector-python
+pyflakes
+pylint
+python-dotenv
+ruff
