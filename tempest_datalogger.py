@@ -129,7 +129,7 @@ def parse_obs_st(msg: dict) -> dict | None:
             "hub_sn": msg.get("hub_sn"),
             "firmware_revision": msg.get("firmware_revision"),
         }
-    except KeyError, IndexError, TypeError:
+    except (KeyError, IndexError, TypeError):
         return None
 
 
@@ -144,7 +144,7 @@ def parse_rapid_wind(msg: dict) -> dict | None:
             "serial_number": msg.get("serial_number"),
             "hub_sn": msg.get("hub_sn"),
         }
-    except KeyError, IndexError, TypeError:
+    except (KeyError, IndexError, TypeError):
         return None
 
 
@@ -156,7 +156,7 @@ def parse_evt_precip(msg: dict) -> dict | None:
             "serial_number": msg.get("serial_number"),
             "hub_sn": msg.get("hub_sn"),
         }
-    except KeyError, IndexError, TypeError:
+    except (KeyError, IndexError, TypeError):
         return None
 
 
@@ -171,7 +171,7 @@ def parse_evt_strike(msg: dict) -> dict | None:
             "serial_number": msg.get("serial_number"),
             "hub_sn": msg.get("hub_sn"),
         }
-    except KeyError, IndexError, TypeError:
+    except (KeyError, IndexError, TypeError):
         return None
 
 
