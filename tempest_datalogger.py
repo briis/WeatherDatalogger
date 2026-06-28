@@ -365,13 +365,16 @@ def compute_obs_derived(obs: dict, cfg: configparser.ConfigParser) -> dict:
         return {}
 
     wb = _wet_bulb_c(t_c, rh, p_mb)
+    t_c_r = round(t_c, 1)
+    hi = _heat_index_c(t_c, rh)
+    wc = _wind_chill_c(t_c, wind_ms)
     derived: dict = {
         "vapor_pressure_mb": _vapor_pressure_mb(t_c, rh),
         "dew_point_c": _dew_point_c(t_c, rh),
         "wet_bulb_c": wb,
         "delta_t_c": round(t_c - wb, 1),
-        "heat_index_c": _heat_index_c(t_c, rh),
-        "wind_chill_c": _wind_chill_c(t_c, wind_ms),
+        "heat_index_c": hi if hi is not None else t_c_r,
+        "wind_chill_c": wc if wc is not None else t_c_r,
         "feels_like_c": _feels_like_c(t_c, rh, wind_ms),
         "air_density_kgm3": _air_density(p_mb, t_c),
         "rain_rate_mmh": round(rain_mm * 60.0, 2) if rain_mm is not None else None,
