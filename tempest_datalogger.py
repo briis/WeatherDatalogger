@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
         "api_key": "",  # WeatherFlow API key — must be set by user
         "location": "home",  # label used in MQTT topic: forecast-<location>
         "interval_min": "30",
+        "forecast_hours": "48",
         "units_temp": "c",
         "units_wind": "mps",
         "units_pressure": "hpa",
@@ -825,6 +826,16 @@ _WF_ICON_TO_HA: dict[str, str] = {
     "hail": "hail",
 }
 
+_FORECAST_CC_SENSORS: list[tuple[str, str, str | None, str | None, str | None]] = [
+    ("condition", "Condition", None, None, None),
+    ("temperature", "Temperature", "°C", "temperature", "measurement"),
+    ("humidity", "Humidity", "%", "humidity", "measurement"),
+    ("wind_speed", "Wind Speed", "m/s", "wind_speed", "measurement"),
+    ("wind_bearing", "Wind Bearing", "°", None, "measurement"),
+    ("pressure", "Sea Level Pressure", "hPa", "atmospheric_pressure", "measurement"),
+    ("dew_point", "Dew Point", "°C", "temperature", "measurement"),
+]
+
 _forecast_discovered: set[str] = set()
 
 
@@ -924,47 +935,71 @@ def _publish_forecast_discovery(
         return
     prefix = cfg["homeassistant"]["discovery_prefix"].rstrip("/")
     base = cfg["mqtt"]["base_topic"].rstrip("/")
-    uid = f"tempest_forecast_{location.replace('-', '_')}"
+    loc_id = location.replace("-", "_")
     curr = f"{base}/forecast-{location}/current"
     friendly = location.replace("-", " ").title()
-    payload = {
+    device = {
+        "identifiers": [f"tempest_forecast_{loc_id}"],
         "name": f"Forecast {friendly}",
-        "unique_id": uid,
-        "condition_topic": curr,
-        "condition_value_template": "{{ value_json.condition }}",
-        "temperature_topic": curr,
-        "temperature_template": "{{ value_json.temperature }}",
-        "temperature_unit": "°C",
-        "humidity_topic": curr,
-        "humidity_template": "{{ value_json.humidity }}",
-        "wind_speed_topic": curr,
-        "wind_speed_template": "{{ value_json.wind_speed }}",
-        "wind_speed_unit": "m/s",
-        "wind_bearing_topic": curr,
-        "wind_bearing_template": "{{ value_json.wind_bearing }}",
-        "pressure_topic": curr,
-        "pressure_template": "{{ value_json.pressure }}",
-        "pressure_unit": "hPa",
-        "precipitation_unit": "mm",
-        "forecast_hourly_topic": f"{base}/forecast-{location}/forecast_hourly",
-        "forecast_daily_topic": f"{base}/forecast-{location}/forecast_daily",
-        "device": {
-            "identifiers": [uid],
-            "name": f"Forecast {friendly}",
-            "manufacturer": "WeatherFlow",
-            "model": "Better Forecast API",
-        },
+        "manufacturer": "WeatherFlow",
+        "model": "Better Forecast API",
     }
-    topic = f"{prefix}/weather/{uid}/config"
-    try:
-        result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
-        if result.rc != mqtt.MQTT_ERR_SUCCESS:
-            log.warning("Forecast discovery error rc=%s topic=%s", result.rc, topic)
-        else:
-            _forecast_discovered.add(location)
-            log.info("Forecast HA discovery published: %s", location)
-    except Exception:
-        log.exception("Forecast discovery publish exception for %s", location)
+    for field, name, unit, device_class, state_class in _FORECAST_CC_SENSORS:
+        uid = f"tempest_forecast_{loc_id}_{field}"
+        pl: dict = {
+            "name": name,
+            "unique_id": uid,
+            "state_topic": curr,
+            "value_template": f"{{{{ value_json.{field} }}}}",
+            "device": device,
+        }
+        if unit:
+            pl["unit_of_measurement"] = unit
+        if device_class:
+            pl["device_class"] = device_class
+        if state_class:
+            pl["state_class"] = state_class
+        topic = f"{prefix}/sensor/{uid}/config"
+        try:
+            result = client.publish(topic, json.dumps(pl), qos=1, retain=True)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning("Forecast discovery error rc=%s topic=%s", result.rc, topic)
+        except Exception:
+            log.exception("Forecast discovery error for %s", topic)
+    _forecast_discovered.add(location)
+    hourly_t = f"{base}/forecast-{location}/forecast_hourly"
+    daily_t = f"{base}/forecast-{location}/forecast_daily"
+    yaml_hint = (
+        "\nmqtt:\n"
+        "  weather:\n"
+        f"    - name: 'Forecast {friendly}'\n"
+        f"      unique_id: 'tempest_forecast_{loc_id}'\n"
+        f"      condition_topic: '{curr}'\n"
+        "      condition_value_template: '{{ value_json.condition }}'\n"
+        f"      temperature_topic: '{curr}'\n"
+        "      temperature_template: '{{ value_json.temperature }}'\n"
+        "      temperature_unit: '°C'\n"
+        f"      humidity_topic: '{curr}'\n"
+        "      humidity_template: '{{ value_json.humidity }}'\n"
+        f"      wind_speed_topic: '{curr}'\n"
+        "      wind_speed_template: '{{ value_json.wind_speed }}'\n"
+        "      wind_speed_unit: 'm/s'\n"
+        f"      wind_bearing_topic: '{curr}'\n"
+        "      wind_bearing_template: '{{ value_json.wind_bearing }}'\n"
+        f"      pressure_topic: '{curr}'\n"
+        "      pressure_template: '{{ value_json.pressure }}'\n"
+        "      pressure_unit: 'hPa'\n"
+        "      precipitation_unit: 'mm'\n"
+        f"      forecast_hourly_topic: '{hourly_t}'\n"
+        f"      forecast_daily_topic: '{daily_t}'"
+    )
+    log.info(
+        "Forecast: %d sensors discovered for '%s'."
+        " To add a weather card, paste into HA configuration.yaml:%s",
+        len(_FORECAST_CC_SENSORS),
+        location,
+        yaml_hint,
+    )
 
 
 def fetch_and_publish_forecast(
@@ -984,9 +1019,13 @@ def fetch_and_publish_forecast(
 
     cc = data.get("current_conditions", {})
     fcast = data.get("forecast", {})
+    hourly_limit = int(fc["forecast_hours"])
     subtopics = [
         ("current", _parse_current_conditions(cc)),
-        ("forecast_hourly", _parse_hourly_forecast(fcast.get("hourly", []))),
+        (
+            "forecast_hourly",
+            _parse_hourly_forecast(fcast.get("hourly", [])[:hourly_limit]),
+        ),
         ("forecast_daily", _parse_daily_forecast(fcast.get("daily", []))),
     ]
     for subtopic, payload in subtopics:

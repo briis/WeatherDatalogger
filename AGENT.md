@@ -119,6 +119,11 @@ Default (empty) = directory of the config file.
 - Published once per device per process run (tracked by `_discovered` set)
 - Device info (`_device_info()`) distinguishes hub (`HB-`) from sensor (`ST-`)
 - `_HA_DISCOVERY_MAP` maps UDP type → (subtopic, sensor_list)
+- **HA does NOT support `weather` entity discovery** — only `sensor` and a few
+  other entity types work with MQTT discovery. Forecast current-conditions are
+  exposed as individual sensors (`_FORECAST_CC_SENSORS`). A YAML snippet for a
+  `mqtt: weather:` entity (for a weather card + hourly/daily forecast) is logged
+  at INFO the first time the forecast publishes.
 
 ---
 
