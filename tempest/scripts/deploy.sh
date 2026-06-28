@@ -35,20 +35,20 @@ git clone --quiet --depth 1 --branch main "$REPO_URL" "$STAGING"
 # Install only the files required for production
 # ---------------------------------------------------------------------------
 echo "==> Installing production files to $INSTALL_DIR…"
-install -m 644 "$STAGING/tempest_datalogger.py" "$INSTALL_DIR/tempest_datalogger.py"
-install -m 644 "$STAGING/requirements.txt"       "$INSTALL_DIR/requirements.txt"
-install -m 644 "$STAGING/config.example.ini"     "$INSTALL_DIR/config.example.ini"
-install -m 644 "$STAGING/README.md"              "$INSTALL_DIR/README.md"
-install -D -m 755 "$STAGING/scripts/deploy.sh"   "$INSTALL_DIR/scripts/deploy.sh"
+install -m 644 "$STAGING/tempest/tempest_datalogger.py" "$INSTALL_DIR/tempest_datalogger.py"
+install -m 644 "$STAGING/tempest/requirements.txt"       "$INSTALL_DIR/requirements.txt"
+install -m 644 "$STAGING/tempest/config.example.ini"     "$INSTALL_DIR/config.example.ini"
+install -m 644 "$STAGING/tempest/README.md"              "$INSTALL_DIR/README.md"
+install -D -m 755 "$STAGING/tempest/scripts/deploy.sh"   "$INSTALL_DIR/scripts/deploy.sh"
 
 # ---------------------------------------------------------------------------
 # Systemd unit — reload only when the file actually changed
 # ---------------------------------------------------------------------------
 echo "==> Syncing systemd unit…"
-if ! diff -q "$STAGING/systemd/tempest-datalogger.service" \
+if ! diff -q "$STAGING/tempest/systemd/tempest-datalogger.service" \
              "$SYSTEMD_TARGET" >/dev/null 2>&1; then
     install -m 644 \
-        "$STAGING/systemd/tempest-datalogger.service" \
+        "$STAGING/tempest/systemd/tempest-datalogger.service" \
         "$SYSTEMD_TARGET"
     systemctl daemon-reload
     echo "    Unit file updated and daemon reloaded."

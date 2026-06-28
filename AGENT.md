@@ -28,7 +28,7 @@ any MQTT subscriber) gets a unified feed.
 - **`logging`** (stdlib) for all output — no `print()` in production code
 - Field names in MQTT JSON payloads: **descriptive snake_case with unit suffix**
   (`air_temperature_c`, `station_pressure_mb`, `wind_avg_ms`, `relative_humidity_pct`)
-- Keep `tempest_datalogger.py` as a **single self-contained file**
+- Keep `tempest/tempest_datalogger.py` as a **single self-contained file**
 
 ---
 
@@ -69,7 +69,7 @@ UDP broadcast → dispatch() → parse_<type>() → [compute_obs_derived()] → 
 ```
 
 ### Adding a new message type
-1. Write a `parse_<type>(msg: dict) -> dict | None` function
+1. Write a `parse_<type>(msg: dict) -> dict | None` function in `tempest/tempest_datalogger.py`
 2. Add an entry to `PARSERS`: `"type_string": ("subtopic_name", parse_fn)`
 3. If it needs HA discovery, add sensor tuples to the appropriate `_*_SENSORS` list
    and register it in `_HA_DISCOVERY_MAP`
@@ -139,8 +139,8 @@ The devcontainer cannot receive real Tempest UDP broadcasts (Docker Desktop on
 macOS runs in a Linux VM; LAN broadcasts never reach it). Use the simulator:
 
 ```bash
-python3 scripts/simulate_udp.py          # sends all 6 message types once
-python3 scripts/simulate_udp.py --count 0 --interval 60  # continuous, every 60s
+python3 tempest/scripts/simulate_udp.py          # sends all 6 message types once
+python3 tempest/scripts/simulate_udp.py --count 0 --interval 60  # continuous, every 60s
 ```
 
 Subscribe to verify output:
@@ -150,7 +150,7 @@ mosquitto_sub -h localhost -t 'weatherdatalogger/#' -v
 
 Run the datalogger:
 ```bash
-python3 tempest_datalogger.py --config config.dev.ini
+python3 tempest/tempest_datalogger.py --config tempest/config.dev.ini
 ```
 
 ---
@@ -173,12 +173,12 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 - [x] Tempest UDP listener with all 6 message type parsers
 - [x] MQTT publish with configurable base topic, QoS, retain, TLS
-- [x] INI-based config with documented defaults (`config.example.ini`)
-- [x] Dev config for devcontainer (`config.dev.ini`)
-- [x] systemd service unit (`systemd/tempest-datalogger.service`)
-- [x] Deploy script (`scripts/deploy.sh`) — SSH-key auth, staging clone, explicit
+- [x] INI-based config with documented defaults (`tempest/config.example.ini`)
+- [x] Dev config for devcontainer (`tempest/config.dev.ini`)
+- [x] systemd service unit (`tempest/systemd/tempest-datalogger.service`)
+- [x] Deploy script (`tempest/scripts/deploy.sh`) — SSH-key auth, staging clone, explicit
       file list, dev-file cleanup, venv bootstrap, ownership restore
-- [x] UDP packet simulator (`scripts/simulate_udp.py`)
+- [x] UDP packet simulator (`tempest/scripts/simulate_udp.py`)
 - [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
 - [x] Home Assistant MQTT discovery (all raw + derived sensors auto-discovered)
 - [x] Derived metrics: dew point, wet bulb, delta T, feels like, heat index,

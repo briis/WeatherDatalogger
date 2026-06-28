@@ -49,25 +49,30 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 
 ---
 
-## Repository Structure (actual, flat layout)
+## Repository Structure
 
 ```
-tempest-weatherdatalogger/
-├── tempest_datalogger.py       ← Main Python service (UDP → MQTT, single file)
-├── config.example.ini          ← Documented template for all config keys
-├── config.dev.ini              ← Dev container config (local mosquitto)
-├── config.ini                  ← Production config (gitignored, credentials)
-├── requirements.txt            ← Runtime dependency: paho-mqtt
-├── requirements-dev.txt        ← Dev/lint tools: ruff
-├── .ruff.toml                  ← Ruff linter config (target-version = "py311")
+tempest-weatherdatalogger/           ← repo root
+├── tempest/                         ← WeatherFlow Tempest service
+│   ├── tempest_datalogger.py        ← Main Python service (UDP → MQTT, single file)
+│   ├── config.example.ini           ← Documented template for all config keys
+│   ├── config.dev.ini               ← Dev container config (local mosquitto)
+│   ├── requirements.txt             ← Runtime dependency: paho-mqtt
+│   ├── scripts/
+│   │   ├── deploy.sh               ← Pull from GitHub, update deps, restart service
+│   │   └── simulate_udp.py         ← Sends all 6 Tempest message types to localhost
+│   ├── systemd/
+│   │   └── tempest-datalogger.service  ← systemd unit for Debian LXC
+│   └── README.md                   ← Tempest install + configuration docs
+├── davis/                           ← Davis Vantage Vue (planned; hardware pending)
+│   └── README.md
+├── requirements-dev.txt             ← Shared dev/lint tools: ruff
+├── .ruff.toml                       ← Ruff linter config (target-version = "py311")
 ├── scripts/
-│   ├── deploy.sh               ← Pull from GitHub, update deps, restart service
-│   ├── lint                    ← ruff format + ruff check --fix
-│   └── simulate_udp.py         ← Sends all 6 Tempest message types to localhost
-├── systemd/
-│   └── tempest-datalogger.service  ← systemd unit for Debian LXC
-├── CONTEXT.md                  ← This file
-└── AGENT.md                    ← Instructions for AI coding assistants
+│   └── lint                         ← ruff format + ruff check --fix (all services)
+├── README.md                        ← Project overview (links to each service dir)
+├── CONTEXT.md                       ← This file
+└── AGENT.md                         ← Instructions for AI coding assistants
 ```
 
 ---
@@ -78,7 +83,7 @@ tempest-weatherdatalogger/
 - Tempest datalogger runs as a Python 3.11 service inside an LXC
 - Runs as a dedicated unprivileged user (`tempest`) under systemd
 - No Docker, no virtualenv wrappers — direct venv at `/opt/tempest-datalogger/venv`
-- Deploy with `sudo bash scripts/deploy.sh`
+- Deploy with `sudo bash /opt/tempest-datalogger/scripts/deploy.sh`
 - The LXC must be on the **same L2 network segment** as the Tempest Hub (UDP broadcast does not cross routed boundaries)
 
 ---

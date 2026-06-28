@@ -25,7 +25,7 @@ keep-runtime-typing = true
 max-complexity = 25
 
 [lint.per-file-ignores]
-"scripts/**" = [
+"**/scripts/**" = [
     "S311",  # random is fine for weather simulation data
     "T201",  # print is fine in CLI dev scripts
 ]

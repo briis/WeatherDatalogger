@@ -82,7 +82,7 @@ useradd -r -s /usr/sbin/nologin tempest
 
 ```bash
 mkdir -p /opt/tempest-datalogger/scripts
-curl -fsSL https://raw.githubusercontent.com/briis/tempest-weatherdatalogger/main/scripts/deploy.sh \
+curl -fsSL https://raw.githubusercontent.com/briis/tempest-weatherdatalogger/main/tempest/scripts/deploy.sh \
     -o /opt/tempest-datalogger/scripts/deploy.sh
 chmod +x /opt/tempest-datalogger/scripts/deploy.sh
 ```
