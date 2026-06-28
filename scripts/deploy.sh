@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/briis/tempest-weatherdatalogger.git"
+REPO_URL="git@github.com:briis/tempest-weatherdatalogger.git"
 INSTALL_DIR="/opt/tempest-datalogger"
 VENV="$INSTALL_DIR/venv"
 SERVICE="tempest-datalogger"
