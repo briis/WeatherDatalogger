@@ -78,26 +78,28 @@ apt update && apt install -y python3.11 python3.11-venv git
 useradd -r -s /usr/sbin/nologin tempest
 ```
 
-### 3. Clone the repository
+### 3. Create the install directory and download the deploy script
 
 ```bash
-git clone https://github.com/briis/tempest-weatherdatalogger.git /opt/tempest-datalogger
+mkdir -p /opt/tempest-datalogger/scripts
+curl -fsSL https://raw.githubusercontent.com/briis/tempest-weatherdatalogger/main/scripts/deploy.sh \
+    -o /opt/tempest-datalogger/scripts/deploy.sh
+chmod +x /opt/tempest-datalogger/scripts/deploy.sh
 ```
 
-### 4. Create a virtual environment and install dependencies
+### 4. Run the deploy script
 
 ```bash
-cd /opt/tempest-datalogger
-python3.11 -m venv venv
-venv/bin/pip install --upgrade pip
-venv/bin/pip install -r requirements.txt
+sudo bash /opt/tempest-datalogger/scripts/deploy.sh
 ```
+
+This fetches only the production files from GitHub, creates the Python virtual environment, installs dependencies, and installs the systemd unit file.
 
 ### 5. Configure
 
 ```bash
-cp config.example.ini config.ini
-nano config.ini
+cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
+nano /opt/tempest-datalogger/config.ini
 ```
 
 Minimum required settings:
@@ -116,21 +118,13 @@ elevation_m = 42        # your station elevation above sea level in metres
 
 See [Configuration](#configuration) for all available options.
 
-### 6. Set ownership
+### 6. Enable and start the service
 
 ```bash
-chown -R tempest:tempest /opt/tempest-datalogger
-```
-
-### 7. Install the systemd service
-
-```bash
-cp systemd/tempest-datalogger.service /etc/systemd/system/
-systemctl daemon-reload
 systemctl enable --now tempest-datalogger
 ```
 
-### 8. Verify
+### 7. Verify
 
 ```bash
 systemctl status tempest-datalogger
@@ -148,19 +142,20 @@ You should see lines like:
 
 ## Updating
 
-Pull the latest code and restart the service in one step:
-
 ```bash
 sudo bash /opt/tempest-datalogger/scripts/deploy.sh
 ```
 
-The script:
-1. Pulls the latest commits from `origin/main`
-2. Upgrades Python dependencies
-3. Copies the systemd unit file if it changed and reloads the daemon
-4. Restarts the service and shows its status
+The script clones the latest code to a temporary staging directory, copies only the files needed for production, syncs the systemd unit if it changed, updates Python dependencies, restores ownership to the `tempest` user, and restarts the service.
 
-> **After updating:** `config.ini` is never touched by the deploy script. Check `config.example.ini` for any new keys added in the release and copy the ones you want into your `config.ini`.
+Files installed to `/opt/tempest-datalogger`:
+- `tempest_datalogger.py` — the service
+- `requirements.txt` — Python dependencies
+- `config.example.ini` — configuration reference
+- `README.md` — this file
+- `scripts/deploy.sh` — the deploy script itself
+
+> **After updating:** `config.ini` is never touched. Check `config.example.ini` for any new keys added since your last update and copy the ones you want into `config.ini`.
 
 ---
 
