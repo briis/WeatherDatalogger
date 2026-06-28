@@ -161,11 +161,13 @@ When `[homeassistant] discovery = true`, the service publishes **retained** conf
 
 - **Tempest ST-xxxxx** device — all raw + derived obs_st sensors
 - **Tempest HB-xxxxx** device — hub status sensors
-- **Forecast \<location\>** device — 7 current-condition sensors (condition, temperature, humidity, wind speed, wind bearing, pressure, dew point)
+- **Forecast \<location\>** device — 9 sensors:
+  - 7 current-condition sensors (condition, temperature, humidity, wind speed, wind bearing, sea level pressure, dew point) — `value_template` extracts each field from the `forecast-<location>/current` topic
+  - 2 forecast-array sensors (Hourly Forecast, Daily Forecast) — state = entry count; `json_attributes_topic` + `json_attributes_template: "{{ {'forecasts': value_json} | tojson }}"` exposes the full array as the `forecasts` attribute
 
 Discovery is published once per device per run (tracked with an in-memory set). The `lightning_last_detected` sensor uses `device_class: timestamp` so HA displays it natively as "2 hours ago".
 
-> **Note:** HA MQTT integration does not support auto-discovery for `weather` entities (only `sensor`, `binary_sensor`, switch, etc. are discoverable). To create a full weather card with hourly/daily forecast, add a `mqtt: weather:` block to `configuration.yaml` — the exact YAML is logged at INFO level the first time the forecast is published.
+> **Note:** HA MQTT integration does not support auto-discovery for `weather` entities (`homeassistant/weather/…` topics are silently ignored), and `mqtt: weather:` in `configuration.yaml` is also invalid. To create a full weather card with hourly/daily forecast, add a `template: weather:` block to `configuration.yaml` — the exact YAML is logged at INFO level the first time the forecast is published.
 
 ---
 

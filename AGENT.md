@@ -47,11 +47,13 @@ production before. Always run `scripts/lint` after editing and check that
 
 ```
 weatherdatalogger/tempest-<serial>/<message_type>
+weatherdatalogger/forecast-<location>/current|forecast_hourly|forecast_daily
 weatherdatalogger/davis-<station_id>/<sensor>
 ```
 
 - `<serial>` comes from the `serial_number` field in the UDP broadcast
   (`ST-00209955`, `HB-00013030`, etc.) with `:` replaced by `-`
+- `<location>` is the config value lowercased with spaces replaced by `-`
 - Subtopic names are lowercase with underscores
 - Never publish to the bare `weatherdatalogger/` topic
 
@@ -122,11 +124,12 @@ Default (empty) = directory of the config file.
 - Published once per device per process run (tracked by `_discovered` set)
 - Device info (`_device_info()`) distinguishes hub (`HB-`) from sensor (`ST-`)
 - `_HA_DISCOVERY_MAP` maps UDP type → (subtopic, sensor_list)
-- **HA does NOT support `weather` entity discovery** — only `sensor` and a few
-  other entity types work with MQTT discovery. Forecast current-conditions are
-  exposed as individual sensors (`_FORECAST_CC_SENSORS`). A YAML snippet for a
-  `mqtt: weather:` entity (for a weather card + hourly/daily forecast) is logged
-  at INFO the first time the forecast publishes.
+
+**Forecast discovery** publishes 9 sensors into a single "Forecast \<location\>" device:
+- 7 current-condition sensors (`_FORECAST_CC_SENSORS`) — state_topic: `forecast-<loc>/current`, `value_template` extracts each field
+- 2 forecast-array sensors (Hourly / Daily) — `state_topic` returns entry count via `{{ value_json | length }}`; `json_attributes_topic` points at the same topic with `json_attributes_template: "{{ {'forecasts': value_json} | tojson }}"` so the full array is available as the `forecasts` attribute
+
+**HA does NOT support `weather` entity auto-discovery** (`homeassistant/weather/…` topics are silently ignored) and **`mqtt: weather:` in configuration.yaml is also invalid**. The correct approach is `template: weather:` in configuration.yaml, which reads from the 9 auto-discovered sensors. The exact YAML snippet is logged at INFO the first time the forecast publishes.
 
 ---
 
@@ -173,7 +176,8 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] INI-based config with documented defaults (`config.example.ini`)
 - [x] Dev config for devcontainer (`config.dev.ini`)
 - [x] systemd service unit (`systemd/tempest-datalogger.service`)
-- [x] Deploy script (`scripts/deploy.sh`)
+- [x] Deploy script (`scripts/deploy.sh`) — SSH-key auth, staging clone, explicit
+      file list, dev-file cleanup, venv bootstrap, ownership restore
 - [x] UDP packet simulator (`scripts/simulate_udp.py`)
 - [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
 - [x] Home Assistant MQTT discovery (all raw + derived sensors auto-discovered)
@@ -186,8 +190,11 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] WeatherFlow Better Forecast REST API poller (background daemon thread)
       — current conditions, hourly (configurable depth via `forecast_hours`),
       10-day daily — published to `forecast-<location>/` MQTT topics
-- [x] Forecast HA discovery: 7 current-condition sensors auto-discovered;
-      YAML snippet for `mqtt: weather:` entity logged at INFO on first run
+- [x] Forecast HA discovery: 9 sensors (7 current-condition + 2 forecast-array
+      with `json_attributes_topic`) auto-discovered into a "Forecast" device;
+      `template: weather:` YAML snippet logged at INFO on first run
+- [x] Deploy script: staging-based, copies only production files, cleans up
+      dev-only leftovers, creates venv on first run, restores ownership
 
 ## What's next / TODO
 
@@ -195,7 +202,6 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
 - [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with
       `online`/`offline` LWT and last-seen timestamp
-- [ ] Clean-up deploy script, so we only copy files that are need for the production environment
 
 ---
 
