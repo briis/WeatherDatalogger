@@ -1,0 +1,8 @@
+-r requirements.txt
+black
+coverage
+flake8
+mock
+pyflakes
+pylint
+ruff

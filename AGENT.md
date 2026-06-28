@@ -74,10 +74,40 @@ dict or `None` on failure. Adding a new message type means:
 ## Deployment target
 
 - **Debian Bookworm LXC** on Proxmox
-- Python service managed by **systemd** (unit file in `systemd/`)
+- Python service managed by **systemd** (unit file in `systemd/tempest-datalogger.service`)
 - Runs as a dedicated unprivileged user (`tempest`)
 - No Docker, no virtualenv wrappers in production — direct venv at `/opt/tempest-datalogger/venv`
 - The LXC must be on the **same L2 network segment** as the Tempest Hub (UDP broadcast does not cross routed boundaries)
+- Deploy with `sudo bash scripts/deploy.sh` — pulls from GitHub, updates deps, restarts the service
+
+## Config files
+
+| File | Purpose | Committed? |
+|---|---|---|
+| `config.example.ini` | Template with all keys documented | Yes |
+| `config.dev.ini` | Dev container — points to local mosquitto | Yes |
+| `config.ini` | Production config with real credentials | **No** (gitignored) |
+
+Use `--config config.dev.ini` when running locally:
+
+```bash
+python3 tempest_datalogger.py --config config.dev.ini
+```
+
+## Dev container testing
+
+The devcontainer installs `mosquitto` and starts it on `localhost:1883` automatically.
+Subscribe to all topics to verify output:
+
+```bash
+mosquitto_sub -h localhost -t 'weatherdatalogger/#' -v
+```
+
+Then run the datalogger in a second terminal:
+
+```bash
+python3 tempest_datalogger.py --config config.dev.ini
+```
 
 ---
 
@@ -85,13 +115,14 @@ dict or `None` on failure. Adding a new message type means:
 
 - [x] Tempest UDP listener with all 6 message type parsers
 - [x] MQTT publish with configurable base topic, QoS, retain, TLS
-- [x] INI-based config with documented defaults
-- [x] systemd service unit
+- [x] INI-based config with documented defaults (`config.example.ini`)
+- [x] Dev config for devcontainer (`config.dev.ini`)
+- [x] systemd service unit (`systemd/tempest-datalogger.service`)
 - [x] ESPHome YAML for Davis CC1101 receiver (separate, in `davis/`)
+- [x] `requirements.txt` (runtime) and `requirements-dev.txt` (dev/lint tools)
+- [x] Deploy script (`scripts/deploy.sh`)
 
 ## What's next / TODO
-
-- [ ] `requirements.txt` for the tempest service (`paho-mqtt>=1.6`)
 - [ ] Davis MQTT topic structure — align with `weatherdatalogger/davis-<id>/` scheme
 - [ ] Decide on and document derived fields (dew point, feels-like, etc.) — compute in datalogger or leave to consumers?
 - [ ] Unit tests for the parser functions (no network required, just dicts)
