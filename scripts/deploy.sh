@@ -55,6 +55,29 @@ if ! diff -q "$STAGING/systemd/tempest-datalogger.service" \
 fi
 
 # ---------------------------------------------------------------------------
+# Remove dev-only files left over from a previous git clone or old deploy
+# ---------------------------------------------------------------------------
+echo "==> Removing dev-only files…"
+rm -f \
+    "$INSTALL_DIR/AGENT.md" \
+    "$INSTALL_DIR/CONTEXT.md" \
+    "$INSTALL_DIR/config.dev.ini" \
+    "$INSTALL_DIR/requirements-dev.txt" \
+    "$INSTALL_DIR/.ruff.toml" \
+    "$INSTALL_DIR/.gitignore" \
+    "$INSTALL_DIR/.DS_Store" \
+    "$INSTALL_DIR/LICENSE" \
+    "$INSTALL_DIR/tempest-weatherdatalogger.code-workspace" \
+    "$INSTALL_DIR/scripts/lint" \
+    "$INSTALL_DIR/scripts/simulate_udp.py"
+rm -rf \
+    "$INSTALL_DIR/.git" \
+    "$INSTALL_DIR/.devcontainer" \
+    "$INSTALL_DIR/.ruff_cache" \
+    "$INSTALL_DIR/__pycache__" \
+    "$INSTALL_DIR/systemd"
+
+# ---------------------------------------------------------------------------
 # Virtual environment — create on first run, update packages every run
 # ---------------------------------------------------------------------------
 if [[ ! -d "$VENV" ]]; then
