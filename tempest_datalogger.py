@@ -55,6 +55,10 @@ DEFAULT_CONFIG = {
         "level": "INFO",
         "file": "",  # empty = stderr only
     },
+    "homeassistant": {
+        "discovery": "false",
+        "discovery_prefix": "homeassistant",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -279,6 +283,114 @@ def publish(
 
 
 # ---------------------------------------------------------------------------
+# Home Assistant MQTT Discovery
+# ---------------------------------------------------------------------------
+
+# Each entry: (field, friendly_name, unit_of_measurement, device_class, state_class)
+_ST_OBS_SENSORS = [
+    ("air_temperature_c", "Temperature", "°C", "temperature", "measurement"),
+    ("relative_humidity_pct", "Humidity", "%", "humidity", "measurement"),
+    ("station_pressure_mb", "Pressure", "hPa", "atmospheric_pressure", "measurement"),
+    ("wind_avg_ms", "Wind Speed", "m/s", "wind_speed", "measurement"),
+    ("wind_gust_ms", "Wind Gust", "m/s", "wind_speed", "measurement"),
+    ("wind_lull_ms", "Wind Lull", "m/s", "wind_speed", "measurement"),
+    ("wind_direction_deg", "Wind Direction", "°", None, "measurement"),
+    ("uv_index", "UV Index", None, None, "measurement"),
+    ("solar_radiation_wm2", "Solar Radiation", "W/m²", "irradiance", "measurement"),
+    ("illuminance_lux", "Illuminance", "lx", "illuminance", "measurement"),
+    ("rain_accumulation_mm", "Rain Accumulation", "mm", "precipitation", "measurement"),
+    ("lightning_avg_dist_km", "Lightning Distance", "km", "distance", "measurement"),
+    ("lightning_strike_count", "Lightning Strikes", None, None, "measurement"),
+    ("battery_volts", "Battery", "V", "voltage", "measurement"),
+]
+
+_ST_STATUS_SENSORS = [
+    ("rssi", "Signal Strength", "dBm", "signal_strength", "measurement"),
+    ("uptime_s", "Uptime", "s", "duration", "total_increasing"),
+]
+
+_HB_STATUS_SENSORS = [
+    ("rssi", "Signal Strength", "dBm", "signal_strength", "measurement"),
+    ("uptime_s", "Uptime", "s", "duration", "total_increasing"),
+]
+
+_HA_DISCOVERY_MAP = {
+    "obs_st": ("observation", _ST_OBS_SENSORS),
+    "device_status": ("device_status", _ST_STATUS_SENSORS),
+    "hub_status": ("hub_status", _HB_STATUS_SENSORS),
+}
+
+_discovered: set[str] = set()
+
+
+def _device_info(serial: str) -> dict:
+    serial_id = serial.replace("-", "")
+    if serial.startswith("HB"):
+        return {
+            "identifiers": [f"tempest_{serial_id}"],
+            "name": f"Tempest Hub {serial}",
+            "manufacturer": "WeatherFlow",
+            "model": "Tempest Hub",
+        }
+    return {
+        "identifiers": [f"tempest_{serial_id}"],
+        "name": f"Tempest {serial}",
+        "manufacturer": "WeatherFlow",
+        "model": "Tempest",
+    }
+
+
+def publish_ha_discovery(
+    msg_type: str,
+    serial: str,
+    client: mqtt.Client,
+    cfg: configparser.ConfigParser,
+    log: logging.Logger,
+) -> None:
+    """Publish retained MQTT discovery config for every sensor of this message type."""
+    if msg_type not in _HA_DISCOVERY_MAP:
+        return
+
+    key = f"{serial}:{msg_type}"
+    if key in _discovered:
+        return
+
+    prefix = cfg["homeassistant"]["discovery_prefix"].rstrip("/")
+    base = cfg["mqtt"]["base_topic"].rstrip("/")
+    subtopic, sensors = _HA_DISCOVERY_MAP[msg_type]
+    state_topic = f"{base}/tempest-{serial}/{subtopic}"
+    device = _device_info(serial)
+    serial_id = serial.replace("-", "")
+
+    for field, name, unit, device_class, state_class in sensors:
+        unique_id = f"tempest_{serial_id}_{field}"
+        payload: dict = {
+            "name": name,
+            "unique_id": unique_id,
+            "state_topic": state_topic,
+            "value_template": f"{{{{ value_json.{field} }}}}",
+            "device": device,
+        }
+        if unit:
+            payload["unit_of_measurement"] = unit
+        if device_class:
+            payload["device_class"] = device_class
+        if state_class:
+            payload["state_class"] = state_class
+
+        topic = f"{prefix}/sensor/{unique_id}/config"
+        try:
+            result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning("Discovery publish error rc=%s topic=%s", result.rc, topic)
+        except Exception:
+            log.exception("Discovery publish exception for %s", topic)
+
+    _discovered.add(key)
+    log.info("HA discovery published: %s / %s", serial, msg_type)
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -322,6 +434,9 @@ def dispatch(
 
     log.info("%s → %s", msg_type, topic)
     publish(client, cfg, topic, payload, log)
+
+    if cfg["homeassistant"].getboolean("discovery"):
+        publish_ha_discovery(msg_type, serial, client, cfg, log)
 
 
 # ---------------------------------------------------------------------------
