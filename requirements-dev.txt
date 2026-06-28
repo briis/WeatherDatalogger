@@ -1,4 +1,4 @@
--r requirements.txt
+-r tempest/requirements.txt
 black
 coverage
 flake8
