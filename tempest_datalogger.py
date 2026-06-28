@@ -23,6 +23,7 @@ Configuration is read from config.ini (see below for defaults).
 
 import argparse
 import configparser
+import contextlib
 import json
 import logging
 import math
@@ -30,6 +31,7 @@ import socket
 import sys
 import time
 from collections import deque
+from datetime import UTC, datetime
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -64,6 +66,7 @@ DEFAULT_CONFIG = {
     "station": {
         "elevation_m": "0",
         "height_above_ground_m": "0",
+        "data_dir": "",  # empty = same directory as the config file
     },
 }
 
@@ -352,6 +355,81 @@ def _update_pressure_trend(ts: int, p_mb: float) -> tuple[float | None, str | No
     return delta, "Steady"
 
 
+# Lightning history (persisted across restarts)
+
+_LIGHTNING_WINDOW_S = 3 * 3600  # 3-hour summary window
+_LIGHTNING_KEEP_S = 24 * 3600  # retain events for up to 24 hours
+
+_lightning_events: list[dict] = []
+_lightning_file: list[Path | None] = [None]  # mutable cell avoids `global`
+
+
+def _lightning_data_path(cfg: configparser.ConfigParser, config_path: str) -> Path:
+    data_dir = cfg["station"].get("data_dir", "").strip()
+    if data_dir:
+        return Path(data_dir) / "tempest_lightning.json"
+    return Path(config_path).resolve().parent / "tempest_lightning.json"
+
+
+def _load_lightning(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        cutoff = int(time.time()) - _LIGHTNING_KEEP_S
+        return [e for e in data.get("events", []) if e.get("ts", 0) >= cutoff]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_lightning() -> None:
+    path = _lightning_file[0]
+    if path is None:
+        return
+    with contextlib.suppress(Exception):
+        path.write_text(json.dumps({"events": _lightning_events}))
+
+
+def init_lightning(
+    cfg: configparser.ConfigParser, config_path: str, log: logging.Logger
+) -> None:
+    """Load persisted lightning events from disk and configure the storage path."""
+    path = _lightning_data_path(cfg, config_path)
+    _lightning_file[0] = path
+    events = _load_lightning(path)
+    _lightning_events.clear()
+    _lightning_events.extend(events)
+    log.info("Lightning history: %d event(s) loaded from %s", len(events), path)
+
+
+def record_lightning_strike(ts: int, dist: float | None) -> None:
+    """Append a strike event to the in-memory list and persist to disk."""
+    _lightning_events.append({"ts": ts, "dist": dist})
+    cutoff = ts - _LIGHTNING_KEEP_S
+    while _lightning_events and _lightning_events[0]["ts"] < cutoff:
+        _lightning_events.pop(0)
+    _save_lightning()
+
+
+def lightning_summary(now_ts: int) -> dict:
+    """Return 3h lightning summary fields for inclusion in the obs_st payload."""
+    cutoff = now_ts - _LIGHTNING_WINDOW_S
+    recent = [e for e in _lightning_events if e["ts"] >= cutoff]
+    last_ts_val = max((e["ts"] for e in _lightning_events), default=None)
+    last_ts = (
+        datetime.fromtimestamp(last_ts_val, tz=UTC).isoformat()
+        if last_ts_val is not None
+        else None
+    )
+    dists = [e["dist"] for e in recent if e.get("dist") is not None]
+    return {
+        "lightning_last_detected": last_ts,
+        "lightning_count_3h": len(recent),
+        "lightning_min_dist_3h_km": min(dists) if dists else None,
+        "lightning_max_dist_3h_km": max(dists) if dists else None,
+    }
+
+
 def compute_obs_derived(obs: dict, cfg: configparser.ConfigParser) -> dict:
     """Compute all Tempest derived metrics from a parsed obs_st payload."""
     t_c = obs.get("air_temperature_c")
@@ -385,10 +463,13 @@ def compute_obs_derived(obs: dict, cfg: configparser.ConfigParser) -> dict:
         p_mb, float(st["elevation_m"]), float(st["height_above_ground_m"])
     )
 
-    if ts is not None:
-        trend_delta, trend_label = _update_pressure_trend(int(ts), p_mb)
-        derived["pressure_trend_mb"] = trend_delta
-        derived["pressure_trend"] = trend_label
+    now_ts = int(ts) if ts is not None else int(time.time())
+
+    trend_delta, trend_label = _update_pressure_trend(now_ts, p_mb)
+    derived["pressure_trend_mb"] = trend_delta
+    derived["pressure_trend"] = trend_label
+
+    derived.update(lightning_summary(now_ts))
 
     return derived
 
@@ -518,6 +599,23 @@ _ST_OBS_SENSORS = [
         "measurement",
     ),
     ("pressure_trend", "Pressure Trend Description", None, None, None),
+    # Lightning history (persisted across restarts)
+    ("lightning_last_detected", "Lightning Last Detected", None, "timestamp", None),
+    ("lightning_count_3h", "Lightning Strikes (3h)", None, None, "measurement"),
+    (
+        "lightning_min_dist_3h_km",
+        "Lightning Min Distance (3h)",
+        "km",
+        "distance",
+        "measurement",
+    ),
+    (
+        "lightning_max_dist_3h_km",
+        "Lightning Max Distance (3h)",
+        "km",
+        "distance",
+        "measurement",
+    ),
 ]
 
 _ST_STATUS_SENSORS = [
@@ -643,6 +741,10 @@ def dispatch(
 
     if msg_type == "obs_st":
         payload.update(compute_obs_derived(payload, cfg))
+    elif msg_type == "evt_strike":
+        ts = payload.get("timestamp")
+        if ts is not None:
+            record_lightning_strike(int(ts), payload.get("distance_km"))
 
     # Derive the station/device ID
     # Hub messages use serial_number = HB-xxxxx, device messages use SK-/ST-/AR-
@@ -731,6 +833,7 @@ def main() -> None:
     log_cfg = cfg["logging"]
     log = setup_logging(log_cfg["level"], log_cfg["file"])
 
+    init_lightning(cfg, args.config, log)
     run(cfg, log)
 
 

@@ -219,3 +219,6 @@ __marimo__/
 
 # Local production config — never commit credentials
 config.ini
+
+# Persisted runtime data
+tempest_lightning.json
