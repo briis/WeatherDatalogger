@@ -25,9 +25,11 @@ import argparse
 import configparser
 import json
 import logging
+import math
 import socket
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -58,6 +60,10 @@ DEFAULT_CONFIG = {
     "homeassistant": {
         "discovery": "false",
         "discovery_prefix": "homeassistant",
+    },
+    "station": {
+        "elevation_m": "0",
+        "height_above_ground_m": "0",
     },
 }
 
@@ -209,6 +215,182 @@ def parse_hub_status(msg: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Derived metrics  (source: apidocs.tempestwx.com/reference/derived-metrics)
+# ---------------------------------------------------------------------------
+
+_R_DRY_AIR = 287.058  # J/(kg·K)
+_SLP_P0 = 1013.25  # mb — standard sea level pressure
+_SLP_RD = 287.05  # J/(kg·K) — gas constant for dry air
+_SLP_GAMMA_S = 0.0065  # K/m — standard lapse rate
+_SLP_G = 9.80665  # m/s²
+_SLP_T0 = 288.15  # K — standard sea level temperature
+_SLP_EXPONENT = _SLP_G / (_SLP_RD * _SLP_GAMMA_S)
+
+_HI_TEMP_MIN_F = 80.0  # heat index valid above this (°F)
+_HI_RH_MIN = 40.0  # heat index valid above this (%)
+_WC_TEMP_MAX_F = 50.0  # wind chill valid below this (°F)
+_WC_WIND_MIN_MPH = 3.0  # wind chill valid above this (mph)
+_PRESSURE_TREND_MB = 1.0  # threshold for Rising/Falling label
+_PRESSURE_TREND_TOL_S = 600  # ±10 min tolerance when finding 3h-old reading
+
+_pressure_history: deque[tuple[int, float]] = deque(maxlen=200)
+
+
+def _c_to_f(t: float) -> float:
+    return t * 9.0 / 5.0 + 32.0
+
+
+def _f_to_c(t: float) -> float:
+    return (t - 32.0) * 5.0 / 9.0
+
+
+def _ms_to_mph(v: float) -> float:
+    return v * 2.23694
+
+
+def _dew_point_c(t_c: float, rh: float) -> float | None:
+    if rh <= 0:
+        return None
+    gamma = math.log(rh / 100.0) + 17.625 * t_c / (243.04 + t_c)
+    return round(243.04 * gamma / (17.625 - gamma), 1)
+
+
+def _vapor_pressure_mb(t_c: float, rh: float) -> float:
+    return round((rh / 100.0) * 6.112 * math.exp(17.67 * t_c / (t_c + 243.5)), 2)
+
+
+def _wet_bulb_c(t_c: float, rh: float, p_mb: float) -> float:
+    """Solve for wet bulb temperature using iterative bisection."""
+    pv = (rh / 100.0) * 6.112 * math.exp(17.67 * t_c / (t_c + 243.5))
+
+    def residual(twb: float) -> float:
+        pv_wb = 6.112 * math.exp(17.67 * twb / (twb + 243.5))
+        return pv_wb - p_mb * (t_c - twb) * 0.00066 * (1.0 + 0.00115 * twb) - pv
+
+    lo, hi = -50.0, t_c
+    for _ in range(50):
+        mid = (lo + hi) / 2.0
+        if residual(mid) < 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2.0, 1)
+
+
+def _heat_index_c(t_c: float, rh: float) -> float | None:
+    t_f = _c_to_f(t_c)
+    if t_f < _HI_TEMP_MIN_F or rh < _HI_RH_MIN:
+        return None
+    hi_f = (
+        -42.379
+        + 2.04901523 * t_f
+        + 10.14333127 * rh
+        - 0.22475541 * t_f * rh
+        - 6.83783e-3 * t_f**2
+        - 5.481717e-2 * rh**2
+        + 1.22874e-3 * t_f**2 * rh
+        + 8.5282e-4 * t_f * rh**2
+        - 1.99e-6 * t_f**2 * rh**2
+    )
+    return round(_f_to_c(hi_f), 1)
+
+
+def _wind_chill_c(t_c: float, wind_ms: float) -> float | None:
+    t_f = _c_to_f(t_c)
+    v_mph = _ms_to_mph(wind_ms)
+    if t_f > _WC_TEMP_MAX_F or v_mph <= _WC_WIND_MIN_MPH:
+        return None
+    wc_f = 35.74 + 0.6215 * t_f - 35.75 * v_mph**0.16 + 0.4275 * t_f * v_mph**0.16
+    return round(_f_to_c(wc_f), 1)
+
+
+def _feels_like_c(t_c: float, rh: float, wind_ms: float) -> float:
+    t_f = _c_to_f(t_c)
+    v_mph = _ms_to_mph(wind_ms)
+    if t_f >= _HI_TEMP_MIN_F and rh >= _HI_RH_MIN:
+        hi = _heat_index_c(t_c, rh)
+        if hi is not None:
+            return hi
+    if t_f <= _WC_TEMP_MAX_F and v_mph > _WC_WIND_MIN_MPH:
+        wc = _wind_chill_c(t_c, wind_ms)
+        if wc is not None:
+            return wc
+    return round(t_c, 1)
+
+
+def _air_density(p_mb: float, t_c: float) -> float:
+    return round(p_mb * 100.0 / (_R_DRY_AIR * (t_c + 273.15)), 3)
+
+
+def _sea_level_pressure_mb(p_sta: float, h_el: float, h_ag: float) -> float:
+    inner = (
+        (_SLP_P0 / p_sta) ** (_SLP_RD * _SLP_GAMMA_S / _SLP_G)
+        * _SLP_GAMMA_S
+        * (h_el + h_ag)
+        / _SLP_T0
+    )
+    return round(p_sta * (1.0 + inner) ** _SLP_EXPONENT, 1)
+
+
+def _update_pressure_trend(ts: int, p_mb: float) -> tuple[float | None, str | None]:
+    _pressure_history.append((ts, p_mb))
+    target_ts = ts - 3 * 3600
+    best_diff = float("inf")
+    p_3h: float | None = None
+    for h_ts, h_p in _pressure_history:
+        diff = abs(h_ts - target_ts)
+        if diff < best_diff:
+            best_diff = diff
+            p_3h = h_p
+    if p_3h is None or best_diff > _PRESSURE_TREND_TOL_S:
+        return None, None
+    delta = round(p_mb - p_3h, 1)
+    if delta <= -_PRESSURE_TREND_MB:
+        return delta, "Falling"
+    if delta >= _PRESSURE_TREND_MB:
+        return delta, "Rising"
+    return delta, "Steady"
+
+
+def compute_obs_derived(obs: dict, cfg: configparser.ConfigParser) -> dict:
+    """Compute all Tempest derived metrics from a parsed obs_st payload."""
+    t_c = obs.get("air_temperature_c")
+    rh = obs.get("relative_humidity_pct")
+    p_mb = obs.get("station_pressure_mb")
+    wind_ms = obs.get("wind_avg_ms")
+    rain_mm = obs.get("rain_accumulation_mm")
+    ts = obs.get("timestamp")
+
+    if None in (t_c, rh, p_mb, wind_ms):
+        return {}
+
+    wb = _wet_bulb_c(t_c, rh, p_mb)
+    derived: dict = {
+        "vapor_pressure_mb": _vapor_pressure_mb(t_c, rh),
+        "dew_point_c": _dew_point_c(t_c, rh),
+        "wet_bulb_c": wb,
+        "delta_t_c": round(t_c - wb, 1),
+        "heat_index_c": _heat_index_c(t_c, rh),
+        "wind_chill_c": _wind_chill_c(t_c, wind_ms),
+        "feels_like_c": _feels_like_c(t_c, rh, wind_ms),
+        "air_density_kgm3": _air_density(p_mb, t_c),
+        "rain_rate_mmh": round(rain_mm * 60.0, 2) if rain_mm is not None else None,
+    }
+
+    st = cfg["station"]
+    derived["sea_level_pressure_mb"] = _sea_level_pressure_mb(
+        p_mb, float(st["elevation_m"]), float(st["height_above_ground_m"])
+    )
+
+    if ts is not None:
+        trend_delta, trend_label = _update_pressure_trend(int(ts), p_mb)
+        derived["pressure_trend_mb"] = trend_delta
+        derived["pressure_trend"] = trend_label
+
+    return derived
+
+
+# ---------------------------------------------------------------------------
 # MQTT helpers
 # ---------------------------------------------------------------------------
 
@@ -302,6 +484,37 @@ _ST_OBS_SENSORS = [
     ("lightning_avg_dist_km", "Lightning Distance", "km", "distance", "measurement"),
     ("lightning_strike_count", "Lightning Strikes", None, None, "measurement"),
     ("battery_volts", "Battery", "V", "voltage", "measurement"),
+    # Derived metrics
+    ("dew_point_c", "Dew Point", "°C", "temperature", "measurement"),
+    ("wet_bulb_c", "Wet Bulb Temperature", "°C", "temperature", "measurement"),
+    ("delta_t_c", "Delta T", "°C", "temperature", "measurement"),
+    ("feels_like_c", "Feels Like", "°C", "temperature", "measurement"),
+    ("heat_index_c", "Heat Index", "°C", "temperature", "measurement"),
+    ("wind_chill_c", "Wind Chill", "°C", "temperature", "measurement"),
+    ("air_density_kgm3", "Air Density", "kg/m³", None, "measurement"),
+    ("rain_rate_mmh", "Rain Rate", "mm/h", "precipitation_intensity", "measurement"),
+    (
+        "vapor_pressure_mb",
+        "Vapor Pressure",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    (
+        "sea_level_pressure_mb",
+        "Sea Level Pressure",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    (
+        "pressure_trend_mb",
+        "Pressure Trend",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    ("pressure_trend", "Pressure Trend Description", None, None, None),
 ]
 
 _ST_STATUS_SENSORS = [
@@ -424,6 +637,9 @@ def dispatch(
     if payload is None:
         log.warning("Failed to parse %s message", msg_type)
         return
+
+    if msg_type == "obs_st":
+        payload.update(compute_obs_derived(payload, cfg))
 
     # Derive the station/device ID
     # Hub messages use serial_number = HB-xxxxx, device messages use SK-/ST-/AR-
