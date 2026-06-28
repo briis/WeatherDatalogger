@@ -98,9 +98,12 @@ Both lightning history and pressure history use the same pattern:
 | `[logging]` | `level`, `file` |
 | `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
 | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
+| `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48), unit keys |
 
 `data_dir` is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 Default (empty) = directory of the config file.
+
+`forecast_hours` slices `fcast["hourly"]` before passing to `_parse_hourly_forecast` — no change needed to the parser.
 
 ---
 
@@ -180,6 +183,11 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] Sea level pressure trend (3h, persisted across restarts)
 - [x] Lightning history: last detected timestamp, 3h count, 3h min/max distance
       (persisted across restarts in `tempest_lightning.json`)
+- [x] WeatherFlow Better Forecast REST API poller (background daemon thread)
+      — current conditions, hourly (configurable depth via `forecast_hours`),
+      10-day daily — published to `forecast-<location>/` MQTT topics
+- [x] Forecast HA discovery: 7 current-condition sensors auto-discovered;
+      YAML snippet for `mqtt: weather:` entity logged at INFO on first run
 
 ## What's next / TODO
 

@@ -1,22 +1,39 @@
 # WeatherFlow Tempest UDP → MQTT Datalogger
 
-Listens for UDP broadcasts from a **WeatherFlow Tempest hub** on the local
-network (port 50222) and republishes each message as JSON to an MQTT broker.
+Listens for UDP broadcasts from a **WeatherFlow Tempest hub** on the local network (port 50222), computes derived weather metrics, and publishes everything as JSON to an MQTT broker. Optionally polls the WeatherFlow REST API to publish hourly and daily forecast data.
 
-## Topic structure
+Designed to run as a **systemd service on Debian/Proxmox LXC** and integrate with **Home Assistant** via MQTT auto-discovery.
+
+---
+
+## Features
+
+- Receives all 6 Tempest UDP message types and publishes them to individual MQTT topics
+- Computes derived metrics on every observation: dew point, wet bulb, delta-T, heat index, wind chill, feels like, vapor pressure, air density, rain rate, sea level pressure
+- Station and sea level pressure trend (Rising / Steady / Falling) with 3-hour history — persisted across restarts
+- Lightning history: last-detected timestamp, 3-hour count, closest/farthest distance — persisted across restarts
+- Home Assistant MQTT auto-discovery for all sensors (Tempest + Forecast devices)
+- Optional WeatherFlow Better Forecast REST API poller — current conditions plus configurable hourly (default 48 h, up to 120 h) and 10-day daily forecast
+- Systemd service with automatic restart and journald logging
+
+---
+
+## Topic Structure
+
+### Tempest sensor data
 
 ```
-weatherdatalogger/tempest-<serial_number>/<message_type>
+weatherdatalogger/tempest-<serial>/<subtopic>
 ```
 
-| Message type    | Subtopic         | Source device  |
-|-----------------|------------------|----------------|
-| Tempest obs     | `observation`    | Tempest (ST-…) |
-| Rapid wind      | `rapid_wind`     | Tempest (ST-…) |
-| Rain start      | `rain_start`     | Tempest (ST-…) |
-| Lightning       | `lightning`      | Tempest (ST-…) |
-| Device status   | `device_status`  | Any sensor     |
-| Hub status      | `hub_status`     | Hub (HB-…)     |
+| Subtopic | Source | Content |
+|---|---|---|
+| `observation` | ST-… sensor | Full observation + all derived metrics |
+| `rapid_wind` | ST-… sensor | Wind speed and direction, every ~3 s |
+| `rain_start` | ST-… sensor | Precipitation start event |
+| `lightning` | ST-… sensor | Lightning strike: distance and energy |
+| `device_status` | ST-… sensor | Voltage, RSSI, sensor status, uptime |
+| `hub_status` | HB-… hub | Firmware, uptime, radio stats |
 
 Example:
 ```
@@ -24,81 +41,205 @@ weatherdatalogger/tempest-ST-00000512/observation
 weatherdatalogger/tempest-HB-00013030/hub_status
 ```
 
+### WeatherFlow Forecast (optional)
+
+```
+weatherdatalogger/forecast-<location>/<subtopic>
+```
+
+| Subtopic | Content |
+|---|---|
+| `current` | Current conditions: condition, temperature, humidity, wind, pressure, dew point |
+| `forecast_hourly` | Hourly forecast JSON array (up to `forecast_hours` entries, default 48) |
+| `forecast_daily` | Daily forecast JSON array (up to 10 days) |
+
 ---
 
 ## Requirements
 
-- Python 3.10+
-- `paho-mqtt` library
+- Python 3.11
+- `paho-mqtt` (see `requirements.txt`)
+- MQTT broker (e.g. Mosquitto)
+- The LXC/host must be on the **same L2 network segment** as the Tempest Hub — UDP broadcasts do not cross routed boundaries or VLANs
 
 ---
 
-## Installation on Debian/Proxmox LXC
+## Installation (Debian / Proxmox LXC)
 
-### 1. Create a dedicated user
-
-```bash
-useradd -r -s /usr/sbin/nologin -m -d /opt/tempest-datalogger tempest
-```
-
-### 2. Copy files
+### 1. Install prerequisites
 
 ```bash
-mkdir -p /opt/tempest-datalogger
-cp tempest_datalogger.py config.ini /opt/tempest-datalogger/
-chown -R tempest:tempest /opt/tempest-datalogger
+apt update && apt install -y python3.11 python3.11-venv git
 ```
 
-### 3. Create a virtual environment and install dependencies
+### 2. Create a dedicated service user
+
+```bash
+useradd -r -s /usr/sbin/nologin tempest
+```
+
+### 3. Clone the repository
+
+```bash
+git clone https://github.com/briis/tempest-weatherdatalogger.git /opt/tempest-datalogger
+```
+
+### 4. Create a virtual environment and install dependencies
 
 ```bash
 cd /opt/tempest-datalogger
-python3 -m venv venv
-venv/bin/pip install --upgrade pip paho-mqtt
+python3.11 -m venv venv
+venv/bin/pip install --upgrade pip
+venv/bin/pip install -r requirements.txt
 ```
 
-### 4. Edit the config
+### 5. Configure
 
 ```bash
-nano /opt/tempest-datalogger/config.ini
+cp config.example.ini config.ini
+nano config.ini
 ```
 
-At minimum set `broker` to the IP/hostname of your MQTT broker.
+Minimum required settings:
 
-### 5. Test it manually first
+```ini
+[mqtt]
+broker = 192.168.1.10   # IP or hostname of your MQTT broker
+retain = true           # recommended for Home Assistant
+
+[homeassistant]
+discovery = true        # auto-create HA devices and sensors
+
+[station]
+elevation_m = 42        # your station elevation above sea level in metres
+```
+
+See [Configuration](#configuration) for all available options.
+
+### 6. Set ownership
 
 ```bash
-sudo -u tempest /opt/tempest-datalogger/venv/bin/python3 \
-    /opt/tempest-datalogger/tempest_datalogger.py \
-    --config /opt/tempest-datalogger/config.ini
+chown -R tempest:tempest /opt/tempest-datalogger
 ```
 
-You should see log lines like:
-```
-2024-01-15 12:34:56  INFO      Listening for Tempest UDP broadcasts on 0.0.0.0:50222
-2024-01-15 12:35:01  INFO      obs_st → weatherdatalogger/tempest-ST-00000512/observation
-```
-
-### 6. Install the systemd service
+### 7. Install the systemd service
 
 ```bash
-cp tempest-datalogger.service /etc/systemd/system/
+cp systemd/tempest-datalogger.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now tempest-datalogger
 ```
 
-### 7. Check status
+### 8. Verify
 
 ```bash
 systemctl status tempest-datalogger
 journalctl -u tempest-datalogger -f
 ```
 
+You should see lines like:
+
+```
+2024-06-28 08:00:01  INFO      Listening for Tempest UDP broadcasts on 0.0.0.0:50222
+2024-06-28 08:00:07  INFO      obs_st → weatherdatalogger/tempest-ST-00000512/observation
+```
+
 ---
 
-## Verifying MQTT output
+## Updating
 
-Subscribe to all datalogger topics with mosquitto_sub:
+Pull the latest code and restart the service in one step:
+
+```bash
+sudo bash /opt/tempest-datalogger/scripts/deploy.sh
+```
+
+The script:
+1. Pulls the latest commits from `origin/main`
+2. Upgrades Python dependencies
+3. Copies the systemd unit file if it changed and reloads the daemon
+4. Restarts the service and shows its status
+
+> **After updating:** `config.ini` is never touched by the deploy script. Check `config.example.ini` for any new keys added in the release and copy the ones you want into your `config.ini`.
+
+---
+
+## Configuration
+
+All settings live in `config.ini` (copied from `config.example.ini`). Every key has a built-in default — only change what you need.
+
+| Section | Key | Default | Description |
+|---|---|---|---|
+| `[udp]` | `listen_address` | `0.0.0.0` | Interface to bind |
+| `[udp]` | `listen_port` | `50222` | Tempest hub broadcast port |
+| `[mqtt]` | `broker` | `localhost` | MQTT broker hostname or IP |
+| `[mqtt]` | `port` | `1883` | MQTT broker port |
+| `[mqtt]` | `username` | _(empty)_ | MQTT username |
+| `[mqtt]` | `password` | _(empty)_ | MQTT password |
+| `[mqtt]` | `tls` | `false` | Enable TLS/SSL |
+| `[mqtt]` | `base_topic` | `weatherdatalogger` | Root MQTT topic prefix |
+| `[mqtt]` | `retain` | `false` | Retain state messages — set `true` for Home Assistant |
+| `[mqtt]` | `qos` | `0` | MQTT QoS level (0/1/2) |
+| `[logging]` | `level` | `INFO` | Log level: `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `[logging]` | `file` | _(empty)_ | Optional log file path (empty = stdout/journal only) |
+| `[homeassistant]` | `discovery` | `false` | Publish MQTT discovery messages for Home Assistant |
+| `[homeassistant]` | `discovery_prefix` | `homeassistant` | Must match HA's `discovery_prefix` setting |
+| `[station]` | `elevation_m` | `0` | Station elevation above sea level (metres) — needed for sea level pressure |
+| `[station]` | `height_above_ground_m` | `0` | Sensor height above ground (metres) |
+| `[station]` | `data_dir` | _(empty)_ | Directory for persistence files; empty = same folder as `config.ini` |
+| `[forecast]` | `enabled` | `false` | Enable WeatherFlow Better Forecast polling |
+| `[forecast]` | `station_id` | _(empty)_ | WeatherFlow station ID — **required** |
+| `[forecast]` | `api_key` | _(empty)_ | WeatherFlow personal API key — **required** |
+| `[forecast]` | `location` | `home` | Slug used in MQTT topic: `forecast-<location>` |
+| `[forecast]` | `interval_min` | `30` | Polling interval in minutes |
+| `[forecast]` | `forecast_hours` | `48` | Max hourly entries published (API provides up to 120) |
+
+---
+
+## Home Assistant Integration
+
+### Sensor auto-discovery
+
+With `discovery = true` in `[homeassistant]` and `retain = true` in `[mqtt]`, the service publishes retained MQTT discovery messages and Home Assistant automatically creates:
+
+- **Tempest ST-xxxxx** — all raw observation fields and derived metrics
+- **Tempest HB-xxxxx** — hub status sensors
+- **Forecast \<location\>** — current-condition sensors (condition, temperature, humidity, wind speed, wind bearing, pressure, dew point) — only when `[forecast] enabled = true`
+
+### Weather card with hourly/daily forecast
+
+Home Assistant's MQTT integration does not support auto-discovery for `weather` entities. To create a full weather card with forecast support, add the following block to `configuration.yaml` and restart Home Assistant:
+
+```yaml
+mqtt:
+  weather:
+    - name: "Forecast Home"
+      unique_id: "tempest_forecast_home"
+      condition_topic: "weatherdatalogger/forecast-home/current"
+      condition_value_template: "{{ value_json.condition }}"
+      temperature_topic: "weatherdatalogger/forecast-home/current"
+      temperature_template: "{{ value_json.temperature }}"
+      temperature_unit: "°C"
+      humidity_topic: "weatherdatalogger/forecast-home/current"
+      humidity_template: "{{ value_json.humidity }}"
+      wind_speed_topic: "weatherdatalogger/forecast-home/current"
+      wind_speed_template: "{{ value_json.wind_speed }}"
+      wind_speed_unit: "m/s"
+      wind_bearing_topic: "weatherdatalogger/forecast-home/current"
+      wind_bearing_template: "{{ value_json.wind_bearing }}"
+      pressure_topic: "weatherdatalogger/forecast-home/current"
+      pressure_template: "{{ value_json.pressure }}"
+      pressure_unit: "hPa"
+      precipitation_unit: "mm"
+      forecast_hourly_topic: "weatherdatalogger/forecast-home/forecast_hourly"
+      forecast_daily_topic: "weatherdatalogger/forecast-home/forecast_daily"
+```
+
+Replace `home` in the topic paths with your `location` value from `[forecast]`. The exact YAML for your configuration is also printed to the log (INFO level) the first time the forecast is published.
+
+---
+
+## Verifying MQTT Output
 
 ```bash
 mosquitto_sub -h <broker> -t "weatherdatalogger/#" -v
@@ -108,27 +249,39 @@ mosquitto_sub -h <broker> -t "weatherdatalogger/#" -v
 
 ```json
 {
-  "timestamp": 1588948614,
-  "wind_lull_ms": 0.18,
-  "wind_avg_ms": 0.22,
-  "wind_gust_ms": 0.27,
-  "wind_direction_deg": 144,
-  "wind_sample_interval_s": 6,
-  "station_pressure_mb": 1017.57,
-  "air_temperature_c": 22.37,
-  "relative_humidity_pct": 50.26,
-  "illuminance_lux": 328,
-  "uv_index": 0.03,
-  "solar_radiation_wm2": 3,
+  "timestamp": 1720000000,
+  "wind_lull_ms": 0.5,
+  "wind_avg_ms": 1.2,
+  "wind_gust_ms": 2.1,
+  "wind_direction_deg": 220,
+  "station_pressure_mb": 1013.2,
+  "air_temperature_c": 18.5,
+  "relative_humidity_pct": 65.0,
+  "illuminance_lux": 42000,
+  "uv_index": 3.2,
+  "solar_radiation_wm2": 320,
   "rain_accumulation_mm": 0.0,
-  "precipitation_type": 0,
-  "lightning_avg_dist_km": 0,
-  "lightning_strike_count": 0,
-  "battery_volts": 2.41,
-  "reporting_interval_min": 1,
+  "battery_volts": 2.81,
   "serial_number": "ST-00000512",
   "hub_sn": "HB-00013030",
-  "firmware_revision": 129
+  "dew_point_c": 11.8,
+  "wet_bulb_c": 14.2,
+  "delta_t_c": 4.3,
+  "heat_index_c": 18.5,
+  "wind_chill_c": 18.5,
+  "feels_like_c": 18.5,
+  "vapor_pressure_mb": 13.6,
+  "air_density_kgm3": 1.213,
+  "rain_rate_mmh": 0.0,
+  "sea_level_pressure_mb": 1015.8,
+  "pressure_trend_mb": 0.4,
+  "pressure_trend": "Steady",
+  "sea_level_pressure_trend_mb": 0.4,
+  "sea_level_pressure_trend": "Steady",
+  "lightning_last_detected": null,
+  "lightning_count_3h": 0,
+  "lightning_min_dist_3h_km": null,
+  "lightning_max_dist_3h_km": null
 }
 ```
 
@@ -137,8 +290,13 @@ mosquitto_sub -h <broker> -t "weatherdatalogger/#" -v
 ## Troubleshooting
 
 | Problem | Check |
-|---------|-------|
-| No UDP packets received | Hub and LXC must be on the **same L2 network** (no routing across VLANs). Check that the Proxmox bridge/VLAN config allows broadcast traffic. |
-| MQTT connect failed | Verify broker address/port in config.ini; check firewall rules. |
-| Permission denied on port 50222 | Run as root or grant `CAP_NET_BIND_SERVICE`; port 50222 is >1024 so this shouldn't be needed. |
-| No data after hub reboot | Hub re-announces within 60 s; wait and check logs. |
+|---|---|
+| No UDP packets received | Hub and LXC must be on the **same L2 network** — UDP broadcasts do not cross VLANs or routed segments. Check the Proxmox bridge/VLAN config. |
+| MQTT connect failed | Verify `broker` and `port` in `config.ini`. Check firewall rules on the broker host. |
+| HA does not discover sensors | Ensure `discovery = true` and `retain = true`. Restart the service. Verify `discovery_prefix` matches HA's setting (default `homeassistant`). |
+| Sea level pressure seems wrong | Set `elevation_m` in `[station]` to your actual elevation above sea level in metres. |
+| Pressure trend is `null` | Normal until 3 hours of history have accumulated. The history is persisted in `tempest_pressure.json` so it survives restarts. |
+| Lightning history resets on restart | Check that `data_dir` (or the config file directory) is writable by the `tempest` user and that `tempest_lightning.json` exists. |
+| Forecast not appearing | Verify `station_id` and `api_key` are both set in `[forecast]`. Check logs for HTTP errors from the WeatherFlow API. |
+| Forecast weather card missing in HA | HA does not auto-discover `weather` entities. Add the `mqtt: weather:` block from the [Home Assistant section](#weather-card-with-hourlydaily-forecast) to `configuration.yaml` and restart HA. |
+| No data after hub reboot | The hub re-announces within ~60 s — wait and check logs. |

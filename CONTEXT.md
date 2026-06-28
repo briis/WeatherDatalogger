@@ -17,6 +17,10 @@ weatherdatalogger/
     lightning
     device_status
     hub_status
+  forecast-<location>/     ← WeatherFlow Better Forecast REST API (optional)
+    current                — current conditions JSON object
+    forecast_hourly        — hourly forecast JSON array (up to forecast_hours entries)
+    forecast_daily         — 10-day daily forecast JSON array
   davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, separate project)
     <sensor topics>
 ```
@@ -101,10 +105,13 @@ tempest-weatherdatalogger/
 | `[logging]` | `level`, `file` |
 | `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
 | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
+| `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48), unit keys |
 
 `data_dir` (default: empty = same directory as config file) controls where the two persistence files are written:
 - `tempest_lightning.json` — rolling 24h lightning event log
 - `tempest_pressure.json` — rolling 24h pressure history for trend calculation
+
+`forecast_hours` limits how many hourly entries are included in `forecast_hourly` MQTT payloads. The WeatherFlow API provides up to 120 hours; 48 is the default.
 
 ---
 
