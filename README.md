@@ -204,38 +204,35 @@ With `discovery = true` in `[homeassistant]` and `retain = true` in `[mqtt]`, th
 
 - **Tempest ST-xxxxx** — all raw observation fields and derived metrics
 - **Tempest HB-xxxxx** — hub status sensors
-- **Forecast \<location\>** — current-condition sensors (condition, temperature, humidity, wind speed, wind bearing, pressure, dew point) — only when `[forecast] enabled = true`
+- **Forecast \<location\>** — 9 sensors auto-discovered when `[forecast] enabled = true`:
+  - 7 current-condition sensors (condition, temperature, humidity, wind speed, wind bearing, pressure, dew point)
+  - 2 forecast-array sensors (Hourly Forecast, Daily Forecast) — state = entry count, attributes contain the full forecast data
 
 ### Weather card with hourly/daily forecast
 
-Home Assistant's MQTT integration does not support auto-discovery for `weather` entities. To create a full weather card with forecast support, add the following block to `configuration.yaml` and restart Home Assistant:
+HA MQTT discovery does not support `weather` entities, and the `mqtt: weather:` configuration key is also invalid. Use HA's `template: weather:` platform instead, which reads from the sensors above.
+
+Add the following to `configuration.yaml` and restart Home Assistant:
 
 ```yaml
-mqtt:
-  weather:
-    - name: "Forecast Home"
-      unique_id: "tempest_forecast_home"
-      condition_topic: "weatherdatalogger/forecast-home/current"
-      condition_value_template: "{{ value_json.condition }}"
-      temperature_topic: "weatherdatalogger/forecast-home/current"
-      temperature_template: "{{ value_json.temperature }}"
-      temperature_unit: "°C"
-      humidity_topic: "weatherdatalogger/forecast-home/current"
-      humidity_template: "{{ value_json.humidity }}"
-      wind_speed_topic: "weatherdatalogger/forecast-home/current"
-      wind_speed_template: "{{ value_json.wind_speed }}"
-      wind_speed_unit: "m/s"
-      wind_bearing_topic: "weatherdatalogger/forecast-home/current"
-      wind_bearing_template: "{{ value_json.wind_bearing }}"
-      pressure_topic: "weatherdatalogger/forecast-home/current"
-      pressure_template: "{{ value_json.pressure }}"
-      pressure_unit: "hPa"
-      precipitation_unit: "mm"
-      forecast_hourly_topic: "weatherdatalogger/forecast-home/forecast_hourly"
-      forecast_daily_topic: "weatherdatalogger/forecast-home/forecast_daily"
+template:
+  - weather:
+      - name: "Forecast Home"
+        unique_id: "tempest_forecast_home_weather"
+        condition_template: "{{ states('sensor.forecast_home_condition') }}"
+        temperature_template: "{{ states('sensor.forecast_home_temperature') | float(0) }}"
+        temperature_unit: "°C"
+        humidity_template: "{{ states('sensor.forecast_home_humidity') | float(0) }}"
+        pressure_template: "{{ states('sensor.forecast_home_sea_level_pressure') | float(0) }}"
+        pressure_unit: "hPa"
+        wind_speed_template: "{{ states('sensor.forecast_home_wind_speed') | float(0) }}"
+        wind_speed_unit: "m/s"
+        wind_bearing_template: "{{ states('sensor.forecast_home_wind_bearing') | float(0) }}"
+        forecast_hourly_template: "{{ state_attr('sensor.forecast_home_hourly_forecast', 'forecasts') }}"
+        forecast_daily_template: "{{ state_attr('sensor.forecast_home_daily_forecast', 'forecasts') }}"
 ```
 
-Replace `home` in the topic paths with your `location` value from `[forecast]`. The exact YAML for your configuration is also printed to the log (INFO level) the first time the forecast is published.
+Replace `home` in the entity IDs with your `location` slug (hyphens become underscores). If the IDs don't match what HA created, verify the exact names in **Developer Tools → States**. The correct YAML for your location is also logged at INFO level the first time the forecast publishes.
 
 ---
 
@@ -298,5 +295,5 @@ mosquitto_sub -h <broker> -t "weatherdatalogger/#" -v
 | Pressure trend is `null` | Normal until 3 hours of history have accumulated. The history is persisted in `tempest_pressure.json` so it survives restarts. |
 | Lightning history resets on restart | Check that `data_dir` (or the config file directory) is writable by the `tempest` user and that `tempest_lightning.json` exists. |
 | Forecast not appearing | Verify `station_id` and `api_key` are both set in `[forecast]`. Check logs for HTTP errors from the WeatherFlow API. |
-| Forecast weather card missing in HA | HA does not auto-discover `weather` entities. Add the `mqtt: weather:` block from the [Home Assistant section](#weather-card-with-hourlydaily-forecast) to `configuration.yaml` and restart HA. |
+| Forecast weather card missing in HA | HA does not support `mqtt: weather:` — use the `template: weather:` block from the [Home Assistant section](#weather-card-with-hourlydaily-forecast). After restarting HA, verify entity IDs in **Developer Tools → States** if the template doesn't populate. |
 | No data after hub reboot | The hub re-announces within ~60 s — wait and check logs. |

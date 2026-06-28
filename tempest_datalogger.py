@@ -966,37 +966,61 @@ def _publish_forecast_discovery(
                 log.warning("Forecast discovery error rc=%s topic=%s", result.rc, topic)
         except Exception:
             log.exception("Forecast discovery error for %s", topic)
+    for sub, name in (
+        ("forecast_hourly", "Hourly Forecast"),
+        ("forecast_daily", "Daily Forecast"),
+    ):
+        uid = f"tempest_forecast_{loc_id}_{sub}"
+        arr_t = f"{base}/forecast-{location}/{sub}"
+        pl = {
+            "name": name,
+            "unique_id": uid,
+            "state_topic": arr_t,
+            "value_template": "{{ value_json | length }}",
+            "json_attributes_topic": arr_t,
+            "json_attributes_template": ("{{ {'forecasts': value_json} | tojson }}"),
+            "device": device,
+        }
+        topic = f"{prefix}/sensor/{uid}/config"
+        try:
+            result = client.publish(topic, json.dumps(pl), qos=1, retain=True)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning("Forecast discovery error rc=%s topic=%s", result.rc, topic)
+        except Exception:
+            log.exception("Forecast discovery error for %s", topic)
     _forecast_discovered.add(location)
-    hourly_t = f"{base}/forecast-{location}/forecast_hourly"
-    daily_t = f"{base}/forecast-{location}/forecast_daily"
+    p = f"sensor.forecast_{loc_id}"
     yaml_hint = (
-        "\nmqtt:\n"
-        "  weather:\n"
-        f"    - name: 'Forecast {friendly}'\n"
-        f"      unique_id: 'tempest_forecast_{loc_id}'\n"
-        f"      condition_topic: '{curr}'\n"
-        "      condition_value_template: '{{ value_json.condition }}'\n"
-        f"      temperature_topic: '{curr}'\n"
-        "      temperature_template: '{{ value_json.temperature }}'\n"
-        "      temperature_unit: '°C'\n"
-        f"      humidity_topic: '{curr}'\n"
-        "      humidity_template: '{{ value_json.humidity }}'\n"
-        f"      wind_speed_topic: '{curr}'\n"
-        "      wind_speed_template: '{{ value_json.wind_speed }}'\n"
-        "      wind_speed_unit: 'm/s'\n"
-        f"      wind_bearing_topic: '{curr}'\n"
-        "      wind_bearing_template: '{{ value_json.wind_bearing }}'\n"
-        f"      pressure_topic: '{curr}'\n"
-        "      pressure_template: '{{ value_json.pressure }}'\n"
-        "      pressure_unit: 'hPa'\n"
-        "      precipitation_unit: 'mm'\n"
-        f"      forecast_hourly_topic: '{hourly_t}'\n"
-        f"      forecast_daily_topic: '{daily_t}'"
+        "\ntemplate:\n"
+        "  - weather:\n"
+        f"      - name: 'Forecast {friendly}'\n"
+        f"        unique_id: 'tempest_forecast_{loc_id}_weather'\n"
+        "        condition_template:"
+        f" \"{{{{ states('{p}_condition') }}}}\"\n"
+        "        temperature_template:"
+        f" \"{{{{ states('{p}_temperature') | float(0) }}}}\"\n"
+        "        temperature_unit: '°C'\n"
+        "        humidity_template:"
+        f" \"{{{{ states('{p}_humidity') | float(0) }}}}\"\n"
+        "        pressure_template:"
+        f" \"{{{{ states('{p}_sea_level_pressure') | float(0) }}}}\"\n"
+        "        pressure_unit: 'hPa'\n"
+        "        wind_speed_template:"
+        f" \"{{{{ states('{p}_wind_speed') | float(0) }}}}\"\n"
+        "        wind_speed_unit: 'm/s'\n"
+        "        wind_bearing_template:"
+        f" \"{{{{ states('{p}_wind_bearing') | float(0) }}}}\"\n"
+        "        forecast_hourly_template:"
+        f" \"{{{{ state_attr('{p}_hourly_forecast',"
+        " 'forecasts') }}\"\n"
+        "        forecast_daily_template:"
+        f" \"{{{{ state_attr('{p}_daily_forecast',"
+        " 'forecasts') }}\""
     )
     log.info(
         "Forecast: %d sensors discovered for '%s'."
         " To add a weather card, paste into HA configuration.yaml:%s",
-        len(_FORECAST_CC_SENSORS),
+        len(_FORECAST_CC_SENSORS) + 2,
         location,
         yaml_hint,
     )
