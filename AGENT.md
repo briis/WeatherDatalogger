@@ -182,6 +182,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
 - [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with
       `online`/`offline` LWT and last-seen timestamp
+- [ ] Clean-up deploy script, so we only copy files that are need for the production environment
 
 ---
 

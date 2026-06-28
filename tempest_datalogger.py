@@ -29,7 +29,10 @@ import logging
 import math
 import socket
 import sys
+import threading
 import time
+import urllib.parse
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -66,6 +69,18 @@ DEFAULT_CONFIG = {
         "elevation_m": "0",
         "height_above_ground_m": "0",
         "data_dir": "",  # empty = same directory as the config file
+    },
+    "forecast": {
+        "enabled": "false",
+        "station_id": "",  # WeatherFlow station ID — must be set by user
+        "api_key": "",  # WeatherFlow API key — must be set by user
+        "location": "home",  # label used in MQTT topic: forecast-<location>
+        "interval_min": "30",
+        "units_temp": "c",
+        "units_wind": "mps",
+        "units_pressure": "hpa",
+        "units_precip": "mm",
+        "units_distance": "km",
     },
 }
 
@@ -779,6 +794,229 @@ def publish_ha_discovery(
 
 
 # ---------------------------------------------------------------------------
+# Weather forecast  (WeatherFlow Better Forecast REST API)
+# ---------------------------------------------------------------------------
+
+_WF_ICON_TO_HA: dict[str, str] = {
+    "clear-day": "sunny",
+    "clear-night": "clear-night",
+    "partly-cloudy-day": "partlycloudy",
+    "partly-cloudy-night": "partlycloudy",
+    "mostly-cloudy-day": "cloudy",
+    "mostly-cloudy-night": "cloudy",
+    "cloudy": "cloudy",
+    "fog": "fog",
+    "foggy": "fog",
+    "windy": "windy",
+    "rain": "rainy",
+    "rainy": "rainy",
+    "possibly-rainy-day": "rainy",
+    "possibly-rainy-night": "rainy",
+    "sleet": "snowy-rainy",
+    "wintry-mix": "snowy-rainy",
+    "snow": "snowy",
+    "possibly-snow-day": "snowy",
+    "possibly-snow-night": "snowy",
+    "possibly-snow-rainy-day": "snowy-rainy",
+    "possibly-snow-rainy-night": "snowy-rainy",
+    "thunderstorm": "lightning",
+    "possibly-thunderstorm-day": "lightning-rainy",
+    "possibly-thunderstorm-night": "lightning-rainy",
+    "hail": "hail",
+}
+
+_forecast_discovered: set[str] = set()
+
+
+def _ha_condition(icon: str) -> str:
+    return _WF_ICON_TO_HA.get(icon, "exceptional")
+
+
+def _fetch_forecast_json(
+    cfg: configparser.ConfigParser,
+) -> dict | None:
+    fc = cfg["forecast"]
+    station_id = fc["station_id"].strip()
+    api_key = fc["api_key"].strip()
+    if not station_id or not api_key:
+        return None
+    params = urllib.parse.urlencode(
+        {
+            "station_id": station_id,
+            "units_temp": fc["units_temp"],
+            "units_wind": fc["units_wind"],
+            "units_pressure": fc["units_pressure"],
+            "units_precip": fc["units_precip"],
+            "units_distance": fc["units_distance"],
+            "api_key": api_key,
+        }
+    )
+    url = f"https://swd.weatherflow.com/swd/rest/better_forecast?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310
+            return json.loads(resp.read())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_current_conditions(cc: dict) -> dict:
+    return {
+        "condition": _ha_condition(cc.get("icon", "")),
+        "temperature": cc.get("air_temperature"),
+        "humidity": cc.get("relative_humidity"),
+        "wind_speed": cc.get("wind_avg"),
+        "wind_bearing": cc.get("wind_direction"),
+        "pressure": cc.get("sea_level_pressure"),
+        "dew_point": cc.get("dew_point"),
+    }
+
+
+def _parse_hourly_forecast(hourly: list[dict]) -> list[dict]:
+    result = []
+    for h in hourly:
+        ts = h.get("time")
+        result.append(
+            {
+                "datetime": (
+                    datetime.fromtimestamp(ts, tz=UTC).isoformat()
+                    if ts is not None
+                    else None
+                ),
+                "condition": _ha_condition(h.get("icon", "")),
+                "temperature": h.get("air_temperature"),
+                "wind_speed": h.get("wind_avg"),
+                "wind_bearing": h.get("wind_direction"),
+                "precipitation": h.get("precip"),
+                "precipitation_probability": h.get("precip_probability"),
+                "humidity": h.get("relative_humidity"),
+            }
+        )
+    return result
+
+
+def _parse_daily_forecast(daily: list[dict]) -> list[dict]:
+    result = []
+    for d in daily:
+        ts = d.get("day_start_local")
+        result.append(
+            {
+                "datetime": (
+                    datetime.fromtimestamp(ts, tz=UTC).isoformat()
+                    if ts is not None
+                    else None
+                ),
+                "condition": _ha_condition(d.get("icon", "")),
+                "temperature": d.get("air_temp_high"),
+                "templow": d.get("air_temp_low"),
+                "precipitation_probability": d.get("precip_probability"),
+            }
+        )
+    return result
+
+
+def _publish_forecast_discovery(
+    location: str,
+    client: mqtt.Client,
+    cfg: configparser.ConfigParser,
+    log: logging.Logger,
+) -> None:
+    if location in _forecast_discovered:
+        return
+    prefix = cfg["homeassistant"]["discovery_prefix"].rstrip("/")
+    base = cfg["mqtt"]["base_topic"].rstrip("/")
+    uid = f"tempest_forecast_{location.replace('-', '_')}"
+    curr = f"{base}/forecast-{location}/current"
+    friendly = location.replace("-", " ").title()
+    payload = {
+        "name": f"Forecast {friendly}",
+        "unique_id": uid,
+        "condition_topic": curr,
+        "condition_value_template": "{{ value_json.condition }}",
+        "temperature_topic": curr,
+        "temperature_template": "{{ value_json.temperature }}",
+        "temperature_unit": "°C",
+        "humidity_topic": curr,
+        "humidity_template": "{{ value_json.humidity }}",
+        "wind_speed_topic": curr,
+        "wind_speed_template": "{{ value_json.wind_speed }}",
+        "wind_speed_unit": "m/s",
+        "wind_bearing_topic": curr,
+        "wind_bearing_template": "{{ value_json.wind_bearing }}",
+        "pressure_topic": curr,
+        "pressure_template": "{{ value_json.pressure }}",
+        "pressure_unit": "hPa",
+        "precipitation_unit": "mm",
+        "forecast_hourly_topic": f"{base}/forecast-{location}/forecast_hourly",
+        "forecast_daily_topic": f"{base}/forecast-{location}/forecast_daily",
+        "device": {
+            "identifiers": [uid],
+            "name": f"Forecast {friendly}",
+            "manufacturer": "WeatherFlow",
+            "model": "Better Forecast API",
+        },
+    }
+    topic = f"{prefix}/weather/{uid}/config"
+    try:
+        result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.warning("Forecast discovery error rc=%s topic=%s", result.rc, topic)
+        else:
+            _forecast_discovered.add(location)
+            log.info("Forecast HA discovery published: %s", location)
+    except Exception:
+        log.exception("Forecast discovery publish exception for %s", location)
+
+
+def fetch_and_publish_forecast(
+    client: mqtt.Client, cfg: configparser.ConfigParser, log: logging.Logger
+) -> None:
+    """Fetch the WeatherFlow Better Forecast and publish to MQTT."""
+    data = _fetch_forecast_json(cfg)
+    if data is None:
+        log.warning("Forecast: fetch returned no data")
+        return
+
+    fc = cfg["forecast"]
+    location = fc["location"].strip().lower().replace(" ", "-")
+    base = cfg["mqtt"]["base_topic"].rstrip("/")
+    retain = cfg["mqtt"].getboolean("retain", fallback=False)
+    qos = int(cfg["mqtt"]["qos"])
+
+    cc = data.get("current_conditions", {})
+    fcast = data.get("forecast", {})
+    subtopics = [
+        ("current", _parse_current_conditions(cc)),
+        ("forecast_hourly", _parse_hourly_forecast(fcast.get("hourly", []))),
+        ("forecast_daily", _parse_daily_forecast(fcast.get("daily", []))),
+    ]
+    for subtopic, payload in subtopics:
+        topic = f"{base}/forecast-{location}/{subtopic}"
+        try:
+            result = client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning("Forecast publish error rc=%s topic=%s", result.rc, topic)
+        except Exception:
+            log.exception("Forecast publish exception for %s", topic)
+
+    log.info("Forecast published → forecast-%s", location)
+
+    if cfg["homeassistant"].getboolean("discovery"):
+        _publish_forecast_discovery(location, client, cfg, log)
+
+
+def _run_forecast_thread(
+    client: mqtt.Client, cfg: configparser.ConfigParser, log: logging.Logger
+) -> None:
+    interval_s = int(cfg["forecast"]["interval_min"]) * 60
+    while True:
+        try:
+            fetch_and_publish_forecast(client, cfg, log)
+        except Exception:
+            log.exception("Forecast thread error")
+        time.sleep(interval_s)
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -845,6 +1083,25 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
     client = make_mqtt_client(cfg, log)
     mqtt_connect(client, cfg, log)
     client.loop_start()
+
+    if cfg["forecast"].getboolean("enabled"):
+        stn = cfg["forecast"]["station_id"].strip()
+        key = cfg["forecast"]["api_key"].strip()
+        if stn and key:
+            threading.Thread(
+                target=_run_forecast_thread,
+                args=(client, cfg, log),
+                daemon=True,
+                name="forecast",
+            ).start()
+            log.info(
+                "Forecast thread started (interval: %s min)",
+                cfg["forecast"]["interval_min"],
+            )
+        else:
+            log.warning(
+                "Forecast enabled but station_id/api_key not configured — skipping"
+            )
 
     # Set up UDP socket
     udp_cfg = cfg["udp"]
