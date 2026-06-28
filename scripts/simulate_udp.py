@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Send simulated WeatherFlow Tempest UDP broadcasts to localhost:50222.
+"""
+Send simulated WeatherFlow Tempest UDP broadcasts to localhost:50222.
 
 Usage:
-    python3 scripts/simulate_udp.py [--host HOST] [--port PORT] [--count N] [--interval SECS]
+    python3 scripts/simulate_udp.py [--host HOST] [--port PORT]
+                                    [--count N] [--interval SECS]
 
 Sends one packet of every Tempest message type, then loops (if --count > 1).
 """
@@ -25,35 +27,39 @@ def _ts() -> int:
 
 
 def make_obs_st() -> dict:
+    """Return a randomised obs_st (full Tempest observation) packet."""
     return {
         "serial_number": SERIAL,
         "type": "obs_st",
         "hub_sn": HUB_SN,
-        "obs": [[
-            _ts(),
-            round(random.uniform(0.0, 1.5), 2),   # wind_lull
-            round(random.uniform(1.0, 4.0), 2),   # wind_avg
-            round(random.uniform(3.0, 8.0), 2),   # wind_gust
-            random.randint(0, 359),                # wind_dir
-            3,                                     # sample_interval
-            round(random.uniform(1010.0, 1025.0), 1),  # pressure
-            round(random.uniform(15.0, 25.0), 1),      # temp_c
-            random.randint(40, 80),                    # humidity
-            random.randint(5000, 80000),               # illuminance
-            round(random.uniform(0.0, 6.0), 1),        # uv
-            random.randint(100, 900),                  # solar_radiation
-            0.0,                                       # rain_accum
-            0,                                         # precip_type
-            random.randint(5, 40),                     # lightning_dist
-            0,                                         # lightning_count
-            round(random.uniform(2.50, 2.80), 2),      # battery
-            1,                                         # report_interval_min
-        ]],
+        "obs": [
+            [
+                _ts(),
+                round(random.uniform(0.0, 1.5), 2),  # wind_lull
+                round(random.uniform(1.0, 4.0), 2),  # wind_avg
+                round(random.uniform(3.0, 8.0), 2),  # wind_gust
+                random.randint(0, 359),  # wind_dir
+                3,  # sample_interval
+                round(random.uniform(1010.0, 1025.0), 1),  # pressure
+                round(random.uniform(15.0, 25.0), 1),  # temp_c
+                random.randint(40, 80),  # humidity
+                random.randint(5000, 80000),  # illuminance
+                round(random.uniform(0.0, 6.0), 1),  # uv
+                random.randint(100, 900),  # solar_radiation
+                0.0,  # rain_accum
+                0,  # precip_type
+                random.randint(5, 40),  # lightning_dist
+                0,  # lightning_count
+                round(random.uniform(2.50, 2.80), 2),  # battery
+                1,  # report_interval_min
+            ]
+        ],
         "firmware_revision": 171,
     }
 
 
 def make_rapid_wind() -> dict:
+    """Return a randomised rapid_wind packet."""
     return {
         "serial_number": SERIAL,
         "type": "rapid_wind",
@@ -63,6 +69,7 @@ def make_rapid_wind() -> dict:
 
 
 def make_evt_precip() -> dict:
+    """Return a randomised evt_precip (rain-start) packet."""
     return {
         "serial_number": SERIAL,
         "type": "evt_precip",
@@ -72,6 +79,7 @@ def make_evt_precip() -> dict:
 
 
 def make_evt_strike() -> dict:
+    """Return a randomised evt_strike (lightning) packet."""
     return {
         "serial_number": SERIAL,
         "type": "evt_strike",
@@ -81,6 +89,7 @@ def make_evt_strike() -> dict:
 
 
 def make_device_status() -> dict:
+    """Return a randomised device_status packet."""
     return {
         "serial_number": SERIAL,
         "type": "device_status",
@@ -97,6 +106,7 @@ def make_device_status() -> dict:
 
 
 def make_hub_status() -> dict:
+    """Return a randomised hub_status packet."""
     return {
         "serial_number": HUB_SN,
         "type": "hub_status",
@@ -122,6 +132,7 @@ MESSAGES = [
 
 
 def send_all(sock: socket.socket, host: str, port: int) -> None:
+    """Send one packet of every message type to host:port."""
     for factory in MESSAGES:
         msg = factory()
         payload = json.dumps(msg).encode()
@@ -130,6 +141,7 @@ def send_all(sock: socket.socket, host: str, port: int) -> None:
 
 
 def main() -> None:
+    """Parse CLI arguments and run the simulation loop."""
     p = argparse.ArgumentParser(description="Simulate Tempest UDP broadcasts")
     p.add_argument("--host", default=HOST_DEFAULT)
     p.add_argument("--port", type=int, default=PORT_DEFAULT)

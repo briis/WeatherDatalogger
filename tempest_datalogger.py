@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-WeatherFlow Tempest UDP → MQTT Datalogger
-==========================================
+WeatherFlow Tempest UDP → MQTT Datalogger.
+
 Listens for UDP broadcasts from a WeatherFlow Tempest hub on port 50222
 and publishes parsed observations to MQTT under the topic:
 
@@ -37,7 +37,7 @@ import paho.mqtt.client as mqtt
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = {
     "udp": {
-        "listen_address": "0.0.0.0",
+        "listen_address": "0.0.0.0",  # noqa: S104
         "listen_port": "50222",
     },
     "mqtt": {
@@ -63,6 +63,7 @@ DEFAULT_CONFIG = {
 
 
 def setup_logging(level_str: str, log_file: str) -> logging.Logger:
+    """Configure root logger and return the named 'tempest' logger."""
     level = getattr(logging, level_str.upper(), logging.INFO)
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
@@ -82,6 +83,7 @@ def setup_logging(level_str: str, log_file: str) -> logging.Logger:
 
 
 def load_config(path: str) -> configparser.ConfigParser:
+    """Load INI config from path, seeding DEFAULT_CONFIG first so all keys exist."""
     cfg = configparser.ConfigParser()
     # seed defaults
     for section, values in DEFAULT_CONFIG.items():
@@ -123,11 +125,12 @@ def parse_obs_st(msg: dict) -> dict | None:
             "hub_sn": msg.get("hub_sn"),
             "firmware_revision": msg.get("firmware_revision"),
         }
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         return None
 
 
 def parse_rapid_wind(msg: dict) -> dict | None:
+    """Parse a rapid_wind message into a flat dict."""
     try:
         ob = msg["ob"]
         return {
@@ -137,22 +140,24 @@ def parse_rapid_wind(msg: dict) -> dict | None:
             "serial_number": msg.get("serial_number"),
             "hub_sn": msg.get("hub_sn"),
         }
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         return None
 
 
 def parse_evt_precip(msg: dict) -> dict | None:
+    """Parse a precipitation-start event into a flat dict."""
     try:
         return {
             "timestamp": msg["evt"][0],
             "serial_number": msg.get("serial_number"),
             "hub_sn": msg.get("hub_sn"),
         }
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         return None
 
 
 def parse_evt_strike(msg: dict) -> dict | None:
+    """Parse a lightning-strike event into a flat dict."""
     try:
         evt = msg["evt"]
         return {
@@ -162,11 +167,12 @@ def parse_evt_strike(msg: dict) -> dict | None:
             "serial_number": msg.get("serial_number"),
             "hub_sn": msg.get("hub_sn"),
         }
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         return None
 
 
 def parse_device_status(msg: dict) -> dict:
+    """Parse a device_status message into a flat dict."""
     return {
         "timestamp": msg.get("timestamp"),
         "uptime_s": msg.get("uptime"),
@@ -182,6 +188,7 @@ def parse_device_status(msg: dict) -> dict:
 
 
 def parse_hub_status(msg: dict) -> dict:
+    """Parse a hub_status message into a flat dict."""
     radio = msg.get("radio_stats", [])
     return {
         "timestamp": msg.get("timestamp"),
@@ -192,7 +199,7 @@ def parse_hub_status(msg: dict) -> dict:
         "seq": msg.get("seq"),
         "radio_version": radio[0] if len(radio) > 0 else None,
         "radio_reboot_count": radio[1] if len(radio) > 1 else None,
-        "radio_status": radio[3] if len(radio) > 3 else None,
+        "radio_status": radio[3] if len(radio) > 3 else None,  # noqa: PLR2004
         "serial_number": msg.get("serial_number"),
     }
 
@@ -205,6 +212,7 @@ def parse_hub_status(msg: dict) -> dict:
 def make_mqtt_client(
     cfg: configparser.ConfigParser, log: logging.Logger
 ) -> mqtt.Client:
+    """Build and return a configured paho MQTT client (not yet connected)."""
     m = cfg["mqtt"]
     client = mqtt.Client(client_id=m["client_id"], clean_session=True)
 
@@ -214,13 +222,13 @@ def make_mqtt_client(
     if m.getboolean("tls"):
         client.tls_set()
 
-    def on_connect(c, userdata, flags, rc):
+    def on_connect(_c: mqtt.Client, _userdata: object, _flags: dict, rc: int) -> None:
         if rc == 0:
             log.info("MQTT connected to %s:%s", m["broker"], m["port"])
         else:
             log.error("MQTT connect failed, rc=%s", rc)
 
-    def on_disconnect(c, userdata, rc):
+    def on_disconnect(_c: mqtt.Client, _userdata: object, rc: int) -> None:
         log.warning("MQTT disconnected (rc=%s), will auto-reconnect…", rc)
 
     client.on_connect = on_connect
@@ -230,7 +238,8 @@ def make_mqtt_client(
 
 def mqtt_connect(
     client: mqtt.Client, cfg: configparser.ConfigParser, log: logging.Logger
-):
+) -> None:
+    """Block until the client connects to the MQTT broker, retrying on failure."""
     m = cfg["mqtt"]
     broker = m["broker"]
     port = int(m["port"])
@@ -239,7 +248,7 @@ def mqtt_connect(
             client.connect(broker, port, keepalive=60)
             break
         except (OSError, ConnectionRefusedError) as exc:
-            log.error(
+            log.error(  # noqa: TRY400
                 "Cannot reach MQTT broker %s:%s — %s. Retrying in 10 s…",
                 broker,
                 port,
@@ -254,7 +263,8 @@ def publish(
     topic: str,
     payload: dict,
     log: logging.Logger,
-):
+) -> None:
+    """Serialise payload as JSON and publish it; log but do not raise on error."""
     m = cfg["mqtt"]
     retain = m.getboolean("retain")
     qos = int(m["qos"])
@@ -264,8 +274,8 @@ def publish(
             log.warning("MQTT publish error rc=%s topic=%s", result.rc, topic)
         else:
             log.debug("Published → %s", topic)
-    except Exception as exc:
-        log.error("Publish exception: %s", exc)
+    except Exception:
+        log.exception("Publish exception")
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +294,8 @@ PARSERS = {
 
 def dispatch(
     raw: bytes, client: mqtt.Client, cfg: configparser.ConfigParser, log: logging.Logger
-):
+) -> None:
+    """Decode a raw UDP packet, parse it by type, and publish to MQTT."""
     try:
         msg = json.loads(raw.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -318,7 +329,8 @@ def dispatch(
 # ---------------------------------------------------------------------------
 
 
-def run(cfg: configparser.ConfigParser, log: logging.Logger):
+def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
+    """Set up MQTT and UDP socket, then run the main receive-dispatch loop."""
     # Set up MQTT
     client = make_mqtt_client(cfg, log)
     mqtt_connect(client, cfg, log)
@@ -354,8 +366,8 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger):
                 pass
             except KeyboardInterrupt:
                 raise
-            except Exception as exc:
-                log.error("Unexpected error: %s", exc)
+            except Exception:
+                log.exception("Unexpected error")
     except KeyboardInterrupt:
         log.info("Shutting down…")
     finally:
@@ -369,7 +381,8 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger):
 # ---------------------------------------------------------------------------
 
 
-def main():
+def main() -> None:
+    """Parse CLI arguments and run the datalogger."""
     parser = argparse.ArgumentParser(
         description="WeatherFlow Tempest UDP → MQTT datalogger"
     )
