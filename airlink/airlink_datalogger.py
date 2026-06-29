@@ -33,7 +33,7 @@ import paho.mqtt.client as mqtt
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = {
     "airlink": {
-        "host": "192.168.1.43",
+        "host": "",
         "port": "80",
         "interval_s": "60",
         "timeout_s": "10",
@@ -394,13 +394,23 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
     client.loop_start()
 
     al = cfg["airlink"]
+    host = al["host"].strip()
+    if not host:
+        log.error(
+            "AirLink host is not configured. "
+            "Set [airlink] host in config.ini and restart."
+        )
+        client.loop_stop()
+        client.disconnect()
+        return
+
     interval_s = int(al["interval_s"])
     base = cfg["mqtt"]["base_topic"].rstrip("/")
     ha_discovery = cfg["homeassistant"].getboolean("discovery")
 
     log.info(
         "Polling AirLink at %s:%s every %s s  base topic: %s",
-        al["host"],
+        host,
         al["port"],
         interval_s,
         base,

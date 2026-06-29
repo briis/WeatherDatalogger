@@ -60,7 +60,14 @@ cp /opt/airlink-datalogger/config.example.ini /opt/airlink-datalogger/config.ini
 nano /opt/airlink-datalogger/config.ini
 ```
 
-Set `[airlink] host` to the AirLink's IP address. Point `[mqtt]` at your broker.
+**Required before first start** — the service will not poll until these are set:
+
+| Key | Where | What to set |
+|---|---|---|
+| `host` | `[airlink]` | IP address or hostname of the AirLink (e.g. `192.168.1.43`) |
+| `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
+
+Everything else has sensible defaults and can be left as-is.
 
 ### 3. Enable and start
 
@@ -73,15 +80,15 @@ journalctl -u airlink-datalogger -f
 
 ```ini
 [airlink]
-host       = 192.168.1.43   # AirLink IP address
-port       = 80              # HTTP port (default 80)
-interval_s = 60              # Poll interval in seconds
-timeout_s  = 10              # HTTP request timeout
+host       =               # REQUIRED — AirLink IP address or hostname
+port       = 80            # HTTP port (default 80)
+interval_s = 60            # Poll interval in seconds
+timeout_s  = 10            # HTTP request timeout
 
 [mqtt]
-broker     = localhost
+broker     = localhost     # REQUIRED — MQTT broker hostname or IP
 port       = 1883
-username   =
+username   =               # leave empty if broker needs no auth
 password   =
 tls        = false
 base_topic = weatherdatalogger
@@ -91,7 +98,7 @@ qos        = 0
 
 [logging]
 level = INFO
-file  =                      # empty = stdout / journald only
+file  =                    # empty = stdout / journald only
 
 [homeassistant]
 discovery        = false
