@@ -69,33 +69,64 @@ weatherdatalogger/forecast-<location>/<subtopic>
 ### 1. Install prerequisites
 
 ```bash
-apt update && apt install -y python3.11 python3.11-venv git
+apt update && apt install -y python3.11 python3.11-venv git mariadb-server
 ```
 
-### 2. Create a dedicated service user
+### 2. Create the database
+
+On Debian, MariaDB is already secured by default — root access requires no password and is restricted to the system `root` user via Unix socket authentication.
+
+Create the database and the application user. **Edit the password** in `01_create_database.sql` before running:
+
+```bash
+# Download the script directly from the repo or copy it from your local clone
+mysql -u root < /path/to/database/01_create_database.sql
+```
+
+Create the tables:
+
+```bash
+mysql --defaults-extra-file=/etc/weatherdatalogger/db.cnf < /path/to/database/02_create_tables.sql
+```
+
+Store the database credentials so the deploy script can apply future migrations automatically:
+
+```bash
+mkdir -p /etc/weatherdatalogger
+cat > /etc/weatherdatalogger/db.cnf <<'EOF'
+[client]
+host     = localhost
+database = weatherdatalogger
+user     = weatherlogger
+password = your_password_here
+EOF
+chmod 600 /etc/weatherdatalogger/db.cnf
+```
+
+### 3. Create a dedicated service user
 
 ```bash
 useradd -r -s /usr/sbin/nologin tempest
 ```
 
-### 3. Create the install directory and download the deploy script
+### 4. Create the install directory and download the deploy script
 
 ```bash
 mkdir -p /opt/tempest-datalogger/scripts
-curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/main/tempest/scripts/deploy.sh \
+curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/main/scripts/deploy.sh \
     -o /opt/tempest-datalogger/scripts/deploy.sh
 chmod +x /opt/tempest-datalogger/scripts/deploy.sh
 ```
 
-### 4. Run the deploy script
+### 5. Run the deploy script
 
 ```bash
 sudo bash /opt/tempest-datalogger/scripts/deploy.sh
 ```
 
-This fetches only the production files from GitHub, creates the Python virtual environment, installs dependencies, and installs the systemd unit file.
+This fetches only the production files from GitHub, applies any pending database migrations, creates the Python virtual environment, installs dependencies, and installs the systemd unit file.
 
-### 5. Configure
+### 6. Configure
 
 ```bash
 cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
@@ -118,13 +149,13 @@ elevation_m = 42        # your station elevation above sea level in metres
 
 See [Configuration](#configuration) for all available options.
 
-### 6. Enable and start the service
+### 7. Enable and start the service
 
 ```bash
 systemctl enable --now tempest-datalogger
 ```
 
-### 7. Verify
+### 8. Verify
 
 ```bash
 systemctl status tempest-datalogger
@@ -153,7 +184,7 @@ Files installed to `/opt/tempest-datalogger`:
 - `requirements.txt` — Python dependencies
 - `config.example.ini` — configuration reference
 - `README.md` — this file
-- `scripts/deploy.sh` — the deploy script itself
+- `scripts/deploy.sh` — the deploy script itself (sourced from the top-level `scripts/` directory in the repo)
 
 > **After updating:** `config.ini` is never touched. Check `config.example.ini` for any new keys added since your last update and copy the ones you want into `config.ini`.
 
