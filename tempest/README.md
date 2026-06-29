@@ -69,7 +69,7 @@ weatherdatalogger/forecast-<location>/<subtopic>
 ### 1. Install prerequisites
 
 ```bash
-apt update && apt install -y python3.11 python3.11-venv git mariadb-server
+apt update && apt install -y python3 python3-venv git mariadb-server
 ```
 
 On Debian, MariaDB is already secured by default — root access requires no password and is restricted to the system `root` user via Unix socket authentication.

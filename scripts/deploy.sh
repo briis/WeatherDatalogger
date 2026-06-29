@@ -170,7 +170,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ ! -d "$VENV" ]]; then
     echo "==> Creating virtual environment for tempest-datalogger…"
-    python3.11 -m venv "$VENV"
+    python3 -m venv "$VENV"
 fi
 echo "==> Updating tempest-datalogger Python dependencies…"
 "$VENV/bin/pip" install --quiet --upgrade pip
@@ -178,7 +178,7 @@ echo "==> Updating tempest-datalogger Python dependencies…"
 
 if [[ ! -d "$WRITER_VENV" ]]; then
     echo "==> Creating virtual environment for weatherdb-writer…"
-    python3.11 -m venv "$WRITER_VENV"
+    python3 -m venv "$WRITER_VENV"
 fi
 echo "==> Updating weatherdb-writer Python dependencies…"
 "$WRITER_VENV/bin/pip" install --quiet --upgrade pip
