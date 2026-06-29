@@ -7,14 +7,10 @@ esphome:
   friendly_name: ${friendly_name}
 
 esp32:
-  board: esp32-s3-devkitc-1
-  flash_size: 16MB
+  board: esp32dev
+
   framework:
     type: arduino
-
-psram:
-  mode: octal
-  speed: 80MHz
 
 wifi:
   ssid: !secret wifi_ssid
@@ -59,23 +55,23 @@ mqtt:
 # ─────────────────────────────────────────────────────────────
 # SPI bus for GERUI CC1101 868 MHz module
 #
-# GERUI CC1101  →  ESP32-S3 GPIO  →  Board label (XH-S3E N16R8)
-#   VCC         →  3.3V           →  3V3
-#   GND         →  GND            →  GND
-#   SCK         →  GPIO12         →  12
-#   SI (MOSI)   →  GPIO11         →  11
-#   SO (MISO)   →  GPIO13         →  13
-#   CS (CSN)    →  GPIO10         →  10
-#   GDO0        →  GPIO9          →  9
+# GERUI CC1101  →  ESP32 GPIO  →  Board label (WROOM-32 30-pin)
+#   VCC         →  3.3V        →  3V3
+#   GND         →  GND         →  GND
+#   SCK         →  GPIO18      →  18 / SCK
+#   SI (MOSI)   →  GPIO23      →  23 / MOSI
+#   SO (MISO)   →  GPIO19      →  19 / MISO
+#   CS (CSN)    →  GPIO5       →  5  / SS
+#   GDO0        →  GPIO4       →  4
 #   GDO2        →  not connected
 #
-# NOTE: GPIO26-37 are reserved for internal flash/PSRAM
-# on N16R8 (Octal SPI) and must NOT be used!
+# NOTE: GPIO6-11 are reserved for internal flash on WROOM-32
+# and must NOT be used!
 # ─────────────────────────────────────────────────────────────
 spi:
-  clk_pin: GPIO12
-  mosi_pin: GPIO11
-  miso_pin: GPIO13
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
 
 # ─────────────────────────────────────────────────────────────
 # Global state variables
@@ -102,8 +98,8 @@ globals:
 # ─────────────────────────────────────────────────────────────
 cc1101:
   id: my_cc1101
-  cs_pin: GPIO10
-  gdo0_pin: GPIO9
+  cs_pin: GPIO5
+  gdo0_pin: GPIO4
   frequency: 868.35MHz         # Centre frequency covering all 5 EU hop channels passively
   modulation_type: GFSK
   symbol_rate: 19200
