@@ -1,0 +1,126 @@
+# WeatherDB Writer
+
+Subscribes to MQTT observation topics published by the weather station loggers and persists every reading to MariaDB. Runs as a standalone systemd service so database writes are completely decoupled from the station loggers.
+
+> **Installation:** Follow the [server installation guide](../README.md#installation) first, then return here to configure the DB writer.
+
+---
+
+## What it does
+
+- Subscribes to `{base_topic}/+/observation` — the `+` wildcard covers all stations
+- Auto-registers new stations in the `stations` table on first observation
+- **Upserts** the `realtime` table — always holds the single latest reading per station
+- **Appends** the `history` table — full time-series log for charting and trend analysis
+- Reconnects automatically to both MQTT and MariaDB on connection loss
+
+---
+
+## Setup
+
+After completing the [server installation](../README.md#installation), copy and edit the config file:
+
+```bash
+cp /opt/weatherdb-writer/config.example.ini /opt/weatherdb-writer/config.ini
+nano /opt/weatherdb-writer/config.ini
+```
+
+Minimum required settings:
+
+```ini
+[mqtt]
+broker = 192.168.1.10   # IP or hostname of your MQTT broker
+
+[database]
+password = your_db_password_here
+```
+
+Enable and start the service:
+
+```bash
+systemctl enable --now weatherdb-writer
+```
+
+Verify:
+
+```bash
+journalctl -u weatherdb-writer -f
+```
+
+On the first observation you should see a `Registered station` line, then `Wrote … @ …` every 10-15 s.
+
+---
+
+## Configuration
+
+All settings live in `config.ini` (copied from `config.example.ini`).
+
+| Section | Key | Default | Description |
+|---|---|---|---|
+| `[mqtt]` | `broker` | `localhost` | MQTT broker hostname or IP |
+| `[mqtt]` | `port` | `1883` | MQTT broker port |
+| `[mqtt]` | `username` | _(empty)_ | MQTT username |
+| `[mqtt]` | `password` | _(empty)_ | MQTT password |
+| `[mqtt]` | `tls` | `false` | Enable TLS/SSL |
+| `[mqtt]` | `base_topic` | `weatherdatalogger` | Must match the datalogger's `base_topic` |
+| `[mqtt]` | `client_id` | `weatherdb-writer` | MQTT client identifier — must be unique on the broker |
+| `[database]` | `host` | `localhost` | MariaDB hostname or IP |
+| `[database]` | `port` | `3306` | MariaDB port |
+| `[database]` | `name` | `weatherdatalogger` | Database name |
+| `[database]` | `user` | `weatherlogger` | Database user |
+| `[database]` | `password` | _(empty)_ | Database password — **required** |
+| `[logging]` | `level` | `INFO` | Log level: `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `[logging]` | `file` | _(empty)_ | Optional log file path (empty = stdout/journal only) |
+
+---
+
+## Database Schema
+
+### `stations`
+
+One row per physical device. Auto-populated on first observation.
+
+| Column | Type | Description |
+|---|---|---|
+| `station_id` | `VARCHAR(32)` | Hardware serial number e.g. `ST-00000512` |
+| `station_type` | `VARCHAR(32)` | `tempest` \| `davis` |
+| `name` | `VARCHAR(128)` | Optional human-readable label |
+| `created_at` | `DATETIME` | First seen timestamp |
+
+### `realtime`
+
+One row per station, replaced on every incoming observation. Primary key is `station_id`.
+
+### `history`
+
+Full append-only time-series. Every observation is inserted here. Indexed on `(station_id, recorded_at)` for efficient range queries.
+
+Both `realtime` and `history` share the same observation columns:
+
+| Column | Description |
+|---|---|
+| `recorded_at` | UTC timestamp of the observation |
+| `wind_lull_ms`, `wind_avg_ms`, `wind_gust_ms` | Wind speed (m/s) |
+| `wind_direction_deg` | Wind direction (°) |
+| `station_pressure_mb`, `sea_level_pressure_mb` | Pressure (mbar) |
+| `pressure_trend`, `sea_level_pressure_trend` | `Rising` \| `Steady` \| `Falling` |
+| `air_temperature_c`, `relative_humidity_pct` | Temperature and humidity |
+| `dew_point_c`, `wet_bulb_c`, `feels_like_c` | Derived temperature metrics |
+| `uv_index`, `solar_radiation_wm2`, `illuminance_lux` | Solar sensors |
+| `rain_accumulation_mm`, `rain_rate_mmh` | Precipitation |
+| `lightning_last_detected`, `lightning_count_3h` | Lightning history |
+| `battery_volts` | Device battery voltage |
+
+---
+
+## Schema Migrations
+
+Future schema changes (new columns, indexes, etc.) are handled as numbered SQL files in the `migrations/` directory. The deploy script applies any file not yet recorded in the `schema_migrations` table automatically on each deploy.
+
+To add a migration:
+
+1. Create `database/migrations/YYYYMMDD_description.sql` with the change
+2. Commit and push
+3. Run `sudo bash /opt/tempest-datalogger/scripts/deploy.sh`
+
+The migration is recorded by filename so it is applied exactly once.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-A unified weather data pipeline that collects data from **two different weather station brands** and publishes everything to a single MQTT broker under a common topic namespace. Downstream consumers (Home Assistant, databases, dashboards, etc.) subscribe to MQTT and are completely decoupled from the hardware.
+A unified weather data pipeline that collects data from **multiple weather station brands** and publishes everything to a single MQTT broker under a common topic namespace. Downstream consumers (Home Assistant, databases, dashboards, etc.) subscribe to MQTT and are completely decoupled from the hardware. A separate DB writer service subscribes to MQTT and persists readings to MariaDB for historical analysis and dashboarding.
 
 ---
 
@@ -10,7 +10,7 @@ A unified weather data pipeline that collects data from **two different weather 
 
 ```
 weatherdatalogger/
-  tempest-<serial>/        ← WeatherFlow Tempest (this repo, Python service)
+  tempest-<serial>/        ← WeatherFlow Tempest (Python service)
     observation            — full obs_st payload (raw + derived metrics)
     rapid_wind
     rain_start
@@ -21,7 +21,7 @@ weatherdatalogger/
     current                — current conditions JSON object
     forecast_hourly        — hourly forecast JSON array (up to forecast_hours entries)
     forecast_daily         — 10-day daily forecast JSON array
-  davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, separate project)
+  davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, planned)
     <sensor topics>
 ```
 
@@ -59,18 +59,28 @@ WeatherDatalogger/                   ← repo root
 │   ├── config.dev.ini               ← Dev container config (local mosquitto)
 │   ├── requirements.txt             ← Runtime dependency: paho-mqtt
 │   ├── scripts/
-│   │   ├── deploy.sh               ← Pull from GitHub, update deps, restart service
 │   │   └── simulate_udp.py         ← Sends all 6 Tempest message types to localhost
 │   ├── systemd/
 │   │   └── tempest-datalogger.service  ← systemd unit for Debian LXC
-│   └── README.md                   ← Tempest install + configuration docs
+│   └── README.md                   ← Tempest configuration docs
+├── database/                        ← MariaDB persistence layer
+│   ├── db_writer.py                 ← MQTT → MariaDB writer service (single file)
+│   ├── requirements.txt             ← Runtime deps: paho-mqtt, PyMySQL
+│   ├── config.example.ini           ← Documented template for db_writer config
+│   ├── 01_create_database.sql       ← One-time: create DB + user
+│   ├── 02_create_tables.sql         ← One-time: create all tables
+│   ├── migrations/                  ← Numbered ALTER TABLE scripts (applied by deploy)
+│   ├── systemd/
+│   │   └── weatherdb-writer.service ← systemd unit for Debian LXC
+│   └── README.md                    ← DB writer config + schema docs
 ├── davis/                           ← Davis Vantage Vue (planned; hardware pending)
 │   └── README.md
+├── scripts/
+│   ├── deploy.sh                    ← Pull from GitHub, install all services, run migrations
+│   └── lint                         ← ruff format + ruff check --fix (all services)
 ├── requirements-dev.txt             ← Shared dev/lint tools: ruff
 ├── .ruff.toml                       ← Ruff linter config (target-version = "py311")
-├── scripts/
-│   └── lint                         ← ruff format + ruff check --fix (all services)
-├── README.md                        ← Project overview (links to each service dir)
+├── README.md                        ← Server installation guide + project overview
 ├── CONTEXT.md                       ← This file
 └── AGENT.md                         ← Instructions for AI coding assistants
 ```
@@ -80,10 +90,17 @@ WeatherDatalogger/                   ← repo root
 ## Deployment Environment
 
 - **Proxmox** hypervisor running **Debian Bookworm LXC containers**
-- Tempest datalogger runs as a Python 3.11 service inside an LXC
-- Runs as a dedicated unprivileged user (`tempest`) under systemd
-- No Docker, no virtualenv wrappers — direct venv at `/opt/tempest-datalogger/venv`
-- Deploy with `sudo bash /opt/tempest-datalogger/scripts/deploy.sh`
+- Production Python: **3.13** (the system `python3` on the LXC)
+- Two services running as the `tempest` unprivileged user under systemd:
+  - `tempest-datalogger` — venv at `/opt/tempest-datalogger/venv`
+  - `weatherdb-writer` — venv at `/opt/weatherdb-writer/venv`
+- **MariaDB** running on the same LXC, bound to `0.0.0.0:3306` for network access
+  - DB credentials file: `/etc/weatherdatalogger/db.cnf` (MySQL client format, `chmod 600`)
+- Deploy script: `sudo bash /opt/tempest-datalogger/scripts/deploy.sh`
+  - Installs all production files for both services
+  - Applies pending SQL migrations from `database/migrations/`
+  - Updates Python dependencies in both venvs
+  - Restarts tempest-datalogger always; restarts weatherdb-writer if it is enabled
 - The LXC must be on the **same L2 network segment** as the Tempest Hub (UDP broadcast does not cross routed boundaries)
 
 ---
@@ -98,10 +115,42 @@ WeatherDatalogger/                   ← repo root
 - Each UDP message type maps to its own MQTT subtopic
 - Payload fields use descriptive names with unit suffixes (`_ms`, `_mb`, `_c`, `_pct`, etc.)
 - `obs_st` payloads include **derived metrics** computed in-process before publishing
+- Database writes are deliberately NOT in this service — MQTT is the only output
+
+---
+
+## DB Writer — Key Design Decisions
+
+- Pure Python, **single file** (`db_writer.py`), no frameworks
+- External dependencies: `paho-mqtt`, `PyMySQL`
+- Subscribes to `{base_topic}/+/observation` — wildcard covers all current and future station types
+- Stations are **auto-registered** in the `stations` table on first observation
+- `realtime` table: one row per station, upserted on every message (`INSERT … ON DUPLICATE KEY UPDATE`)
+- `history` table: full append-only time-series, never updated
+- Reconnects to MariaDB automatically using `connection.ping(reconnect=True)` on `OperationalError`
+- Station type is derived from the MQTT topic segment (`tempest-ST-xxxx` → `tempest`)
+- Config via INI file (`[mqtt]` + `[database]` + `[logging]`)
+
+---
+
+## Database Schema
+
+Tables live in the `weatherdatalogger` database. All observation columns are shared between `realtime` and `history`.
+
+| Table | Purpose |
+|---|---|
+| `stations` | One row per device; auto-inserted on first observation |
+| `realtime` | Latest reading per station (PK = `station_id`) |
+| `history` | Full time-series; indexed on `(station_id, recorded_at)` |
+| `schema_migrations` | Tracks applied migration filenames |
+
+Migrations are SQL files in `database/migrations/` named `YYYYMMDD_description.sql`. The deploy script applies any file not yet recorded in `schema_migrations`.
 
 ---
 
 ## Config Sections
+
+### tempest_datalogger.py
 
 | Section | Key settings |
 |---|---|
@@ -110,13 +159,19 @@ WeatherDatalogger/                   ← repo root
 | `[logging]` | `level`, `file` |
 | `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
 | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
-| `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48), unit keys |
+| `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48) |
 
-`data_dir` (default: empty = same directory as config file) controls where the two persistence files are written:
+`data_dir` (default: same directory as config file) controls where the persistence files are written:
 - `tempest_lightning.json` — rolling 24h lightning event log
 - `tempest_pressure.json` — rolling 24h pressure history for trend calculation
 
-`forecast_hours` limits how many hourly entries are included in `forecast_hourly` MQTT payloads. The WeatherFlow API provides up to 120 hours; 48 is the default.
+### db_writer.py
+
+| Section | Key settings |
+|---|---|
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `client_id` |
+| `[database]` | `host`, `port`, `name`, `user`, `password` |
+| `[logging]` | `level`, `file` |
 
 ---
 
@@ -178,9 +233,10 @@ Discovery is published once per device per run (tracked with an in-memory set). 
 
 ## Conventions
 
-- Python: 3.11+, type hints on all public functions
+- Python: 3.13 on the production LXC; code written to be compatible with 3.11+ syntax (ruff target stays `py311`)
 - Linting: ruff (`scripts/lint`), `select = ["ALL"]`, `target-version = "py311"`
 - Logging: stdlib `logging`, level configurable in `config.ini`
 - Config: `configparser` INI format
 - Units: always SI in MQTT payloads; label field names with unit suffix
 - MQTT QoS: default 0 (configurable), retain: default false (state topics), always true (HA discovery)
+- Each service is a **single self-contained Python file** with its own `requirements.txt`

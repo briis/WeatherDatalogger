@@ -8,27 +8,24 @@ full architecture overview.
 
 ## What this project is
 
-A weather data pipeline. The main component is a Python service that receives
-WeatherFlow Tempest UDP broadcasts and publishes them (plus computed derived
-metrics) to MQTT. A future component will do the same for Davis Vantage Vue via
-ESP32 + CC1101. Both publish under `weatherdatalogger/` so Home Assistant (or
-any MQTT subscriber) gets a unified feed.
+A weather data pipeline with two active Python services:
+
+1. **Tempest datalogger** (`tempest/tempest_datalogger.py`) — receives WeatherFlow Tempest UDP broadcasts, computes derived metrics, and publishes everything to MQTT
+2. **DB writer** (`database/db_writer.py`) — subscribes to MQTT observation topics and persists readings to MariaDB (`realtime` + `history` tables)
+
+A future component will handle Davis Vantage Vue via ESP32 + CC1101. Both station services publish under `weatherdatalogger/` so Home Assistant (or any MQTT subscriber) gets a unified feed.
 
 ---
 
 ## Coding conventions
 
-- **Python 3.11** — the production LXC runs Python 3.11. Do not use syntax that
-  requires 3.12+ (e.g. `type` aliases, newer `match` features).
+- **Python 3.13** is the production runtime. Code must be compatible with **3.11+ syntax** (ruff target stays `py311` — do not change it)
 - **Type hints** on all public function signatures
-- **stdlib only** unless a library is already in `requirements.txt`; ask before
-  adding new dependencies
-- **`configparser` INI** for all runtime config — never hardcode addresses,
-  ports, or credentials
+- **stdlib only** unless a library is already in the service's `requirements.txt`; ask before adding new dependencies
+- **`configparser` INI** for all runtime config — never hardcode addresses, ports, or credentials
 - **`logging`** (stdlib) for all output — no `print()` in production code
-- Field names in MQTT JSON payloads: **descriptive snake_case with unit suffix**
-  (`air_temperature_c`, `station_pressure_mb`, `wind_avg_ms`, `relative_humidity_pct`)
-- Keep `tempest/tempest_datalogger.py` as a **single self-contained file**
+- Field names in MQTT JSON payloads: **descriptive snake_case with unit suffix** (`air_temperature_c`, `station_pressure_mb`, `wind_avg_ms`, `relative_humidity_pct`)
+- Each service stays as a **single self-contained file** with its own `requirements.txt`
 
 ---
 
@@ -36,7 +33,7 @@ any MQTT subscriber) gets a unified feed.
 
 `.ruff.toml` has `target-version = "py311"`. **Do not change this.**
 
-If set to `py314`, ruff will reformat `except (E1, E2):` → `except E1, E2:`
+If bumped to `py314`, ruff will reformat `except (E1, E2):` → `except E1, E2:`
 (PEP 758 syntax valid in 3.14 but a `SyntaxError` in 3.11). This has broken
 production before. Always run `scripts/lint` after editing and check that
 `except` clauses keep their parentheses.
@@ -51,8 +48,7 @@ weatherdatalogger/forecast-<location>/current|forecast_hourly|forecast_daily
 weatherdatalogger/davis-<station_id>/<sensor>
 ```
 
-- `<serial>` comes from the `serial_number` field in the UDP broadcast
-  (`ST-00209955`, `HB-00013030`, etc.) with `:` replaced by `-`
+- `<serial>` comes from the `serial_number` field in the UDP broadcast (`ST-00209955`, `HB-00013030`, etc.) with `:` replaced by `-`
 - `<location>` is the config value lowercased with spaces replaced by `-`
 - Subtopic names are lowercase with underscores
 - Never publish to the bare `weatherdatalogger/` topic
@@ -64,15 +60,14 @@ weatherdatalogger/davis-<station_id>/<sensor>
 ### Request flow
 ```
 UDP broadcast → dispatch() → parse_<type>() → [compute_obs_derived()] → publish()
-                                                        ↓
-                                            [publish_ha_discovery()] (once per device)
+                                                       ↓
+                                           [publish_ha_discovery()] (once per device)
 ```
 
 ### Adding a new message type
 1. Write a `parse_<type>(msg: dict) -> dict | None` function in `tempest/tempest_datalogger.py`
 2. Add an entry to `PARSERS`: `"type_string": ("subtopic_name", parse_fn)`
-3. If it needs HA discovery, add sensor tuples to the appropriate `_*_SENSORS` list
-   and register it in `_HA_DISCOVERY_MAP`
+3. If it needs HA discovery, add sensor tuples to the appropriate `_*_SENSORS` list and register it in `_HA_DISCOVERY_MAP`
 
 ### Adding a new derived metric
 1. Add the computation in `compute_obs_derived()` (or a helper called from it)
@@ -91,7 +86,32 @@ Both lightning history and pressure history use the same pattern:
 
 ---
 
+## DB writer architecture
+
+### Data flow
+```
+MQTT on_message() → _payload_to_row() → DbWriter.write_observation()
+                                                ↓
+                                   ensure_station()  (INSERT IGNORE)
+                                   _execute(UPSERT realtime)
+                                   _execute(INSERT history)
+```
+
+### Adding a new observation field to the database
+1. Add a migration file `database/migrations/YYYYMMDD_add_<field>.sql` with `ALTER TABLE realtime ADD COLUMN …` and `ALTER TABLE history ADD COLUMN …`
+2. Add the field name to `_OBS_FIELDS` in `db_writer.py` (if it maps 1:1 from the payload) or handle it in `_payload_to_row()` (if it needs conversion, like `lightning_last_detected`)
+3. The SQL column lists (`_COL_LIST`, `_PLACEHOLDERS`, `_UPDATE_CLAUSE`) are built from `_ALL_COLS` at import time — no further changes needed
+
+### DB connection management
+- `DbWriter._execute()` retries once on `OperationalError` (lost connection), reconnecting via `_connect()` before the second attempt
+- `autocommit=True` — no explicit transaction management needed for single-statement writes
+- `_known_stations` is an in-memory set; it is rebuilt if the process restarts (safe — `INSERT IGNORE` is idempotent)
+
+---
+
 ## Config sections
+
+### tempest_datalogger.py
 
 | Section | Notable keys |
 |---|---|
@@ -100,25 +120,31 @@ Both lightning history and pressure history use the same pattern:
 | `[logging]` | `level`, `file` |
 | `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
 | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
-| `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48), unit keys |
+| `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48) |
 
 `data_dir` is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 Default (empty) = directory of the config file.
 
-`forecast_hours` slices `fcast["hourly"]` before passing to `_parse_hourly_forecast` — no change needed to the parser.
+### db_writer.py
+
+| Section | Notable keys |
+|---|---|
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `client_id` |
+| `[database]` | `host`, `port`, `name`, `user`, `password` |
+| `[logging]` | `level`, `file` |
 
 ---
 
 ## MQTT client
 
-- Uses `paho.mqtt.client` with `loop_start()` (background thread)
-- Auto-reconnects via `on_disconnect` callback + `mqtt_connect()` retry loop
-- State topic messages: `retain` from config (should be `true` for HA)
-- HA discovery config messages: always `retain=True, qos=1`
+Both services use `paho.mqtt.client` with `loop_forever()` or `loop_start()`:
+- **Tempest datalogger**: `loop_start()` (background thread) — main thread runs the UDP receive loop
+- **DB writer**: `loop_forever()` — MQTT is the only I/O; blocking loop is appropriate
+- Auto-reconnects via `on_disconnect` callback in both services
 
 ---
 
-## HA discovery
+## HA discovery (tempest datalogger only)
 
 - One retained config message per sensor to `<prefix>/sensor/<unique_id>/config`
 - Published once per device per process run (tracked by `_discovered` set)
@@ -129,7 +155,7 @@ Default (empty) = directory of the config file.
 - 7 current-condition sensors (`_FORECAST_CC_SENSORS`) — state_topic: `forecast-<loc>/current`, `value_template` extracts each field
 - 2 forecast-array sensors (Hourly / Daily) — `state_topic` returns entry count via `{{ value_json | length }}`; `json_attributes_topic` points at the same topic with `json_attributes_template: "{{ {'forecasts': value_json} | tojson }}"` so the full array is available as the `forecasts` attribute
 
-**HA does NOT support `weather` entity auto-discovery** (`homeassistant/weather/…` topics are silently ignored) and **`mqtt: weather:` in configuration.yaml is also invalid**. The correct approach is `template: weather:` in configuration.yaml, which reads from the 9 auto-discovered sensors. The exact YAML snippet is logged at INFO the first time the forecast publishes.
+**HA does NOT support `weather` entity auto-discovery** and **`mqtt: weather:` in configuration.yaml is also invalid**. The correct approach is `template: weather:` in configuration.yaml, reading from the 9 auto-discovered sensors. The exact YAML snippet is logged at INFO the first time the forecast publishes.
 
 ---
 
@@ -143,7 +169,7 @@ python3 tempest/scripts/simulate_udp.py          # sends all 6 message types onc
 python3 tempest/scripts/simulate_udp.py --count 0 --interval 60  # continuous, every 60s
 ```
 
-Subscribe to verify output:
+Subscribe to verify MQTT output:
 ```bash
 mosquitto_sub -h localhost -t 'weatherdatalogger/#' -v
 ```
@@ -152,6 +178,8 @@ Run the datalogger:
 ```bash
 python3 tempest/tempest_datalogger.py --config tempest/config.dev.ini
 ```
+
+The DB writer requires a reachable MariaDB instance — point `[database] host` at your production LXC or run a local MariaDB container for dev testing.
 
 ---
 
@@ -171,47 +199,47 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## What's already done ✅
 
-- [x] Tempest UDP listener with all 6 message type parsers
+### Tempest datalogger
+- [x] UDP listener with all 6 message type parsers
 - [x] MQTT publish with configurable base topic, QoS, retain, TLS
 - [x] INI-based config with documented defaults (`tempest/config.example.ini`)
 - [x] Dev config for devcontainer (`tempest/config.dev.ini`)
 - [x] systemd service unit (`tempest/systemd/tempest-datalogger.service`)
-- [x] Deploy script (`tempest/scripts/deploy.sh`) — SSH-key auth, staging clone, explicit
-      file list, dev-file cleanup, venv bootstrap, ownership restore
 - [x] UDP packet simulator (`tempest/scripts/simulate_udp.py`)
-- [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
 - [x] Home Assistant MQTT discovery (all raw + derived sensors auto-discovered)
-- [x] Derived metrics: dew point, wet bulb, delta T, feels like, heat index,
-      wind chill, vapor pressure, air density, rain rate, sea level pressure
-- [x] Station pressure trend (3h, persisted across restarts)
-- [x] Sea level pressure trend (3h, persisted across restarts)
-- [x] Lightning history: last detected timestamp, 3h count, 3h min/max distance
-      (persisted across restarts in `tempest_lightning.json`)
-- [x] WeatherFlow Better Forecast REST API poller (background daemon thread)
-      — current conditions, hourly (configurable depth via `forecast_hours`),
-      10-day daily — published to `forecast-<location>/` MQTT topics
-- [x] Forecast HA discovery: 9 sensors (7 current-condition + 2 forecast-array
-      with `json_attributes_topic`) auto-discovered into a "Forecast" device;
-      `template: weather:` YAML snippet logged at INFO on first run
-- [x] Deploy script: staging-based, copies only production files, cleans up
-      dev-only leftovers, creates venv on first run, restores ownership
+- [x] Derived metrics: dew point, wet bulb, delta T, feels like, heat index, wind chill, vapor pressure, air density, rain rate, sea level pressure
+- [x] Station and sea level pressure trend (3h, persisted across restarts)
+- [x] Lightning history: last detected timestamp, 3h count, 3h min/max distance (persisted)
+- [x] WeatherFlow Better Forecast REST API poller — current conditions, configurable hourly depth, 10-day daily
+- [x] Forecast HA discovery: 9 sensors auto-discovered; `template: weather:` YAML logged at INFO
+
+### Database
+- [x] MariaDB on the same LXC, bound to `0.0.0.0:3306` for network access
+- [x] `stations`, `realtime`, `history`, `schema_migrations` tables
+- [x] DB writer service (`database/db_writer.py`) subscribing to `weatherdatalogger/+/observation`
+- [x] Auto-registration of new stations on first observation
+- [x] Upsert into `realtime`; append into `history` on every message
+- [x] systemd service unit (`database/systemd/weatherdb-writer.service`)
+- [x] Migration system: numbered SQL files in `database/migrations/`, tracked in `schema_migrations`
+
+### Infrastructure
+- [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs both services, applies DB migrations, updates both venvs, restarts services
+- [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
 
 ## What's next / TODO
 
 - [ ] **Davis Vantage Vue** — deferred until ESP32 + CC1101 hardware arrives
+- [ ] Dashboard / charting — Grafana or similar consuming MariaDB `history` table
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
-- [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with
-      `online`/`offline` LWT and last-seen timestamp
+- [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with `online`/`offline` LWT and last-seen timestamp
 
 ---
 
 ## Things to avoid
 
-- Do not introduce async frameworks (asyncio, trio) — the current threading model
-  (UDP main thread + MQTT background thread) is intentional and simple
-- Do not add a web server, REST API, or database — MQTT is the only output
-- Do not change the MQTT topic structure without updating CONTEXT.md and
-  the HA discovery sensor list
-- Do not store secrets in committed files — `config.ini` is gitignored
-- Do not bump `target-version` in `.ruff.toml` past `py311` without verifying
-  the production Python version first
+- Do not introduce async frameworks (asyncio, trio) — the current threading model is intentional and simple
+- Do not add database write logic to `tempest_datalogger.py` — MQTT is its only output; the DB writer is the correct place
+- Do not insert directly into `realtime` or `history` without first ensuring the station exists in `stations` — the foreign key will reject it
+- Do not change the MQTT topic structure without updating CONTEXT.md and the HA discovery sensor list
+- Do not store secrets in committed files — `config.ini` files are gitignored
+- Do not bump `target-version` in `.ruff.toml` past `py311` without verifying production Python version and checking for syntax-breaking reformats (especially `except` clauses)

@@ -4,6 +4,8 @@ Listens for UDP broadcasts from a **WeatherFlow Tempest hub** on the local netwo
 
 Designed to run as a **systemd service on Debian/Proxmox LXC** and integrate with **Home Assistant** via MQTT auto-discovery.
 
+> **Installation:** Follow the [server installation guide](../README.md#installation) first, then return here to configure the Tempest datalogger.
+
 ---
 
 ## Features
@@ -55,122 +57,9 @@ weatherdatalogger/forecast-<location>/<subtopic>
 
 ---
 
-## Requirements
+## Setup
 
-- Python 3.11
-- `paho-mqtt` (see `requirements.txt`)
-- MQTT broker (e.g. Mosquitto)
-- The LXC/host must be on the **same L2 network segment** as the Tempest Hub — UDP broadcasts do not cross routed boundaries or VLANs
-
----
-
-## Installation (Debian / Proxmox LXC)
-
-### 1. Install prerequisites
-
-```bash
-apt update && apt install -y python3 python3-venv git mariadb-server
-```
-
-On Debian, MariaDB is already secured by default — root access requires no password and is restricted to the system `root` user via Unix socket authentication.
-
-### 2. Create a dedicated service user
-
-```bash
-useradd -r -s /usr/sbin/nologin tempest
-```
-
-### 3. Create the install directory and bootstrap the deploy script
-
-Clone the repo temporarily to get the deploy script onto disk (SSH key required):
-
-```bash
-git clone --depth 1 git@github.com:briis/WeatherDatalogger.git /tmp/wdl-bootstrap
-mkdir -p /opt/tempest-datalogger/scripts
-cp /tmp/wdl-bootstrap/scripts/deploy.sh /opt/tempest-datalogger/scripts/deploy.sh
-chmod +x /opt/tempest-datalogger/scripts/deploy.sh
-rm -rf /tmp/wdl-bootstrap
-```
-
-> Once the repository is made public you can replace the above with a single `curl` command. For now, SSH access is required because the repo is private.
-
-### 4. Run the deploy script (first time)
-
-```bash
-sudo bash /opt/tempest-datalogger/scripts/deploy.sh
-```
-
-This fetches only the production files from GitHub, installs the SQL scripts under `/opt/tempest-datalogger/database/`, creates the Python virtual environment, installs dependencies, and installs the systemd unit file. Database migrations are skipped on this first run because the credentials file does not exist yet.
-
-### 5. Configure MariaDB for network access
-
-By default MariaDB on Debian binds to `127.0.0.1` only. Change it to listen on all interfaces so other hosts on the network can connect:
-
-```bash
-sed -i 's/^bind-address\s*=.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
-systemctl restart mariadb
-```
-
-Verify it is listening on all interfaces:
-
-```bash
-ss -tlnp | grep 3306
-```
-
-You should see `0.0.0.0:3306` in the output.
-
-### 6. Create the database
-
-Edit the password in the SQL script, then create the database and application user:
-
-```bash
-nano /opt/tempest-datalogger/database/01_create_database.sql
-mariadb -u root < /opt/tempest-datalogger/database/01_create_database.sql
-```
-
-### 7. Store database credentials
-
-```bash
-mkdir -p /etc/weatherdatalogger
-cat > /etc/weatherdatalogger/db.cnf <<'EOF'
-[client]
-host     = localhost
-database = weatherdatalogger
-user     = weatherlogger
-password = your_password_here
-EOF
-chmod 600 /etc/weatherdatalogger/db.cnf
-```
-
-### 8. Create the tables
-
-```bash
-mariadb --defaults-extra-file=/etc/weatherdatalogger/db.cnf \
-    < /opt/tempest-datalogger/database/02_create_tables.sql
-```
-
-### 9. Configure the WeatherDB writer
-
-```bash
-cp /opt/weatherdb-writer/config.example.ini /opt/weatherdb-writer/config.ini
-nano /opt/weatherdb-writer/config.ini
-```
-
-Set at minimum the `[mqtt]` broker address and the `[database]` password to match what you set in step 6. Then enable the service:
-
-```bash
-systemctl enable --now weatherdb-writer
-```
-
-Verify it is writing:
-
-```bash
-journalctl -u weatherdb-writer -f
-```
-
-You should see a `Registered station` line on the first observation, then `Wrote … @ …` every 10-15 s.
-
-### 10. Configure the Tempest datalogger
+After completing the [server installation](../README.md#installation), copy and edit the config file:
 
 ```bash
 cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
@@ -191,46 +80,25 @@ discovery = true        # auto-create HA devices and sensors
 elevation_m = 42        # your station elevation above sea level in metres
 ```
 
-See [Configuration](#configuration) for all available options.
-
-### 11. Enable and start the Tempest service
+Enable and start the service:
 
 ```bash
 systemctl enable --now tempest-datalogger
 ```
 
-### 12. Verify
+Verify:
 
 ```bash
 systemctl status tempest-datalogger
 journalctl -u tempest-datalogger -f
 ```
 
-You should see lines like:
+You should see:
 
 ```
-2024-06-28 08:00:01  INFO      Listening for Tempest UDP broadcasts on 0.0.0.0:50222
-2024-06-28 08:00:07  INFO      obs_st → weatherdatalogger/tempest-ST-00000512/observation
+2024-06-28 08:00:01  INFO  Listening for Tempest UDP broadcasts on 0.0.0.0:50222
+2024-06-28 08:00:07  INFO  obs_st → weatherdatalogger/tempest-ST-00000512/observation
 ```
-
----
-
-## Updating
-
-```bash
-sudo bash /opt/tempest-datalogger/scripts/deploy.sh
-```
-
-The script clones the latest code to a temporary staging directory, copies only the files needed for production, syncs the systemd unit if it changed, updates Python dependencies, restores ownership to the `tempest` user, and restarts the service.
-
-Files installed to `/opt/tempest-datalogger`:
-- `tempest_datalogger.py` — the service
-- `requirements.txt` — Python dependencies
-- `config.example.ini` — configuration reference
-- `README.md` — this file
-- `scripts/deploy.sh` — the deploy script itself (sourced from the top-level `scripts/` directory in the repo)
-
-> **After updating:** `config.ini` is never touched. Check `config.example.ini` for any new keys added since your last update and copy the ones you want into `config.ini`.
 
 ---
 
