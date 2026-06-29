@@ -80,14 +80,19 @@ On Debian, MariaDB is already secured by default — root access requires no pas
 useradd -r -s /usr/sbin/nologin tempest
 ```
 
-### 3. Create the install directory and download the deploy script
+### 3. Create the install directory and bootstrap the deploy script
+
+Clone the repo temporarily to get the deploy script onto disk (SSH key required):
 
 ```bash
+git clone --depth 1 git@github.com:briis/WeatherDatalogger.git /tmp/wdl-bootstrap
 mkdir -p /opt/tempest-datalogger/scripts
-curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/main/scripts/deploy.sh \
-    -o /opt/tempest-datalogger/scripts/deploy.sh
+cp /tmp/wdl-bootstrap/scripts/deploy.sh /opt/tempest-datalogger/scripts/deploy.sh
 chmod +x /opt/tempest-datalogger/scripts/deploy.sh
+rm -rf /tmp/wdl-bootstrap
 ```
+
+> Once the repository is made public you can replace the above with a single `curl` command. For now, SSH access is required because the repo is private.
 
 ### 4. Run the deploy script (first time)
 
