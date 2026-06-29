@@ -45,7 +45,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 ### Davis Vantage Vue
 - 868 MHz ISM band wireless sensor suite (EU frequency plan)
 - Protocol is community-reverse-engineered (not officially documented)
-- Receiver: **Sparkle IoT XH-S3E** (ESP32-S3, 16 MB flash, 8 MB PSRAM) + **CC1101** (868.35 MHz, CRC-16/CCITT, 5 EU hop channels)
+- Receiver: **ESP32-WROOM-32** (30-pin devkit) + **GERUI CC1101** (868.35 MHz, CRC-16/CCITT, 5 EU hop channels)
 - Runs **ESPHome** firmware (`davis/davis-vantage-receiver.yaml`) which handles RF decoding and MQTT publishing
 - ESPHome also exposes sensors to Home Assistant via the native API
 - **Status: active — hardware available, ESPHome firmware written**

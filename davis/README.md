@@ -8,33 +8,33 @@ Receives 868 MHz ISM band transmissions from a **Davis Vantage Vue** weather sta
 
 ## Hardware
 
-### Receiver board — Sparkle IoT XH-S3E
+### Receiver board — ESP32-WROOM-32 (30-pin devkit)
 
 | Spec | Value |
 |---|---|
-| SoC | ESP32-S3 |
-| Flash | 16 MB |
-| PSRAM | 8 MB (Octal SPI) |
+| SoC | ESP32 (Xtensa LX6 dual-core) |
+| Flash | 4 MB |
+| PSRAM | None |
 | RF module | CC1101 (868 MHz ISM, EU) |
 
 ### RF module — GERUI CC1101 868 MHz
 
 A dedicated CC1101 breakout board with integrated antenna. The GERUI board labels its SPI data pins `SI` (MOSI) and `SO` (MISO).
 
-### Wiring — GERUI CC1101 → Sparkle IoT XH-S3E
+### Wiring — GERUI CC1101 → ESP32-WROOM-32
 
-| GERUI CC1101 pin | ESP32-S3 GPIO | Board label |
+| GERUI CC1101 pin | ESP32 GPIO | Board label |
 |---|---|---|
 | VCC | 3.3 V | 3V3 |
 | GND | GND | GND |
-| SCK | GPIO 12 | 12 |
-| SI (MOSI) | GPIO 11 | 11 |
-| SO (MISO) | GPIO 13 | 13 |
-| CS (CSN) | GPIO 10 | 10 |
-| GDO0 | GPIO 9 | 9 |
+| SCK | GPIO 18 | 18 / SCK |
+| SI (MOSI) | GPIO 23 | 23 / MOSI |
+| SO (MISO) | GPIO 19 | 19 / MISO |
+| CS (CSN) | GPIO 5 | 5 / SS |
+| GDO0 | GPIO 4 | 4 |
 | GDO2 | — | not connected |
 
-> **Important:** GPIO 26–37 are reserved for internal flash/PSRAM on the N16R8 and must not be used.
+> **Important:** GPIO 6–11 are reserved for internal flash on the WROOM-32 and must not be used.
 
 ### Davis Vantage Vue
 
