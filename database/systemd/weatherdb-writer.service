@@ -1,0 +1,14 @@
+[Unit]
+Description=WeatherDB Writer — MQTT to MariaDB persistence
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=tempest
+ExecStart=/opt/weatherdb-writer/venv/bin/python3 /opt/weatherdb-writer/db_writer.py --config /opt/weatherdb-writer/config.ini
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

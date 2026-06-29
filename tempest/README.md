@@ -149,7 +149,28 @@ mariadb --defaults-extra-file=/etc/weatherdatalogger/db.cnf \
     < /opt/tempest-datalogger/database/02_create_tables.sql
 ```
 
-### 9. Configure
+### 9. Configure the WeatherDB writer
+
+```bash
+cp /opt/weatherdb-writer/config.example.ini /opt/weatherdb-writer/config.ini
+nano /opt/weatherdb-writer/config.ini
+```
+
+Set at minimum the `[mqtt]` broker address and the `[database]` password to match what you set in step 6. Then enable the service:
+
+```bash
+systemctl enable --now weatherdb-writer
+```
+
+Verify it is writing:
+
+```bash
+journalctl -u weatherdb-writer -f
+```
+
+You should see a `Registered station` line on the first observation, then `Wrote … @ …` every 10-15 s.
+
+### 10. Configure the Tempest datalogger
 
 ```bash
 cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
@@ -172,13 +193,13 @@ elevation_m = 42        # your station elevation above sea level in metres
 
 See [Configuration](#configuration) for all available options.
 
-### 10. Enable and start the service
+### 11. Enable and start the Tempest service
 
 ```bash
 systemctl enable --now tempest-datalogger
 ```
 
-### 11. Verify
+### 12. Verify
 
 ```bash
 systemctl status tempest-datalogger
