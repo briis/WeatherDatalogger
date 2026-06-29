@@ -82,8 +82,8 @@ One row per physical device. Auto-populated on first observation.
 
 | Column | Type | Description |
 |---|---|---|
-| `station_id` | `VARCHAR(32)` | Hardware serial number e.g. `ST-00000512` |
-| `station_type` | `VARCHAR(32)` | `tempest` \| `davis` |
+| `station_id` | `VARCHAR(32)` | Hardware serial number e.g. `ST-00000512`, `001D0A100A5A` |
+| `station_type` | `VARCHAR(32)` | `tempest` \| `airlink` \| `davis` |
 | `name` | `VARCHAR(128)` | Optional human-readable label |
 | `created_at` | `DATETIME` | First seen timestamp |
 
@@ -110,6 +110,22 @@ Both `realtime` and `history` share the same observation columns:
 | `rain_accumulation_mm`, `rain_rate_mmh` | Precipitation |
 | `lightning_last_detected`, `lightning_count_3h` | Lightning history |
 | `battery_volts` | Device battery voltage |
+| `pm_1_ugm3`, `pm_2p5_ugm3`, `pm_10_ugm3` | Particulate matter — current (AirLink) |
+| `pm_2p5_nowcast_ugm3`, `pm_10_nowcast_ugm3` | PM NowCast values (AirLink) |
+| `aqi_pm2p5`, `aqi_pm10` | US EPA AQI (AirLink) |
+
+### `combined_realtime` (view)
+
+A single-row view that merges the latest readings from all station types into one record. Weather fields are sourced from the `tempest` station; air quality fields from the `airlink` station. Air quality columns are `NULL` if no AirLink station has been registered yet.
+
+**Use this view as the primary source for dashboards and downstream consumers** — it hides the per-station layout of `realtime` and provides a unified snapshot of all current conditions.
+
+| Column | Source |
+|---|---|
+| `recorded_at` | Tempest — timestamp of the latest weather observation |
+| `airlink_recorded_at` | AirLink — timestamp of the latest air quality observation |
+| All weather columns | Tempest |
+| `pm_*`, `aqi_*` | AirLink |
 
 ---
 
