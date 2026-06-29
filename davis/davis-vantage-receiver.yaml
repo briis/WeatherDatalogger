@@ -1,0 +1,370 @@
+substitutions:
+  name: davis-vantage-receiver
+  friendly_name: Davis Vantage Receiver
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: arduino
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Davis-Vantage-Fallback"
+    password: "changeme123"
+
+captive_portal:
+
+# Web UI til diagnostik (valgfri – kan fjernes)
+web_server:
+  port: 80
+
+# HA native API (kan udelades hvis du KUN bruger MQTT)
+api:
+  encryption:
+    key: !secret ha_api_key
+
+logger:
+  level: INFO
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# ─────────────────────────────────────────────────────────────
+# MQTT — set credentials in secrets.yaml
+# discovery: false — we publish our own structured topics;
+# ESPHome auto-discovery would create duplicate HA entities.
+# ─────────────────────────────────────────────────────────────
+mqtt:
+  broker: !secret mqtt_broker
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  client_id: davis-vantage-receiver
+  discovery: false
+  skip_cert_cn_check: true
+  reboot_timeout: 15s
+
+# ─────────────────────────────────────────────────────────────
+# SPI bus for CC1101
+#
+# Sparkle IoT XH-S3E N16R8 pin mapping:
+#
+#   CC1101 pin  →  ESP32-S3 GPIO  →  Board label
+#   VCC         →  3.3V           →  3V3
+#   GND         →  GND            →  GND
+#   SCK         →  GPIO12         →  12
+#   MOSI        →  GPIO11         →  11
+#   MISO        →  GPIO13         →  13
+#   CSN         →  GPIO10         →  10
+#   GDO0        →  GPIO9          →  9
+#   GDO2        →  not connected
+#
+# NOTE: GPIO26-37 are reserved for internal flash/PSRAM
+# on N16R8 (Octal SPI) and must NOT be used!
+# ─────────────────────────────────────────────────────────────
+spi:
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+  miso_pin: GPIO13
+
+# ─────────────────────────────────────────────────────────────
+# Global state variables
+# ─────────────────────────────────────────────────────────────
+globals:
+  - id: rain_count_prev
+    type: int
+    initial_value: '-1'
+  - id: rain_total_mm
+    type: float
+    initial_value: '0.0'
+  - id: raw_wind_dir
+    type: float
+    initial_value: '0.0'
+  - id: known_unit_id
+    type: int
+    # -1 = auto-lock on first valid station.
+    # If your Vue is set to Transmitter ID 2, write initial_value: '1'
+    # (Davis ID 1 = 0, ID 2 = 1, ID 3 = 2, etc.)
+    initial_value: '-1'
+
+# ─────────────────────────────────────────────────────────────
+# CC1101 — 868 MHz EU configuration
+# ─────────────────────────────────────────────────────────────
+cc1101:
+  id: my_cc1101
+  cs_pin: GPIO10
+  gdo0_pin: GPIO9
+  frequency: 868.35MHz         # Centre frequency covering all 5 EU hop channels passively
+  modulation_type: GFSK
+  symbol_rate: 19200
+  fsk_deviation: 9.5kHz
+  filter_bandwidth: 325kHz     # Wide enough to capture all channels (~868.04–868.52)
+  magn_target: 33dB
+  packet_mode: true
+  packet_length: 8
+  sync_mode: 16/16
+  sync1: 0xCB
+  sync0: 0x89
+  crc_enable: false
+  whitening: false
+  num_preamble: 2
+
+  on_packet:
+    then:
+      - lambda: |-
+          if (x.size() < 8) return;
+
+          // ── 1. Bit-reversal (LSB→MSB) ──────────────────────────────
+          std::vector<uint8_t> d(8);
+          for (int i = 0; i < 8; i++) {
+            uint8_t b = x[i];
+            b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+            b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+            b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+            d[i] = b;
+          }
+
+          // ── 2. CRC-16/CCITT validation with bit-shift fallback ──────
+          bool crc_ok = false;
+          for (int shift = 0; shift < 3; shift++) {
+            uint16_t crc = 0;
+            for (int i = 0; i < 6; i++) {
+              crc ^= (uint16_t)d[i] << 8;
+              for (int j = 0; j < 8; j++) {
+                crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+              }
+            }
+            uint16_t recv_crc_1 = ((uint16_t)d[6] << 8) | d[7];
+            uint16_t recv_crc_2 = ((uint16_t)d[7] << 8) | d[6];
+            if (crc == recv_crc_1 || crc == recv_crc_2) {
+              crc_ok = true;
+              break;
+            }
+            uint8_t carry = 0;
+            for (int i = 0; i < 8; i++) {
+              uint8_t next_carry = (d[i] & 0x01) << 7;
+              d[i] = (d[i] >> 1) | carry;
+              carry = next_carry;
+            }
+          }
+          if (!crc_ok) return;
+
+          // ── 3. Station-ID lock ──────────────────────────────────────
+          uint8_t unit_id = d[0] & 0x07;
+          bool battery_low = (d[0] & 0x08) != 0;
+
+          if (id(known_unit_id) < 0) {
+            id(known_unit_id) = unit_id;
+            ESP_LOGI("davis", "Auto-locked to station ID: %d", unit_id);
+          } else if (unit_id != id(known_unit_id)) {
+            return; // Ignore neighbouring station
+          }
+
+          // Build base topic: weatherdatalogger/davis-<id>
+          char base_topic[48];
+          snprintf(base_topic, sizeof(base_topic),
+            "weatherdatalogger/davis-%d", (int)id(known_unit_id));
+
+          // ── 4. Device status ────────────────────────────────────────
+          id(davis_battery_low).publish_state(battery_low);
+          id(davis_rssi).publish_state(rssi);
+          id(davis_lqi).publish_state(lqi);
+
+          char topic[80];
+          char buf[256];
+          snprintf(topic, sizeof(topic), "%s/device_status", base_topic);
+          snprintf(buf, sizeof(buf),
+            "{\"rssi\":%.1f,\"lqi\":%d,\"battery_low\":%s}",
+            (float)rssi, (int)lqi, battery_low ? "true" : "false");
+          id(mqtt_client).publish(topic, buf);
+
+          // ── 5. Wind (present in every packet) ──────────────────────
+          // Raw d[1] is in mph; convert to m/s (1 mph = 0.44704 m/s)
+          float wind_avg_ms  = d[1] * 0.44704f;
+          float wind_dir_deg = d[2] * (360.0f / 255.0f);
+
+          if (wind_avg_ms >= 0.0f && wind_avg_ms < 90.0f) {
+            id(davis_wind_speed).publish_state(wind_avg_ms);
+            if (std::isnan(id(davis_windgust).state)) {
+              id(davis_windgust).publish_state(wind_avg_ms);
+            }
+            snprintf(topic, sizeof(topic), "%s/rapid_wind", base_topic);
+            snprintf(buf, sizeof(buf),
+              "{\"wind_avg_ms\":%.2f,\"wind_direction_deg\":%.1f}",
+              wind_avg_ms, wind_dir_deg);
+            id(mqtt_client).publish(topic, buf);
+          }
+          if (wind_dir_deg >= 0.0f && wind_dir_deg <= 360.0f) {
+            id(raw_wind_dir) = wind_dir_deg;
+            id(davis_wind_dir_combined).update();
+          }
+
+          // ── 6. Packet-type-specific data ────────────────────────────
+          uint8_t ptype = d[0] >> 4;
+
+          if (ptype == 8) {
+            // Outdoor temperature
+            uint16_t raw = ((uint16_t)d[3] << 8) | d[4];
+            float temp_c = (raw / 160.0f - 32.0f) * 5.0f / 9.0f;
+            if (temp_c > -30.0f && temp_c < 60.0f) {
+              id(davis_temp).publish_state(temp_c);
+              ESP_LOGI("davis", "Temperature: %.1f°C", temp_c);
+            }
+
+          } else if (ptype == 9) {
+            // Wind gust
+            float gust_ms = d[3] * 0.44704f;
+            if (gust_ms >= 0.0f && gust_ms < 90.0f) {
+              id(davis_windgust).publish_state(gust_ms);
+            }
+
+          } else if (ptype == 10) {
+            // Humidity
+            uint16_t raw = (((uint16_t)(d[4] >> 4) & 0x03) << 8) | d[3];
+            float hum = raw / 10.0f;
+            if (hum > 0.0f && hum <= 100.0f) {
+              id(davis_hum).publish_state(hum);
+              ESP_LOGI("davis", "Humidity: %.0f%%", hum);
+            }
+
+          } else if (ptype == 14) {
+            // Rainfall (tip counter, 0.2 mm per tip)
+            int tips = ((int)d[3] + (((int)d[4] >> 7) << 8)) & 0x7F;
+            if (id(rain_count_prev) >= 0) {
+              int delta = tips - id(rain_count_prev);
+              if (delta < 0) delta += 128;
+              if (delta > 0 && delta < 10) {
+                id(rain_total_mm) += delta * 0.2f;
+                id(davis_rain).publish_state(id(rain_total_mm));
+              }
+            }
+            id(rain_count_prev) = tips;
+          }
+
+          // ── 7. Consolidated observation ─────────────────────────────
+          // Published on every packet using the latest known values for
+          // all fields. Fields not yet received remain absent (JSON null
+          // equivalent — the DB writer treats missing keys as SQL NULL).
+          snprintf(topic, sizeof(topic), "%s/observation", base_topic);
+
+          int pos = snprintf(buf, sizeof(buf),
+            "{\"wind_avg_ms\":%.2f,\"wind_direction_deg\":%.1f",
+            wind_avg_ms, wind_dir_deg);
+
+          if (!std::isnan(id(davis_windgust).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_gust_ms\":%.2f", id(davis_windgust).state);
+
+          if (!std::isnan(id(davis_temp).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"air_temperature_c\":%.1f", id(davis_temp).state);
+
+          if (!std::isnan(id(davis_hum).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"relative_humidity_pct\":%.1f", id(davis_hum).state);
+
+          pos += snprintf(buf + pos, sizeof(buf) - pos,
+            ",\"rain_accumulation_mm\":%.1f", id(rain_total_mm));
+
+          snprintf(buf + pos, sizeof(buf) - pos,
+            ",\"battery_low\":%s}", battery_low ? "true" : "false");
+
+          id(mqtt_client).publish(topic, buf);
+
+# ─────────────────────────────────────────────────────────────
+# Sensors — exposed to both HA (native API) and MQTT
+# ─────────────────────────────────────────────────────────────
+binary_sensor:
+  - platform: template
+    name: "Davis Battery Low"
+    id: davis_battery_low
+    device_class: battery
+
+sensor:
+  - platform: template
+    name: "Davis Temperature"
+    id: davis_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Humidity"
+    id: davis_hum
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Davis Wind Speed"
+    id: davis_wind_speed
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 1
+
+  - platform: template
+    name: "Davis Wind Gust"
+    id: davis_windgust
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "Davis Daily Rain"
+    id: davis_rain
+    unit_of_measurement: "mm"
+    device_class: precipitation
+    state_class: total_increasing
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis RSSI"
+    id: davis_rssi
+    unit_of_measurement: "dBm"
+    state_class: measurement
+    device_class: signal_strength
+    entity_category: diagnostic
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis LQI"
+    id: davis_lqi
+    state_class: measurement
+    entity_category: diagnostic
+    accuracy_decimals: 0
+
+text_sensor:
+  - platform: template
+    name: "Davis Wind Direction"
+    id: davis_wind_dir_combined
+    icon: "mdi:compass-outline"
+    lambda: |-
+      float deg = id(raw_wind_dir);
+      int index = int((deg + 11.25f) / 22.5f) % 16;
+      const char* pts[] = {
+        "N","NNE","NE","ENE","E","ESE","SE","SSE",
+        "S","SSW","SW","WSW","W","WNW","NW","NNW"
+      };
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%.0f° %s", deg, pts[index]);
+      return std::string(buf);
