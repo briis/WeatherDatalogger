@@ -1,0 +1,19 @@
+[Unit]
+Description=Davis AirLink HTTP → MQTT Datalogger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tempest
+Group=tempest
+WorkingDirectory=/opt/airlink-datalogger
+ExecStart=/opt/airlink-datalogger/venv/bin/python3 airlink_datalogger.py --config /opt/airlink-datalogger/config.ini
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=airlink-datalogger
+
+[Install]
+WantedBy=multi-user.target

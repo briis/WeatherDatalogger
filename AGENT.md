@@ -125,6 +125,15 @@ MQTT on_message() → _payload_to_row() → DbWriter.write_observation()
 `data_dir` is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 Default (empty) = directory of the config file.
 
+### airlink_datalogger.py
+
+| Section | Notable keys |
+|---|---|
+| `[airlink]` | `host`, `port` (80), `interval_s` (60), `timeout_s` (10) |
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
+| `[logging]` | `level`, `file` |
+| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
+
 ### db_writer.py
 
 | Section | Notable keys |
@@ -199,6 +208,17 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## What's already done ✅
 
+### AirLink datalogger
+- [x] HTTP polling service (`airlink/airlink_datalogger.py`) — polls `/v1/current_conditions` every 60 s
+- [x] Publishes PM1/PM2.5/PM10, AQI, temperature, humidity to `weatherdatalogger/airlink-<did>/observation`
+- [x] AQI computed from NowCast using US EPA breakpoints
+- [x] Temperature/dew point converted from °F → °C
+- [x] HA MQTT discovery (18 sensors auto-discovered)
+- [x] INI config with documented defaults (`airlink/config.example.ini`)
+- [x] systemd service unit (`airlink/systemd/airlink-datalogger.service`)
+- [x] DB migration (`database/migrations/20260629_add_airquality.sql`) — PM + AQI columns in `realtime` + `history`
+- [x] DB writer updated — PM/AQI fields added to `_OBS_FIELDS`
+
 ### Tempest datalogger
 - [x] UDP listener with all 6 message type parsers
 - [x] MQTT publish with configurable base topic, QoS, retain, TLS
@@ -228,6 +248,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## What's next / TODO
 
+- [ ] **AirLink README** — write `airlink/README.md` with config instructions and field reference
 - [ ] **Davis Vantage Vue** — ESPHome firmware written (`davis/davis-vantage-receiver.yaml`), hardware available; needs field testing and DB schema additions (e.g. `battery_low` column)
 - [ ] Dashboard / charting — Grafana or similar consuming MariaDB `history` table
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)

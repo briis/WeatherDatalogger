@@ -40,6 +40,12 @@ WRITER_VENV="$WRITER_DIR/venv"
 WRITER_SERVICE="weatherdb-writer"
 WRITER_SYSTEMD_TARGET="/etc/systemd/system/weatherdb-writer.service"
 
+# AirLink datalogger
+AIRLINK_DIR="/opt/airlink-datalogger"
+AIRLINK_VENV="$AIRLINK_DIR/venv"
+AIRLINK_SERVICE="airlink-datalogger"
+AIRLINK_SYSTEMD_TARGET="/etc/systemd/system/airlink-datalogger.service"
+
 DB_CNF="/etc/weatherdatalogger/db.cnf"
 
 # ---------------------------------------------------------------------------
@@ -82,6 +88,25 @@ if ! diff -q "$STAGING/database/systemd/weatherdb-writer.service" \
     install -m 644 \
         "$STAGING/database/systemd/weatherdb-writer.service" \
         "$WRITER_SYSTEMD_TARGET"
+    systemctl daemon-reload
+    echo "    Unit file updated and daemon reloaded."
+fi
+
+# ---------------------------------------------------------------------------
+# Install AirLink datalogger
+# ---------------------------------------------------------------------------
+echo "==> Installing AirLink datalogger to $AIRLINK_DIR…"
+install -D -m 755 "$STAGING/airlink/airlink_datalogger.py"    "$AIRLINK_DIR/airlink_datalogger.py"
+install -m 644 "$STAGING/airlink/requirements.txt"             "$AIRLINK_DIR/requirements.txt"
+install -m 644 "$STAGING/airlink/config.example.ini"           "$AIRLINK_DIR/config.example.ini"
+
+# Systemd unit for AirLink datalogger
+echo "==> Syncing airlink-datalogger systemd unit…"
+if ! diff -q "$STAGING/airlink/systemd/airlink-datalogger.service" \
+             "$AIRLINK_SYSTEMD_TARGET" >/dev/null 2>&1; then
+    install -m 644 \
+        "$STAGING/airlink/systemd/airlink-datalogger.service" \
+        "$AIRLINK_SYSTEMD_TARGET"
     systemctl daemon-reload
     echo "    Unit file updated and daemon reloaded."
 fi
@@ -184,12 +209,21 @@ echo "==> Updating weatherdb-writer Python dependencies…"
 "$WRITER_VENV/bin/pip" install --quiet --upgrade pip
 "$WRITER_VENV/bin/pip" install --quiet -r "$WRITER_DIR/requirements.txt"
 
+if [[ ! -d "$AIRLINK_VENV" ]]; then
+    echo "==> Creating virtual environment for airlink-datalogger…"
+    python3 -m venv "$AIRLINK_VENV"
+fi
+echo "==> Updating airlink-datalogger Python dependencies…"
+"$AIRLINK_VENV/bin/pip" install --quiet --upgrade pip
+"$AIRLINK_VENV/bin/pip" install --quiet -r "$AIRLINK_DIR/requirements.txt"
+
 # ---------------------------------------------------------------------------
 # Ownership — all install dirs belong to the service user
 # ---------------------------------------------------------------------------
 echo "==> Setting ownership (tempest:tempest)…"
 chown -R tempest:tempest "$INSTALL_DIR"
 chown -R tempest:tempest "$WRITER_DIR"
+chown -R tempest:tempest "$AIRLINK_DIR"
 
 # ---------------------------------------------------------------------------
 # Restart services
@@ -205,6 +239,15 @@ if systemctl is-enabled --quiet "$WRITER_SERVICE" 2>/dev/null; then
 else
     echo "==> $WRITER_SERVICE not yet enabled — skipping restart."
     echo "    To enable: systemctl enable --now $WRITER_SERVICE"
+fi
+
+if systemctl is-enabled --quiet "$AIRLINK_SERVICE" 2>/dev/null; then
+    echo "==> Restarting $AIRLINK_SERVICE…"
+    systemctl restart "$AIRLINK_SERVICE"
+    systemctl --no-pager status "$AIRLINK_SERVICE"
+else
+    echo "==> $AIRLINK_SERVICE not yet enabled — skipping restart."
+    echo "    To enable: systemctl enable --now $AIRLINK_SERVICE"
 fi
 
 echo "==> Deploy complete."

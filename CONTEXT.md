@@ -23,6 +23,8 @@ weatherdatalogger/
     forecast_daily         — 10-day daily forecast JSON array
   davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, planned)
     <sensor topics>
+  airlink-<did>/           ← Davis AirLink air quality sensor (Python service)
+    observation            — PM1/PM2.5/PM10, AQI, temperature, humidity
 ```
 
 `<serial>` for Tempest comes from the hub's UDP broadcast (`ST-…` for the sensor, `HB-…` for the hub).
@@ -48,6 +50,15 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - ESPHome also exposes sensors to Home Assistant via the native API
 - **Status: active — hardware available, ESPHome firmware written**
 
+### Davis AirLink
+- Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter
+- Provides 2-min averages plus 1h/3h/24h averages and EPA NowCast values
+- Local HTTP REST API at `http://<host>/v1/current_conditions` (no authentication required)
+- `airlink_datalogger.py` polls the API every 60 s (configurable) and publishes to MQTT
+- Temperature and humidity readings are included (device internal sensors, used for PM correction)
+- AQI (US EPA) is computed from NowCast concentration before publishing
+- **Status: active**
+
 ---
 
 ## Repository Structure
@@ -64,6 +75,13 @@ WeatherDatalogger/                   ← repo root
 │   ├── systemd/
 │   │   └── tempest-datalogger.service  ← systemd unit for Debian LXC
 │   └── README.md                   ← Tempest configuration docs
+├── airlink/                         ← Davis AirLink air quality service
+│   ├── airlink_datalogger.py        ← Main Python service (HTTP polling → MQTT, single file)
+│   ├── config.example.ini           ← Documented template for all config keys
+│   ├── requirements.txt             ← Runtime dependency: paho-mqtt
+│   ├── systemd/
+│   │   └── airlink-datalogger.service  ← systemd unit for Debian LXC
+│   └── README.md                   ← AirLink configuration docs
 ├── database/                        ← MariaDB persistence layer
 │   ├── db_writer.py                 ← MQTT → MariaDB writer service (single file)
 │   ├── requirements.txt             ← Runtime deps: paho-mqtt, PyMySQL

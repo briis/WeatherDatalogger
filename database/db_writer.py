@@ -91,6 +91,20 @@ _OBS_FIELDS: tuple[str, ...] = (
     "vapor_pressure_mb",
     "air_density_kgm3",
     "battery_volts",
+    # Air quality — Davis AirLink (NULL for other station types)
+    "pm_1_ugm3",
+    "pm_2p5_ugm3",
+    "pm_2p5_1h_ugm3",
+    "pm_2p5_3h_ugm3",
+    "pm_2p5_24h_ugm3",
+    "pm_2p5_nowcast_ugm3",
+    "pm_10_ugm3",
+    "pm_10_1h_ugm3",
+    "pm_10_3h_ugm3",
+    "pm_10_24h_ugm3",
+    "pm_10_nowcast_ugm3",
+    "aqi_pm2p5",
+    "aqi_pm10",
 )
 
 _ALL_COLS: tuple[str, ...] = (*_OBS_FIELDS, "lightning_last_detected")
@@ -118,6 +132,7 @@ _SQL_ENSURE_STATION = (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_lightning_ts(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -131,7 +146,9 @@ def _parse_lightning_ts(value: str | None) -> datetime | None:
 def _payload_to_row(payload: dict) -> tuple[str, datetime, tuple]:
     """Return (station_id, recorded_at, column_values) from an observation payload."""
     station_id: str = payload["serial_number"]
-    recorded_at = datetime.fromtimestamp(payload["timestamp"], tz=UTC).replace(tzinfo=None)
+    recorded_at = datetime.fromtimestamp(payload["timestamp"], tz=UTC).replace(
+        tzinfo=None
+    )
     field_values = tuple(payload.get(f) for f in _OBS_FIELDS)
     lightning_ts = _parse_lightning_ts(payload.get("lightning_last_detected"))
     return station_id, recorded_at, (*field_values, lightning_ts)
@@ -140,6 +157,7 @@ def _payload_to_row(payload: dict) -> tuple[str, datetime, tuple]:
 # ---------------------------------------------------------------------------
 # Database writer
 # ---------------------------------------------------------------------------
+
 
 class DbWriter:
     """Manages the MariaDB connection and writes observation data."""
@@ -206,6 +224,7 @@ class DbWriter:
 # ---------------------------------------------------------------------------
 # MQTT
 # ---------------------------------------------------------------------------
+
 
 def _on_connect(
     client: mqtt.Client,
@@ -281,6 +300,7 @@ def _make_mqtt_client(
 # Config / logging
 # ---------------------------------------------------------------------------
 
+
 def load_config(path: Path) -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     cfg.read_dict(DEFAULT_CONFIG)
@@ -309,6 +329,7 @@ def setup_logging(cfg: configparser.ConfigParser) -> logging.Logger:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
     writer = DbWriter(cfg, log)
