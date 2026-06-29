@@ -102,7 +102,24 @@ sudo bash /opt/tempest-datalogger/scripts/deploy.sh
 
 This fetches only the production files from GitHub, installs the SQL scripts under `/opt/tempest-datalogger/database/`, creates the Python virtual environment, installs dependencies, and installs the systemd unit file. Database migrations are skipped on this first run because the credentials file does not exist yet.
 
-### 5. Create the database
+### 5. Configure MariaDB for network access
+
+By default MariaDB on Debian binds to `127.0.0.1` only. Change it to listen on all interfaces so other hosts on the network can connect:
+
+```bash
+sed -i 's/^bind-address\s*=.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
+systemctl restart mariadb
+```
+
+Verify it is listening on all interfaces:
+
+```bash
+ss -tlnp | grep 3306
+```
+
+You should see `0.0.0.0:3306` in the output.
+
+### 6. Create the database
 
 Edit the password in the SQL script, then create the database and application user:
 
@@ -111,7 +128,7 @@ nano /opt/tempest-datalogger/database/01_create_database.sql
 mariadb -u root < /opt/tempest-datalogger/database/01_create_database.sql
 ```
 
-### 6. Store database credentials
+### 7. Store database credentials
 
 ```bash
 mkdir -p /etc/weatherdatalogger
@@ -125,14 +142,14 @@ EOF
 chmod 600 /etc/weatherdatalogger/db.cnf
 ```
 
-### 7. Create the tables
+### 8. Create the tables
 
 ```bash
 mariadb --defaults-extra-file=/etc/weatherdatalogger/db.cnf \
     < /opt/tempest-datalogger/database/02_create_tables.sql
 ```
 
-### 8. Configure
+### 9. Configure
 
 ```bash
 cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
@@ -155,13 +172,13 @@ elevation_m = 42        # your station elevation above sea level in metres
 
 See [Configuration](#configuration) for all available options.
 
-### 9. Enable and start the service
+### 10. Enable and start the service
 
 ```bash
 systemctl enable --now tempest-datalogger
 ```
 
-### 10. Verify
+### 11. Verify
 
 ```bash
 systemctl status tempest-datalogger
