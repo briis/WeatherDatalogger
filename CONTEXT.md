@@ -52,7 +52,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 ## Repository Structure
 
 ```
-mqtt-weatherdatalogger/              ← repo root
+WeatherDatalogger/                   ← repo root
 ├── tempest/                         ← WeatherFlow Tempest service
 │   ├── tempest_datalogger.py        ← Main Python service (UDP → MQTT, single file)
 │   ├── config.example.ini           ← Documented template for all config keys

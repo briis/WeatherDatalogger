@@ -1,6 +1,6 @@
 // See https://aka.ms/vscode-remote/devcontainer.json for format details.
 {
-	"name": "mqtt-weatherdatalogger",
+	"name": "WeatherDatalogger",
 	"image": "mcr.microsoft.com/devcontainers/base:debian",
 	"containerEnv": {
 		"TZ": "Europe/Copenhagen"

@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-REPO_URL="git@github.com:briis/mqtt-weatherdatalogger.git"
+REPO_URL="git@github.com:briis/WeatherDatalogger.git"
 INSTALL_DIR="/opt/tempest-datalogger"
 VENV="$INSTALL_DIR/venv"
 SERVICE="tempest-datalogger"
@@ -67,7 +67,7 @@ rm -f \
     "$INSTALL_DIR/.gitignore" \
     "$INSTALL_DIR/.DS_Store" \
     "$INSTALL_DIR/LICENSE" \
-    "$INSTALL_DIR/mqtt-weatherdatalogger.code-workspace" \
+    "$INSTALL_DIR/WeatherDatalogger.code-workspace" \
     "$INSTALL_DIR/scripts/lint" \
     "$INSTALL_DIR/scripts/simulate_udp.py"
 rm -rf \
