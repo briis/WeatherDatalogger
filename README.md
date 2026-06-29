@@ -68,7 +68,7 @@ The deploy script is the only file needed to bootstrap. Clone the repo temporari
 ```bash
 git clone --depth 1 git@github.com:briis/WeatherDatalogger.git /tmp/wdl-bootstrap
 mkdir -p /opt/weatherdatalogger/scripts
-cp /tmp/wdl-bootstrap/scripts/deploy.sh /opt/weatherdatalogger/scripts/deploy.sh
+cp /tmp/wdl-bootstrap/weatherdatalogger/scripts/deploy.sh /opt/weatherdatalogger/scripts/deploy.sh
 chmod +x /opt/weatherdatalogger/scripts/deploy.sh
 rm -rf /tmp/wdl-bootstrap
 ```

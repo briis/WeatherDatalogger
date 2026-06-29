@@ -65,37 +65,39 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 
 ```
 WeatherDatalogger/                   ← repo root
-├── tempest/                         ← WeatherFlow Tempest service
-│   ├── tempest_datalogger.py        ← Main Python service (UDP → MQTT, single file)
-│   ├── config.dev.ini               ← Dev container config (local mosquitto)
-│   ├── requirements.txt             ← Runtime dependency: paho-mqtt
+├── weatherdatalogger/               ← mirrors /opt/weatherdatalogger/ on the LXC
+│   ├── tempest/                     ← WeatherFlow Tempest service
+│   │   ├── tempest_datalogger.py   ← Main Python service (UDP → MQTT, single file)
+│   │   ├── config.dev.ini          ← Dev container config (local mosquitto)
+│   │   ├── requirements.txt        ← Runtime dependency: paho-mqtt
+│   │   ├── scripts/
+│   │   │   └── simulate_udp.py    ← Sends all 6 Tempest message types to localhost
+│   │   ├── systemd/
+│   │   │   └── tempest-datalogger.service
+│   │   └── README.md
+│   ├── airlink/                     ← Davis AirLink air quality service
+│   │   ├── airlink_datalogger.py   ← Main Python service (HTTP polling → MQTT, single file)
+│   │   ├── requirements.txt        ← Runtime dependency: paho-mqtt
+│   │   ├── systemd/
+│   │   │   └── airlink-datalogger.service
+│   │   └── README.md
+│   ├── database/                    ← MariaDB persistence layer
+│   │   ├── db_writer.py            ← MQTT → MariaDB writer service (single file)
+│   │   ├── requirements.txt        ← Runtime deps: paho-mqtt, PyMySQL
+│   │   ├── 01_create_database.sql  ← One-time: create DB + user
+│   │   ├── 02_create_tables.sql    ← One-time: create all tables
+│   │   ├── migrations/             ← Numbered ALTER TABLE scripts (applied by deploy)
+│   │   ├── systemd/
+│   │   │   └── weatherdb-writer.service
+│   │   └── README.md
 │   ├── scripts/
-│   │   └── simulate_udp.py         ← Sends all 6 Tempest message types to localhost
-│   ├── systemd/
-│   │   └── tempest-datalogger.service  ← systemd unit for Debian LXC
-│   └── README.md                   ← Tempest configuration docs
-├── airlink/                         ← Davis AirLink air quality service
-│   ├── airlink_datalogger.py        ← Main Python service (HTTP polling → MQTT, single file)
-│   ├── requirements.txt             ← Runtime dependency: paho-mqtt
-│   ├── systemd/
-│   │   └── airlink-datalogger.service  ← systemd unit for Debian LXC
-│   └── README.md                   ← AirLink field reference and setup docs
-├── database/                        ← MariaDB persistence layer
-│   ├── db_writer.py                 ← MQTT → MariaDB writer service (single file)
-│   ├── requirements.txt             ← Runtime deps: paho-mqtt, PyMySQL
-│   ├── 01_create_database.sql       ← One-time: create DB + user
-│   ├── 02_create_tables.sql         ← One-time: create all tables
-│   ├── migrations/                  ← Numbered ALTER TABLE scripts (applied by deploy)
-│   ├── systemd/
-│   │   └── weatherdb-writer.service ← systemd unit for Debian LXC
-│   └── README.md                    ← DB writer config + schema docs
-├── davis/                           ← Davis Vantage Vue (ESPHome receiver)
-│   ├── davis-vantage-receiver.yaml  ← ESPHome firmware (CC1101 RF → MQTT)
-│   └── README.md                   ← Hardware wiring, RF config, MQTT topics
+│   │   └── deploy.sh               ← Pull from GitHub, install all services, run migrations
+│   └── config.example.ini          ← Shared config template for all three services
+├── davis/                           ← Davis Vantage Vue (ESPHome receiver — not deployed to LXC)
+│   ├── davis-vantage-receiver.yaml ← ESPHome firmware (CC1101 RF → MQTT)
+│   └── README.md
 ├── scripts/
-│   ├── deploy.sh                    ← Pull from GitHub, install all services, run migrations
-│   └── lint                         ← ruff format + ruff check --fix (all services)
-├── config.example.ini               ← Shared config template for all three services
+│   └── lint                        ← ruff format + ruff check --fix (dev only)
 ├── requirements-dev.txt             ← Shared dev/lint tools: ruff
 ├── .ruff.toml                       ← Ruff linter config (target-version = "py311")
 ├── README.md                        ← Server installation guide + project overview

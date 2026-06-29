@@ -50,6 +50,7 @@ trap 'rm -rf "$STAGING"' EXIT
 
 echo "==> Fetching latest code from GitHub…"
 git clone --quiet --depth 1 --branch main "$REPO_URL" "$STAGING"
+STAGING_WDL="$STAGING/weatherdatalogger"
 
 # ---------------------------------------------------------------------------
 # Create directory structure
@@ -65,25 +66,25 @@ mkdir -p \
 # Install service files
 # ---------------------------------------------------------------------------
 echo "==> Installing tempest-datalogger…"
-install -m 755 "$STAGING/tempest/tempest_datalogger.py" "$TEMPEST_DIR/tempest_datalogger.py"
-install -m 644 "$STAGING/tempest/requirements.txt"       "$TEMPEST_DIR/requirements.txt"
+install -m 755 "$STAGING_WDL/tempest/tempest_datalogger.py" "$TEMPEST_DIR/tempest_datalogger.py"
+install -m 644 "$STAGING_WDL/tempest/requirements.txt"       "$TEMPEST_DIR/requirements.txt"
 
 echo "==> Installing airlink-datalogger…"
-install -m 755 "$STAGING/airlink/airlink_datalogger.py" "$AIRLINK_DIR/airlink_datalogger.py"
-install -m 644 "$STAGING/airlink/requirements.txt"       "$AIRLINK_DIR/requirements.txt"
+install -m 755 "$STAGING_WDL/airlink/airlink_datalogger.py" "$AIRLINK_DIR/airlink_datalogger.py"
+install -m 644 "$STAGING_WDL/airlink/requirements.txt"       "$AIRLINK_DIR/requirements.txt"
 
 echo "==> Installing weatherdb-writer…"
-install -m 755 "$STAGING/database/db_writer.py"          "$WRITER_DIR/db_writer.py"
-install -m 644 "$STAGING/database/requirements.txt"      "$WRITER_DIR/requirements.txt"
+install -m 755 "$STAGING_WDL/database/db_writer.py"          "$WRITER_DIR/db_writer.py"
+install -m 644 "$STAGING_WDL/database/requirements.txt"      "$WRITER_DIR/requirements.txt"
 
 # Database SQL scripts — kept on disk for manual re-runs and reference
-install -m 644 "$STAGING/database/01_create_database.sql" "$WRITER_DIR/01_create_database.sql"
-install -m 644 "$STAGING/database/02_create_tables.sql"   "$WRITER_DIR/02_create_tables.sql"
-cp -a "$STAGING/database/migrations/." "$WRITER_DIR/migrations/"
+install -m 644 "$STAGING_WDL/database/01_create_database.sql" "$WRITER_DIR/01_create_database.sql"
+install -m 644 "$STAGING_WDL/database/02_create_tables.sql"   "$WRITER_DIR/02_create_tables.sql"
+cp -a "$STAGING_WDL/database/migrations/." "$WRITER_DIR/migrations/"
 
 # Shared config example and deploy script
-install -m 644 "$STAGING/config.example.ini"       "$INSTALL_ROOT/config.example.ini"
-install -m 755 "$STAGING/scripts/deploy.sh"        "$INSTALL_ROOT/scripts/deploy.sh"
+install -m 644 "$STAGING_WDL/config.example.ini"       "$INSTALL_ROOT/config.example.ini"
+install -m 755 "$STAGING_WDL/scripts/deploy.sh"        "$INSTALL_ROOT/scripts/deploy.sh"
 
 # ---------------------------------------------------------------------------
 # Systemd units — reload only when a file actually changed
@@ -99,9 +100,9 @@ _sync_unit() {
     fi
 }
 
-_sync_unit "$STAGING/tempest/systemd/tempest-datalogger.service"  "$TEMPEST_UNIT"
-_sync_unit "$STAGING/airlink/systemd/airlink-datalogger.service"  "$AIRLINK_UNIT"
-_sync_unit "$STAGING/database/systemd/weatherdb-writer.service"   "$WRITER_UNIT"
+_sync_unit "$STAGING_WDL/tempest/systemd/tempest-datalogger.service"  "$TEMPEST_UNIT"
+_sync_unit "$STAGING_WDL/airlink/systemd/airlink-datalogger.service"  "$AIRLINK_UNIT"
+_sync_unit "$STAGING_WDL/database/systemd/weatherdb-writer.service"   "$WRITER_UNIT"
 
 # ---------------------------------------------------------------------------
 # Shared config — print instructions on first deploy, never overwrite
