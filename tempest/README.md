@@ -72,24 +72,41 @@ weatherdatalogger/forecast-<location>/<subtopic>
 apt update && apt install -y python3.11 python3.11-venv git mariadb-server
 ```
 
-### 2. Create the database
-
 On Debian, MariaDB is already secured by default — root access requires no password and is restricted to the system `root` user via Unix socket authentication.
 
-Create the database and the application user. **Edit the password** in `01_create_database.sql` before running:
+### 2. Create a dedicated service user
 
 ```bash
-# Download the script directly from the repo or copy it from your local clone
-mysql -u root < /path/to/database/01_create_database.sql
+useradd -r -s /usr/sbin/nologin tempest
 ```
 
-Create the tables:
+### 3. Create the install directory and download the deploy script
 
 ```bash
-mysql --defaults-extra-file=/etc/weatherdatalogger/db.cnf < /path/to/database/02_create_tables.sql
+mkdir -p /opt/tempest-datalogger/scripts
+curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/main/scripts/deploy.sh \
+    -o /opt/tempest-datalogger/scripts/deploy.sh
+chmod +x /opt/tempest-datalogger/scripts/deploy.sh
 ```
 
-Store the database credentials so the deploy script can apply future migrations automatically:
+### 4. Run the deploy script (first time)
+
+```bash
+sudo bash /opt/tempest-datalogger/scripts/deploy.sh
+```
+
+This fetches only the production files from GitHub, installs the SQL scripts under `/opt/tempest-datalogger/database/`, creates the Python virtual environment, installs dependencies, and installs the systemd unit file. Database migrations are skipped on this first run because the credentials file does not exist yet.
+
+### 5. Create the database
+
+Edit the password in the SQL script, then create the database and application user:
+
+```bash
+nano /opt/tempest-datalogger/database/01_create_database.sql
+mariadb -u root < /opt/tempest-datalogger/database/01_create_database.sql
+```
+
+### 6. Store database credentials
 
 ```bash
 mkdir -p /etc/weatherdatalogger
@@ -103,30 +120,14 @@ EOF
 chmod 600 /etc/weatherdatalogger/db.cnf
 ```
 
-### 3. Create a dedicated service user
+### 7. Create the tables
 
 ```bash
-useradd -r -s /usr/sbin/nologin tempest
+mariadb --defaults-extra-file=/etc/weatherdatalogger/db.cnf \
+    < /opt/tempest-datalogger/database/02_create_tables.sql
 ```
 
-### 4. Create the install directory and download the deploy script
-
-```bash
-mkdir -p /opt/tempest-datalogger/scripts
-curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/main/scripts/deploy.sh \
-    -o /opt/tempest-datalogger/scripts/deploy.sh
-chmod +x /opt/tempest-datalogger/scripts/deploy.sh
-```
-
-### 5. Run the deploy script
-
-```bash
-sudo bash /opt/tempest-datalogger/scripts/deploy.sh
-```
-
-This fetches only the production files from GitHub, applies any pending database migrations, creates the Python virtual environment, installs dependencies, and installs the systemd unit file.
-
-### 6. Configure
+### 8. Configure
 
 ```bash
 cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
@@ -149,13 +150,13 @@ elevation_m = 42        # your station elevation above sea level in metres
 
 See [Configuration](#configuration) for all available options.
 
-### 7. Enable and start the service
+### 9. Enable and start the service
 
 ```bash
 systemctl enable --now tempest-datalogger
 ```
 
-### 8. Verify
+### 10. Verify
 
 ```bash
 systemctl status tempest-datalogger

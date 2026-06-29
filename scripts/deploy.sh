@@ -52,6 +52,12 @@ install -m 644 "$STAGING/tempest/config.example.ini"     "$INSTALL_DIR/config.ex
 install -m 644 "$STAGING/tempest/README.md"              "$INSTALL_DIR/README.md"
 install -D -m 755 "$STAGING/scripts/deploy.sh"           "$INSTALL_DIR/scripts/deploy.sh"
 
+# Database SQL scripts — kept on disk for manual re-runs and reference
+mkdir -p "$INSTALL_DIR/database/migrations"
+install -m 644 "$STAGING/database/01_create_database.sql" "$INSTALL_DIR/database/01_create_database.sql"
+install -m 644 "$STAGING/database/02_create_tables.sql"   "$INSTALL_DIR/database/02_create_tables.sql"
+cp -a "$STAGING/database/migrations/." "$INSTALL_DIR/database/migrations/"
+
 # ---------------------------------------------------------------------------
 # Systemd unit — reload only when the file actually changed
 # ---------------------------------------------------------------------------
@@ -106,7 +112,7 @@ if [[ -f "$DB_CNF" ]]; then
 
     if [[ "$TABLE_EXISTS" -eq 1 ]]; then
         shopt -s nullglob
-        for sql_file in "$STAGING/database/migrations/"*.sql; do
+        for sql_file in "$INSTALL_DIR/database/migrations/"*.sql; do
             filename=$(basename "$sql_file")
             already_applied=$($MYSQL -e "
                 SELECT COUNT(*) FROM schema_migrations WHERE filename = '$filename';
@@ -125,7 +131,7 @@ if [[ -f "$DB_CNF" ]]; then
         shopt -u nullglob
     else
         echo "    schema_migrations table not found — skipping migrations."
-        echo "    Run database/02_create_tables.sql to initialise the schema."
+        echo "    Run $INSTALL_DIR/database/02_create_tables.sql to initialise the schema."
     fi
 else
     echo "==> No database credentials found at $DB_CNF — skipping migrations."
