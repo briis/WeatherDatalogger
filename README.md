@@ -67,9 +67,9 @@ The deploy script is the only file needed to bootstrap. Clone the repo temporari
 
 ```bash
 git clone --depth 1 git@github.com:briis/WeatherDatalogger.git /tmp/wdl-bootstrap
-mkdir -p /opt/tempest-datalogger/scripts
-cp /tmp/wdl-bootstrap/scripts/deploy.sh /opt/tempest-datalogger/scripts/deploy.sh
-chmod +x /opt/tempest-datalogger/scripts/deploy.sh
+mkdir -p /opt/weatherdatalogger/scripts
+cp /tmp/wdl-bootstrap/scripts/deploy.sh /opt/weatherdatalogger/scripts/deploy.sh
+chmod +x /opt/weatherdatalogger/scripts/deploy.sh
 rm -rf /tmp/wdl-bootstrap
 ```
 
@@ -78,10 +78,10 @@ rm -rf /tmp/wdl-bootstrap
 ### 4. Run the deploy script (first time)
 
 ```bash
-sudo bash /opt/tempest-datalogger/scripts/deploy.sh
+sudo bash /opt/weatherdatalogger/scripts/deploy.sh
 ```
 
-This clones the repo, installs all production files (including SQL scripts and the DB writer), creates Python virtual environments, installs dependencies, and registers the systemd unit files. Database migrations are skipped on this first run because the credentials file does not exist yet.
+This clones the repo, installs all service files under `/opt/weatherdatalogger/`, creates Python virtual environments, installs dependencies, and registers the systemd unit files. It also prints first-time setup instructions since no `config.ini` exists yet.
 
 ### 5. Configure MariaDB for network access
 
@@ -104,59 +104,60 @@ ss -tlnp | grep 3306
 Edit the password in the SQL script before running:
 
 ```bash
-nano /opt/tempest-datalogger/database/01_create_database.sql
-mariadb -u root < /opt/tempest-datalogger/database/01_create_database.sql
+nano /opt/weatherdatalogger/database/01_create_database.sql
+mariadb -u root < /opt/weatherdatalogger/database/01_create_database.sql
 ```
 
-### 7. Store database credentials
+### 7. Create the tables
 
 ```bash
-mkdir -p /etc/weatherdatalogger
-cat > /etc/weatherdatalogger/db.cnf <<'EOF'
-[client]
-host     = localhost
-database = weatherdatalogger
-user     = weatherlogger
-password = your_password_here
-EOF
-chmod 600 /etc/weatherdatalogger/db.cnf
+mariadb -u root weatherdatalogger \
+    < /opt/weatherdatalogger/database/02_create_tables.sql
 ```
 
-### 8. Create the tables
+### 8. Create the shared config file
+
+All three services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
 
 ```bash
-mariadb --defaults-extra-file=/etc/weatherdatalogger/db.cnf \
-    < /opt/tempest-datalogger/database/02_create_tables.sql
+cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
+nano /opt/weatherdatalogger/config.ini
 ```
 
-### 9. Configure and enable the WeatherDB writer
+**Required fields** — the services will not start correctly until these are set:
 
-See [database/README.md](database/README.md) for full configuration details.
+| Field | Section | Description |
+|---|---|---|
+| `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
+| `password` | `[database]` | Database password (set in step 6) |
+| `host` | `[airlink]` | IP address or hostname of your Davis AirLink (if installed) |
+
+Everything else has sensible defaults.
+
+### 9. Enable and start the services
 
 ```bash
-cp /opt/weatherdb-writer/config.example.ini /opt/weatherdb-writer/config.ini
-nano /opt/weatherdb-writer/config.ini
+# DB writer (must be running before station loggers send data)
 systemctl enable --now weatherdb-writer
 journalctl -u weatherdb-writer -f
-```
 
-### 10. Configure and enable the Tempest datalogger
-
-See [tempest/README.md](tempest/README.md) for full configuration details.
-
-```bash
-cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
-nano /opt/tempest-datalogger/config.ini
+# Tempest datalogger
 systemctl enable --now tempest-datalogger
 journalctl -u tempest-datalogger -f
+
+# AirLink datalogger (skip if you don't have an AirLink)
+systemctl enable --now airlink-datalogger
+journalctl -u airlink-datalogger -f
 ```
+
+On the first observation you should see a `Registered station` line in the DB writer log, then `Wrote … @ …` every 10–15 s.
 
 ---
 
 ## Updating
 
 ```bash
-sudo bash /opt/tempest-datalogger/scripts/deploy.sh
+sudo bash /opt/weatherdatalogger/scripts/deploy.sh
 ```
 
 The deploy script:
@@ -165,9 +166,9 @@ The deploy script:
 - Applies any pending SQL migrations to the database
 - Updates Python dependencies in each virtual environment
 - Syncs systemd unit files and reloads the daemon if changed
-- Restarts the Tempest datalogger; restarts the DB writer if it is enabled
+- Restarts each service (only if it was already enabled)
 
-`config.ini` files are never touched — your local configuration is always preserved.
+`/opt/weatherdatalogger/config.ini` is never touched — your local configuration is always preserved.
 
 ---
 

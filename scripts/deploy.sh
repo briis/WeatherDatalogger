@@ -1,52 +1,46 @@
 #!/usr/bin/env bash
 # deploy.sh — Fetch the latest production files from GitHub, apply pending
-#             database migrations, and restart the Tempest datalogger service.
+#             database migrations, and restart all enabled services.
 #
 # Run as root on the production LXC:
-#   sudo bash /opt/tempest-datalogger/scripts/deploy.sh
+#   sudo bash /opt/weatherdatalogger/scripts/deploy.sh
 #
 # What this script does:
 #   1. Clones the repo to a temporary staging directory
-#   2. Copies only the files needed to run in production
-#   3. Syncs the systemd unit file if it changed
-#   4. Applies any pending SQL migration scripts to the database
-#   5. Updates Python dependencies
-#   6. Restores ownership to the 'tempest' service user
-#   7. Restarts the service
+#   2. Installs all service files under /opt/weatherdatalogger/
+#   3. Syncs systemd unit files and reloads the daemon if any changed
+#   4. Generates /opt/weatherdatalogger/db.cnf from config.ini (DB credentials)
+#   5. Applies any pending SQL migration scripts to the database
+#   6. Updates Python dependencies in each virtual environment
+#   7. Restores ownership to the 'tempest' service user
+#   8. Restarts each service (only if it was already enabled)
 #
-# Files never touched: config.ini, /etc/weatherdatalogger/db.cnf
-#   (your local configuration is always preserved)
-#
-# Database credentials are read from /etc/weatherdatalogger/db.cnf:
-#   [client]
-#   host     = localhost
-#   database = weatherdatalogger
-#   user     = weatherlogger
-#   password = your_password_here
+# Files never touched:
+#   /opt/weatherdatalogger/config.ini  — your local configuration is preserved
 
 set -euo pipefail
 
 REPO_URL="git@github.com:briis/WeatherDatalogger.git"
 
-# Tempest datalogger
-INSTALL_DIR="/opt/tempest-datalogger"
-VENV="$INSTALL_DIR/venv"
-SERVICE="tempest-datalogger"
-SYSTEMD_TARGET="/etc/systemd/system/tempest-datalogger.service"
+INSTALL_ROOT="/opt/weatherdatalogger"
+SHARED_CONFIG="$INSTALL_ROOT/config.ini"
+DB_CNF="$INSTALL_ROOT/db.cnf"
 
-# WeatherDB writer
-WRITER_DIR="/opt/weatherdb-writer"
-WRITER_VENV="$WRITER_DIR/venv"
-WRITER_SERVICE="weatherdb-writer"
-WRITER_SYSTEMD_TARGET="/etc/systemd/system/weatherdb-writer.service"
+TEMPEST_DIR="$INSTALL_ROOT/tempest"
+AIRLINK_DIR="$INSTALL_ROOT/airlink"
+WRITER_DIR="$INSTALL_ROOT/database"
 
-# AirLink datalogger
-AIRLINK_DIR="/opt/airlink-datalogger"
+TEMPEST_VENV="$TEMPEST_DIR/venv"
 AIRLINK_VENV="$AIRLINK_DIR/venv"
-AIRLINK_SERVICE="airlink-datalogger"
-AIRLINK_SYSTEMD_TARGET="/etc/systemd/system/airlink-datalogger.service"
+WRITER_VENV="$WRITER_DIR/venv"
 
-DB_CNF="/etc/weatherdatalogger/db.cnf"
+TEMPEST_SERVICE="tempest-datalogger"
+AIRLINK_SERVICE="airlink-datalogger"
+WRITER_SERVICE="weatherdb-writer"
+
+TEMPEST_UNIT="/etc/systemd/system/tempest-datalogger.service"
+AIRLINK_UNIT="/etc/systemd/system/airlink-datalogger.service"
+WRITER_UNIT="/etc/systemd/system/weatherdb-writer.service"
 
 # ---------------------------------------------------------------------------
 # Staging — always cleaned up on exit, even if the script fails
@@ -58,105 +52,104 @@ echo "==> Fetching latest code from GitHub…"
 git clone --quiet --depth 1 --branch main "$REPO_URL" "$STAGING"
 
 # ---------------------------------------------------------------------------
-# Install only the files required for production
+# Create directory structure
 # ---------------------------------------------------------------------------
-echo "==> Installing production files to $INSTALL_DIR…"
-install -m 644 "$STAGING/tempest/tempest_datalogger.py" "$INSTALL_DIR/tempest_datalogger.py"
-install -m 644 "$STAGING/tempest/requirements.txt"       "$INSTALL_DIR/requirements.txt"
-install -m 644 "$STAGING/tempest/config.example.ini"     "$INSTALL_DIR/config.example.ini"
-install -m 644 "$STAGING/tempest/README.md"              "$INSTALL_DIR/README.md"
-install -D -m 755 "$STAGING/scripts/deploy.sh"           "$INSTALL_DIR/scripts/deploy.sh"
+echo "==> Creating directory structure under $INSTALL_ROOT…"
+mkdir -p \
+    "$TEMPEST_DIR" \
+    "$AIRLINK_DIR" \
+    "$WRITER_DIR/migrations" \
+    "$INSTALL_ROOT/scripts"
+
+# ---------------------------------------------------------------------------
+# Install service files
+# ---------------------------------------------------------------------------
+echo "==> Installing tempest-datalogger…"
+install -m 755 "$STAGING/tempest/tempest_datalogger.py" "$TEMPEST_DIR/tempest_datalogger.py"
+install -m 644 "$STAGING/tempest/requirements.txt"       "$TEMPEST_DIR/requirements.txt"
+
+echo "==> Installing airlink-datalogger…"
+install -m 755 "$STAGING/airlink/airlink_datalogger.py" "$AIRLINK_DIR/airlink_datalogger.py"
+install -m 644 "$STAGING/airlink/requirements.txt"       "$AIRLINK_DIR/requirements.txt"
+
+echo "==> Installing weatherdb-writer…"
+install -m 755 "$STAGING/database/db_writer.py"          "$WRITER_DIR/db_writer.py"
+install -m 644 "$STAGING/database/requirements.txt"      "$WRITER_DIR/requirements.txt"
 
 # Database SQL scripts — kept on disk for manual re-runs and reference
-mkdir -p "$INSTALL_DIR/database/migrations"
-install -m 644 "$STAGING/database/01_create_database.sql" "$INSTALL_DIR/database/01_create_database.sql"
-install -m 644 "$STAGING/database/02_create_tables.sql"   "$INSTALL_DIR/database/02_create_tables.sql"
-cp -a "$STAGING/database/migrations/." "$INSTALL_DIR/database/migrations/"
+install -m 644 "$STAGING/database/01_create_database.sql" "$WRITER_DIR/01_create_database.sql"
+install -m 644 "$STAGING/database/02_create_tables.sql"   "$WRITER_DIR/02_create_tables.sql"
+cp -a "$STAGING/database/migrations/." "$WRITER_DIR/migrations/"
+
+# Shared config example and deploy script
+install -m 644 "$STAGING/config.example.ini"       "$INSTALL_ROOT/config.example.ini"
+install -m 755 "$STAGING/scripts/deploy.sh"        "$INSTALL_ROOT/scripts/deploy.sh"
 
 # ---------------------------------------------------------------------------
-# Install WeatherDB writer
+# Systemd units — reload only when a file actually changed
 # ---------------------------------------------------------------------------
-echo "==> Installing WeatherDB writer to $WRITER_DIR…"
-install -D -m 755 "$STAGING/database/db_writer.py"          "$WRITER_DIR/db_writer.py"
-install -m 644 "$STAGING/database/requirements.txt"          "$WRITER_DIR/requirements.txt"
-install -m 644 "$STAGING/database/config.example.ini"        "$WRITER_DIR/config.example.ini"
+echo "==> Syncing systemd unit files…"
 
-# Systemd unit for DB writer
-echo "==> Syncing weatherdb-writer systemd unit…"
-if ! diff -q "$STAGING/database/systemd/weatherdb-writer.service" \
-             "$WRITER_SYSTEMD_TARGET" >/dev/null 2>&1; then
-    install -m 644 \
-        "$STAGING/database/systemd/weatherdb-writer.service" \
-        "$WRITER_SYSTEMD_TARGET"
-    systemctl daemon-reload
-    echo "    Unit file updated and daemon reloaded."
+_sync_unit() {
+    local src="$1" dst="$2"
+    if ! diff -q "$src" "$dst" >/dev/null 2>&1; then
+        install -m 644 "$src" "$dst"
+        systemctl daemon-reload
+        echo "    Updated: $(basename "$dst")"
+    fi
+}
+
+_sync_unit "$STAGING/tempest/systemd/tempest-datalogger.service"  "$TEMPEST_UNIT"
+_sync_unit "$STAGING/airlink/systemd/airlink-datalogger.service"  "$AIRLINK_UNIT"
+_sync_unit "$STAGING/database/systemd/weatherdb-writer.service"   "$WRITER_UNIT"
+
+# ---------------------------------------------------------------------------
+# Shared config — print instructions on first deploy, never overwrite
+# ---------------------------------------------------------------------------
+if [[ ! -f "$SHARED_CONFIG" ]]; then
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │  First-time setup: create the shared config file               │"
+    echo "  │                                                                 │"
+    echo "  │  cp $INSTALL_ROOT/config.example.ini \\"
+    echo "  │     $SHARED_CONFIG"
+    echo "  │  nano $SHARED_CONFIG                                            │"
+    echo "  │                                                                 │"
+    echo "  │  Required fields: [mqtt] broker, [airlink] host,               │"
+    echo "  │                   [database] password                           │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo ""
 fi
 
 # ---------------------------------------------------------------------------
-# Install AirLink datalogger
+# db.cnf — generate from shared config so migrations can run via mysql client
 # ---------------------------------------------------------------------------
-echo "==> Installing AirLink datalogger to $AIRLINK_DIR…"
-install -D -m 755 "$STAGING/airlink/airlink_datalogger.py"    "$AIRLINK_DIR/airlink_datalogger.py"
-install -m 644 "$STAGING/airlink/requirements.txt"             "$AIRLINK_DIR/requirements.txt"
-install -m 644 "$STAGING/airlink/config.example.ini"           "$AIRLINK_DIR/config.example.ini"
-
-# Systemd unit for AirLink datalogger
-echo "==> Syncing airlink-datalogger systemd unit…"
-if ! diff -q "$STAGING/airlink/systemd/airlink-datalogger.service" \
-             "$AIRLINK_SYSTEMD_TARGET" >/dev/null 2>&1; then
-    install -m 644 \
-        "$STAGING/airlink/systemd/airlink-datalogger.service" \
-        "$AIRLINK_SYSTEMD_TARGET"
-    systemctl daemon-reload
-    echo "    Unit file updated and daemon reloaded."
+if [[ -f "$SHARED_CONFIG" ]]; then
+    echo "==> Generating $DB_CNF from shared config…"
+    python3 - <<'PYEOF' "$SHARED_CONFIG" "$DB_CNF"
+import configparser, sys
+src, dst = sys.argv[1], sys.argv[2]
+c = configparser.ConfigParser()
+c.read(src)
+db = c["database"] if "database" in c else {}
+with open(dst, "w") as f:
+    f.write("[client]\n")
+    f.write(f"host     = {db.get('host', 'localhost')}\n")
+    f.write(f"database = {db.get('name', 'weatherdatalogger')}\n")
+    f.write(f"user     = {db.get('user', 'weatherlogger')}\n")
+    f.write(f"password = {db.get('password', '')}\n")
+import os, stat
+os.chmod(dst, stat.S_IRUSR | stat.S_IWUSR)
+PYEOF
 fi
 
 # ---------------------------------------------------------------------------
-# Systemd unit — reload only when the file actually changed
-# ---------------------------------------------------------------------------
-echo "==> Syncing systemd unit…"
-if ! diff -q "$STAGING/tempest/systemd/tempest-datalogger.service" \
-             "$SYSTEMD_TARGET" >/dev/null 2>&1; then
-    install -m 644 \
-        "$STAGING/tempest/systemd/tempest-datalogger.service" \
-        "$SYSTEMD_TARGET"
-    systemctl daemon-reload
-    echo "    Unit file updated and daemon reloaded."
-fi
-
-# ---------------------------------------------------------------------------
-# Remove dev-only files left over from a previous git clone or old deploy
-# ---------------------------------------------------------------------------
-echo "==> Removing dev-only files…"
-rm -f \
-    "$INSTALL_DIR/AGENT.md" \
-    "$INSTALL_DIR/CONTEXT.md" \
-    "$INSTALL_DIR/config.dev.ini" \
-    "$INSTALL_DIR/requirements-dev.txt" \
-    "$INSTALL_DIR/.ruff.toml" \
-    "$INSTALL_DIR/.gitignore" \
-    "$INSTALL_DIR/.DS_Store" \
-    "$INSTALL_DIR/LICENSE" \
-    "$INSTALL_DIR/WeatherDatalogger.code-workspace" \
-    "$INSTALL_DIR/scripts/lint" \
-    "$INSTALL_DIR/scripts/simulate_udp.py"
-rm -rf \
-    "$INSTALL_DIR/.git" \
-    "$INSTALL_DIR/.devcontainer" \
-    "$INSTALL_DIR/.ruff_cache" \
-    "$INSTALL_DIR/__pycache__" \
-    "$INSTALL_DIR/systemd"
-
-# ---------------------------------------------------------------------------
-# Database migrations — apply any .sql files in database/migrations/ that
-# have not yet been recorded in the schema_migrations table.
-# Skipped entirely if the credentials file does not exist.
+# Database migrations
 # ---------------------------------------------------------------------------
 if [[ -f "$DB_CNF" ]]; then
     echo "==> Checking for pending database migrations…"
     MYSQL="mysql --defaults-extra-file=$DB_CNF --silent --skip-column-names"
 
-    # Verify the schema_migrations table exists before querying it
     TABLE_EXISTS=$($MYSQL -e "
         SELECT COUNT(*) FROM information_schema.tables
         WHERE table_schema = DATABASE()
@@ -165,7 +158,7 @@ if [[ -f "$DB_CNF" ]]; then
 
     if [[ "$TABLE_EXISTS" -eq 1 ]]; then
         shopt -s nullglob
-        for sql_file in "$INSTALL_DIR/database/migrations/"*.sql; do
+        for sql_file in "$WRITER_DIR/migrations/"*.sql; do
             filename=$(basename "$sql_file")
             already_applied=$($MYSQL -e "
                 SELECT COUNT(*) FROM schema_migrations WHERE filename = '$filename';
@@ -173,9 +166,7 @@ if [[ -f "$DB_CNF" ]]; then
             if [[ "$already_applied" -eq 0 ]]; then
                 echo "    Applying migration: $filename"
                 $MYSQL < "$sql_file"
-                $MYSQL -e "
-                    INSERT INTO schema_migrations (filename) VALUES ('$filename');
-                "
+                $MYSQL -e "INSERT INTO schema_migrations (filename) VALUES ('$filename');"
                 echo "    Done: $filename"
             else
                 echo "    Already applied: $filename"
@@ -184,70 +175,51 @@ if [[ -f "$DB_CNF" ]]; then
         shopt -u nullglob
     else
         echo "    schema_migrations table not found — skipping migrations."
-        echo "    Run $INSTALL_DIR/database/02_create_tables.sql to initialise the schema."
+        echo "    Run $WRITER_DIR/02_create_tables.sql to initialise the schema."
     fi
 else
-    echo "==> No database credentials found at $DB_CNF — skipping migrations."
+    echo "==> No db.cnf found — skipping migrations."
+    echo "    Migrations will run automatically once config.ini is configured."
 fi
 
 # ---------------------------------------------------------------------------
 # Virtual environments — create on first run, update packages every run
 # ---------------------------------------------------------------------------
-if [[ ! -d "$VENV" ]]; then
-    echo "==> Creating virtual environment for tempest-datalogger…"
-    python3 -m venv "$VENV"
-fi
-echo "==> Updating tempest-datalogger Python dependencies…"
-"$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet -r "$INSTALL_DIR/requirements.txt"
+for dir_venv_req in \
+    "$TEMPEST_DIR:$TEMPEST_VENV:$TEMPEST_DIR/requirements.txt" \
+    "$AIRLINK_DIR:$AIRLINK_VENV:$AIRLINK_DIR/requirements.txt" \
+    "$WRITER_DIR:$WRITER_VENV:$WRITER_DIR/requirements.txt"; do
 
-if [[ ! -d "$WRITER_VENV" ]]; then
-    echo "==> Creating virtual environment for weatherdb-writer…"
-    python3 -m venv "$WRITER_VENV"
-fi
-echo "==> Updating weatherdb-writer Python dependencies…"
-"$WRITER_VENV/bin/pip" install --quiet --upgrade pip
-"$WRITER_VENV/bin/pip" install --quiet -r "$WRITER_DIR/requirements.txt"
+    IFS=: read -r svc_dir venv req <<< "$dir_venv_req"
+    svc_name=$(basename "$svc_dir")
 
-if [[ ! -d "$AIRLINK_VENV" ]]; then
-    echo "==> Creating virtual environment for airlink-datalogger…"
-    python3 -m venv "$AIRLINK_VENV"
-fi
-echo "==> Updating airlink-datalogger Python dependencies…"
-"$AIRLINK_VENV/bin/pip" install --quiet --upgrade pip
-"$AIRLINK_VENV/bin/pip" install --quiet -r "$AIRLINK_DIR/requirements.txt"
+    if [[ ! -d "$venv" ]]; then
+        echo "==> Creating virtual environment for $svc_name…"
+        python3 -m venv "$venv"
+    fi
+    echo "==> Updating $svc_name Python dependencies…"
+    "$venv/bin/pip" install --quiet --upgrade pip
+    "$venv/bin/pip" install --quiet -r "$req"
+done
 
 # ---------------------------------------------------------------------------
-# Ownership — all install dirs belong to the service user
+# Ownership — everything under the install root belongs to the service user
 # ---------------------------------------------------------------------------
 echo "==> Setting ownership (tempest:tempest)…"
-chown -R tempest:tempest "$INSTALL_DIR"
-chown -R tempest:tempest "$WRITER_DIR"
-chown -R tempest:tempest "$AIRLINK_DIR"
+chown -R tempest:tempest "$INSTALL_ROOT"
 
 # ---------------------------------------------------------------------------
-# Restart services
+# Restart services — only if already enabled
 # ---------------------------------------------------------------------------
-echo "==> Restarting $SERVICE…"
-systemctl restart "$SERVICE"
-systemctl --no-pager status "$SERVICE"
-
-if systemctl is-enabled --quiet "$WRITER_SERVICE" 2>/dev/null; then
-    echo "==> Restarting $WRITER_SERVICE…"
-    systemctl restart "$WRITER_SERVICE"
-    systemctl --no-pager status "$WRITER_SERVICE"
-else
-    echo "==> $WRITER_SERVICE not yet enabled — skipping restart."
-    echo "    To enable: systemctl enable --now $WRITER_SERVICE"
-fi
-
-if systemctl is-enabled --quiet "$AIRLINK_SERVICE" 2>/dev/null; then
-    echo "==> Restarting $AIRLINK_SERVICE…"
-    systemctl restart "$AIRLINK_SERVICE"
-    systemctl --no-pager status "$AIRLINK_SERVICE"
-else
-    echo "==> $AIRLINK_SERVICE not yet enabled — skipping restart."
-    echo "    To enable: systemctl enable --now $AIRLINK_SERVICE"
-fi
+for service in "$TEMPEST_SERVICE" "$WRITER_SERVICE" "$AIRLINK_SERVICE"; do
+    if systemctl is-enabled --quiet "$service" 2>/dev/null; then
+        echo "==> Restarting $service…"
+        systemctl restart "$service"
+        systemctl --no-pager status "$service"
+    else
+        echo "==> $service not yet enabled — skipping restart."
+        echo "    To enable: systemctl enable --now $service"
+    fi
+done
 
 echo "==> Deploy complete."

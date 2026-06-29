@@ -111,36 +111,29 @@ MQTT on_message() → _payload_to_row() → DbWriter.write_observation()
 
 ## Config sections
 
-### tempest_datalogger.py
+All three services share a single config file at `/opt/weatherdatalogger/config.ini`. Each service reads only the sections it needs — extra sections are ignored. The full template is `config.example.ini` at the repo root.
+
+`client_id` is **not** in the shared config — each service's `DEFAULT_CONFIG` provides its own unique value so they don't collide on the MQTT broker.
+
+### Shared sections (all services)
 
 | Section | Notable keys |
 |---|---|
-| `[udp]` | `listen_address`, `listen_port` |
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
-| `[logging]` | `level`, `file` |
-| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
-| `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
-| `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48) |
-
-`data_dir` is where `tempest_lightning.json` and `tempest_pressure.json` are written.
-Default (empty) = directory of the config file.
-
-### airlink_datalogger.py
-
-| Section | Notable keys |
-|---|---|
-| `[airlink]` | `host`, `port` (80), `interval_s` (60), `timeout_s` (10) |
 | `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
 | `[logging]` | `level`, `file` |
 | `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
 
-### db_writer.py
+### Service-specific sections
 
-| Section | Notable keys |
-|---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `client_id` |
-| `[database]` | `host`, `port`, `name`, `user`, `password` |
-| `[logging]` | `level`, `file` |
+| Service | Section | Notable keys |
+|---|---|---|
+| `tempest_datalogger.py` | `[udp]` | `listen_address`, `listen_port` |
+| | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
+| | `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` |
+| `airlink_datalogger.py` | `[airlink]` | `host` (**REQUIRED**), `port` (80), `interval_s` (60), `timeout_s` (10) |
+| `db_writer.py` | `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
+
+`data_dir` (tempest) defaults to `/opt/weatherdatalogger/tempest`. That is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 
 ---
 
@@ -242,13 +235,16 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] systemd service unit (`database/systemd/weatherdb-writer.service`)
 - [x] Migration system: numbered SQL files in `database/migrations/`, tracked in `schema_migrations`
 
+### Database
+- [x] `combined_realtime` view — merges latest readings from `tempest` and `airlink` stations into one row; LEFT JOIN so it works without an AirLink registered
+
 ### Infrastructure
-- [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs both services, applies DB migrations, updates both venvs, restarts services
+- [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all three services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
+- [x] Single shared config at `/opt/weatherdatalogger/config.ini` — all services read from one file; auto-generates `db.cnf` for MySQL client
 - [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
 
 ## What's next / TODO
 
-- [ ] **AirLink README** — write `airlink/README.md` with config instructions and field reference
 - [ ] **Davis Vantage Vue** — ESPHome firmware written (`davis/davis-vantage-receiver.yaml`), hardware available; needs field testing and DB schema additions (e.g. `battery_low` column)
 - [ ] Dashboard / charting — Grafana or similar consuming MariaDB `history` table
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)

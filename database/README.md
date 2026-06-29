@@ -18,14 +18,13 @@ Subscribes to MQTT observation topics published by the weather station loggers a
 
 ## Setup
 
-After completing the [server installation](../README.md#installation), copy and edit the config file:
+After completing the [server installation](../README.md#installation), edit the shared config file:
 
 ```bash
-cp /opt/weatherdb-writer/config.example.ini /opt/weatherdb-writer/config.ini
-nano /opt/weatherdb-writer/config.ini
+nano /opt/weatherdatalogger/config.ini
 ```
 
-Minimum required settings:
+Minimum required settings for the DB writer:
 
 ```ini
 [mqtt]
@@ -53,7 +52,7 @@ On the first observation you should see a `Registered station` line, then `Wrote
 
 ## Configuration
 
-All settings live in `config.ini` (copied from `config.example.ini`).
+All settings live in the shared `/opt/weatherdatalogger/config.ini`. The DB writer reads these sections:
 
 | Section | Key | Default | Description |
 |---|---|---|---|
@@ -63,7 +62,6 @@ All settings live in `config.ini` (copied from `config.example.ini`).
 | `[mqtt]` | `password` | _(empty)_ | MQTT password |
 | `[mqtt]` | `tls` | `false` | Enable TLS/SSL |
 | `[mqtt]` | `base_topic` | `weatherdatalogger` | Must match the datalogger's `base_topic` |
-| `[mqtt]` | `client_id` | `weatherdb-writer` | MQTT client identifier — must be unique on the broker |
 | `[database]` | `host` | `localhost` | MariaDB hostname or IP |
 | `[database]` | `port` | `3306` | MariaDB port |
 | `[database]` | `name` | `weatherdatalogger` | Database name |
@@ -137,6 +135,6 @@ To add a migration:
 
 1. Create `database/migrations/YYYYMMDD_description.sql` with the change
 2. Commit and push
-3. Run `sudo bash /opt/tempest-datalogger/scripts/deploy.sh`
+3. Run `sudo bash /opt/weatherdatalogger/scripts/deploy.sh`
 
 The migration is recorded by filename so it is applied exactly once.

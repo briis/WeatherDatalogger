@@ -59,11 +59,10 @@ weatherdatalogger/forecast-<location>/<subtopic>
 
 ## Setup
 
-After completing the [server installation](../README.md#installation), copy and edit the config file:
+After completing the [server installation](../README.md#installation), edit the shared config file:
 
 ```bash
-cp /opt/tempest-datalogger/config.example.ini /opt/tempest-datalogger/config.ini
-nano /opt/tempest-datalogger/config.ini
+nano /opt/weatherdatalogger/config.ini
 ```
 
 Minimum required settings:

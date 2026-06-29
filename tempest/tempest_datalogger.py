@@ -1218,8 +1218,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--config",
-        default="config.ini",
-        help="Path to config file (default: config.ini)",
+        default="/opt/weatherdatalogger/config.ini",
+        help="Path to config file (default: /opt/weatherdatalogger/config.ini)",
     )
     args = parser.parse_args()
 

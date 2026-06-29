@@ -67,7 +67,6 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 WeatherDatalogger/                   ← repo root
 ├── tempest/                         ← WeatherFlow Tempest service
 │   ├── tempest_datalogger.py        ← Main Python service (UDP → MQTT, single file)
-│   ├── config.example.ini           ← Documented template for all config keys
 │   ├── config.dev.ini               ← Dev container config (local mosquitto)
 │   ├── requirements.txt             ← Runtime dependency: paho-mqtt
 │   ├── scripts/
@@ -77,15 +76,13 @@ WeatherDatalogger/                   ← repo root
 │   └── README.md                   ← Tempest configuration docs
 ├── airlink/                         ← Davis AirLink air quality service
 │   ├── airlink_datalogger.py        ← Main Python service (HTTP polling → MQTT, single file)
-│   ├── config.example.ini           ← Documented template for all config keys
 │   ├── requirements.txt             ← Runtime dependency: paho-mqtt
 │   ├── systemd/
 │   │   └── airlink-datalogger.service  ← systemd unit for Debian LXC
-│   └── README.md                   ← AirLink configuration docs
+│   └── README.md                   ← AirLink field reference and setup docs
 ├── database/                        ← MariaDB persistence layer
 │   ├── db_writer.py                 ← MQTT → MariaDB writer service (single file)
 │   ├── requirements.txt             ← Runtime deps: paho-mqtt, PyMySQL
-│   ├── config.example.ini           ← Documented template for db_writer config
 │   ├── 01_create_database.sql       ← One-time: create DB + user
 │   ├── 02_create_tables.sql         ← One-time: create all tables
 │   ├── migrations/                  ← Numbered ALTER TABLE scripts (applied by deploy)
@@ -98,6 +95,7 @@ WeatherDatalogger/                   ← repo root
 ├── scripts/
 │   ├── deploy.sh                    ← Pull from GitHub, install all services, run migrations
 │   └── lint                         ← ruff format + ruff check --fix (all services)
+├── config.example.ini               ← Shared config template for all three services
 ├── requirements-dev.txt             ← Shared dev/lint tools: ruff
 ├── .ruff.toml                       ← Ruff linter config (target-version = "py311")
 ├── README.md                        ← Server installation guide + project overview
@@ -111,16 +109,18 @@ WeatherDatalogger/                   ← repo root
 
 - **Proxmox** hypervisor running **Debian Bookworm LXC containers**
 - Production Python: **3.13** (the system `python3` on the LXC)
-- Two services running as the `tempest` unprivileged user under systemd:
-  - `tempest-datalogger` — venv at `/opt/tempest-datalogger/venv`
-  - `weatherdb-writer` — venv at `/opt/weatherdb-writer/venv`
+- All services installed under `/opt/weatherdatalogger/` as the `tempest` unprivileged user:
+  - `tempest-datalogger` — files at `/opt/weatherdatalogger/tempest/`, venv at `.../tempest/venv`
+  - `airlink-datalogger` — files at `/opt/weatherdatalogger/airlink/`, venv at `.../airlink/venv`
+  - `weatherdb-writer` — files at `/opt/weatherdatalogger/database/`, venv at `.../database/venv`
+- **Single shared config** at `/opt/weatherdatalogger/config.ini` — all three services read from this one file; never overwritten by the deploy script
 - **MariaDB** running on the same LXC, bound to `0.0.0.0:3306` for network access
-  - DB credentials file: `/etc/weatherdatalogger/db.cnf` (MySQL client format, `chmod 600`)
-- Deploy script: `sudo bash /opt/tempest-datalogger/scripts/deploy.sh`
-  - Installs all production files for both services
+  - `db.cnf` (MySQL client format, `chmod 600`) auto-generated at `/opt/weatherdatalogger/db.cnf` by the deploy script from the shared `config.ini`
+- Deploy script: `sudo bash /opt/weatherdatalogger/scripts/deploy.sh`
+  - Installs all production files for all services
   - Applies pending SQL migrations from `database/migrations/`
-  - Updates Python dependencies in both venvs
-  - Restarts tempest-datalogger always; restarts weatherdb-writer if it is enabled
+  - Updates Python dependencies in each venv
+  - Restarts each service if it was already enabled (skips on first deploy before config is set)
 - The LXC must be on the **same L2 network segment** as the Tempest Hub (UDP broadcast does not cross routed boundaries)
 
 ---
@@ -170,28 +170,43 @@ Migrations are SQL files in `database/migrations/` named `YYYYMMDD_description.s
 
 ## Config Sections
 
+All three services read from a single shared `config.ini`. The template with all documented keys is `config.example.ini` at the repo root (deployed to `/opt/weatherdatalogger/config.example.ini`).
+
+Each service uses only the sections relevant to it — extra sections are ignored by `configparser`.
+
+### Shared sections (all services)
+
+| Section | Key settings |
+|---|---|
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
+| `[logging]` | `level`, `file` |
+| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
+
+> **Note:** `client_id` is NOT in the shared config — each service's `DEFAULT_CONFIG` provides its own unique default (`tempest-datalogger`, `airlink-datalogger`, `weatherdb-writer`).
+
 ### tempest_datalogger.py
 
 | Section | Key settings |
 |---|---|
 | `[udp]` | `listen_address`, `listen_port` |
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `client_id`, `retain`, `qos` |
-| `[logging]` | `level`, `file` |
-| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
 | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
 | `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` (default 48) |
 
-`data_dir` (default: same directory as config file) controls where the persistence files are written:
+`data_dir` (default: `/opt/weatherdatalogger/tempest`) controls where the persistence files are written:
 - `tempest_lightning.json` — rolling 24h lightning event log
 - `tempest_pressure.json` — rolling 24h pressure history for trend calculation
+
+### airlink_datalogger.py
+
+| Section | Key settings |
+|---|---|
+| `[airlink]` | `host` (**REQUIRED**), `port` (80), `interval_s` (60), `timeout_s` (10) |
 
 ### db_writer.py
 
 | Section | Key settings |
 |---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `client_id` |
-| `[database]` | `host`, `port`, `name`, `user`, `password` |
-| `[logging]` | `level`, `file` |
+| `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
 
 ---
 

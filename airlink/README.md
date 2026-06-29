@@ -48,21 +48,23 @@ All fields in a single flat JSON object.
 The deploy script copies everything automatically:
 
 ```bash
-sudo bash /opt/tempest-datalogger/scripts/deploy.sh
+sudo bash /opt/weatherdatalogger/scripts/deploy.sh
 ```
 
-Files are installed to `/opt/airlink-datalogger/`.
+Files are installed to `/opt/weatherdatalogger/airlink/`.
 
 ### 2. Configure
 
+All services share a single config file. If it doesn't exist yet:
+
 ```bash
-cp /opt/airlink-datalogger/config.example.ini /opt/airlink-datalogger/config.ini
-nano /opt/airlink-datalogger/config.ini
+cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
+nano /opt/weatherdatalogger/config.ini
 ```
 
 **Required before first start** — the service will not poll until these are set:
 
-| Key | Where | What to set |
+| Key | Section | What to set |
 |---|---|---|
 | `host` | `[airlink]` | IP address or hostname of the AirLink (e.g. `192.168.1.43`) |
 | `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
@@ -78,27 +80,32 @@ journalctl -u airlink-datalogger -f
 
 ## Configuration Reference
 
+Settings live in the shared `/opt/weatherdatalogger/config.ini`. AirLink-specific keys:
+
 ```ini
 [airlink]
 host       =               # REQUIRED — AirLink IP address or hostname
 port       = 80            # HTTP port (default 80)
 interval_s = 60            # Poll interval in seconds
 timeout_s  = 10            # HTTP request timeout
+```
 
+Shared keys used by this service:
+
+```ini
 [mqtt]
 broker     = localhost     # REQUIRED — MQTT broker hostname or IP
 port       = 1883
-username   =               # leave empty if broker needs no auth
+username   =
 password   =
 tls        = false
 base_topic = weatherdatalogger
-client_id  = airlink-datalogger
 retain     = false
 qos        = 0
 
 [logging]
 level = INFO
-file  =                    # empty = stdout / journald only
+file  =
 
 [homeassistant]
 discovery        = false

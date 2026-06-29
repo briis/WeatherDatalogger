@@ -351,7 +351,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="WeatherDB Writer")
     parser.add_argument(
         "--config",
-        default=Path(__file__).parent / "config.ini",
+        default=Path("/opt/weatherdatalogger/config.ini"),
         type=Path,
         metavar="PATH",
     )
