@@ -19,6 +19,7 @@
     "customizations": {
         "vscode": {
             "extensions": [
+                "anthropic.claude-code",
                 "charliermarsh.ruff",
                 "github.vscode-pull-request-github",
                 "ms-python.python",
