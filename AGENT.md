@@ -228,7 +228,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## What's next / TODO
 
-- [ ] **Davis Vantage Vue** — deferred until ESP32 + CC1101 hardware arrives
+- [ ] **Davis Vantage Vue** — ESPHome firmware written (`davis/davis-vantage-receiver.yaml`), hardware available; needs field testing and DB schema additions (e.g. `battery_low` column)
 - [ ] Dashboard / charting — Grafana or similar consuming MariaDB `history` table
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
 - [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with `online`/`offline` LWT and last-seen timestamp

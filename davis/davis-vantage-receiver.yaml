@@ -25,11 +25,11 @@ wifi:
 
 captive_portal:
 
-# Web UI til diagnostik (valgfri – kan fjernes)
+# Web UI for diagnostics (optional — can be removed)
 web_server:
   port: 80
 
-# HA native API (kan udelades hvis du KUN bruger MQTT)
+# HA native API (can be omitted if only MQTT is used)
 api:
   encryption:
     key: !secret ha_api_key
@@ -57,17 +57,15 @@ mqtt:
   reboot_timeout: 15s
 
 # ─────────────────────────────────────────────────────────────
-# SPI bus for CC1101
+# SPI bus for GERUI CC1101 868 MHz module
 #
-# Sparkle IoT XH-S3E N16R8 pin mapping:
-#
-#   CC1101 pin  →  ESP32-S3 GPIO  →  Board label
+# GERUI CC1101  →  ESP32-S3 GPIO  →  Board label (XH-S3E N16R8)
 #   VCC         →  3.3V           →  3V3
 #   GND         →  GND            →  GND
 #   SCK         →  GPIO12         →  12
-#   MOSI        →  GPIO11         →  11
-#   MISO        →  GPIO13         →  13
-#   CSN         →  GPIO10         →  10
+#   SI (MOSI)   →  GPIO11         →  11
+#   SO (MISO)   →  GPIO13         →  13
+#   CS (CSN)    →  GPIO10         →  10
 #   GDO0        →  GPIO9          →  9
 #   GDO2        →  not connected
 #

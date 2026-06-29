@@ -43,9 +43,10 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 ### Davis Vantage Vue
 - 868 MHz ISM band wireless sensor suite (EU frequency plan)
 - Protocol is community-reverse-engineered (not officially documented)
-- Receiver: **ESP32 + CC1101** (868.35 MHz, CRC-16/CCITT, 5 EU hop channels)
-- ESP32 runs **ESPHome** firmware which handles RF reception and MQTT publishing
-- **Status: deferred — hardware not yet available**
+- Receiver: **Sparkle IoT XH-S3E** (ESP32-S3, 16 MB flash, 8 MB PSRAM) + **CC1101** (868.35 MHz, CRC-16/CCITT, 5 EU hop channels)
+- Runs **ESPHome** firmware (`davis/davis-vantage-receiver.yaml`) which handles RF decoding and MQTT publishing
+- ESPHome also exposes sensors to Home Assistant via the native API
+- **Status: active — hardware available, ESPHome firmware written**
 
 ---
 
@@ -73,8 +74,9 @@ WeatherDatalogger/                   ← repo root
 │   ├── systemd/
 │   │   └── weatherdb-writer.service ← systemd unit for Debian LXC
 │   └── README.md                    ← DB writer config + schema docs
-├── davis/                           ← Davis Vantage Vue (planned; hardware pending)
-│   └── README.md
+├── davis/                           ← Davis Vantage Vue (ESPHome receiver)
+│   ├── davis-vantage-receiver.yaml  ← ESPHome firmware (CC1101 RF → MQTT)
+│   └── README.md                   ← Hardware wiring, RF config, MQTT topics
 ├── scripts/
 │   ├── deploy.sh                    ← Pull from GitHub, install all services, run migrations
 │   └── lint                         ← ruff format + ruff check --fix (all services)

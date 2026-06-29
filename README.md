@@ -11,7 +11,7 @@ A unified weather data pipeline that collects data from multiple weather station
 | Directory | Hardware | Status |
 |---|---|---|
 | [`tempest/`](tempest/) | WeatherFlow Tempest (UDP → MQTT) | Active |
-| [`davis/`](davis/) | Davis Vantage Vue (ESP32 + CC1101) | Planned — hardware pending |
+| [`davis/`](davis/) | Davis Vantage Vue (ESP32-S3 + CC1101, ESPHome) | Active — hardware available |
 
 ### Infrastructure (MQTT → storage)
 
