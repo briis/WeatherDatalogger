@@ -149,7 +149,8 @@ WeatherDatalogger/                   ← repo root
 - Stations are **auto-registered** in the `stations` table on first observation
 - `realtime` table: one row per station, upserted on every message (`INSERT … ON DUPLICATE KEY UPDATE`)
 - `history` table: full append-only time-series, never updated
-- Reconnects to MariaDB automatically using `connection.ping(reconnect=True)` on `OperationalError`
+- All timestamps stored in **UTC** — `datetime.fromtimestamp(ts, tz=UTC).replace(tzinfo=None)`; always use `UTC_TIMESTAMP()` (not `NOW()`) when querying from MariaDB if the server timezone is not UTC
+- Reconnects to MariaDB automatically on `OperationalError` (failed new connection) **and** `InterfaceError` (silently dropped existing connection, e.g. after a server restart); both error types are caught in `_execute()`
 - Station type is derived from the MQTT topic segment (`tempest-ST-xxxx` → `tempest`)
 - Config via INI file (`[mqtt]` + `[database]` + `[logging]`)
 
@@ -157,14 +158,27 @@ WeatherDatalogger/                   ← repo root
 
 ## Database Schema
 
-Tables live in the `weatherdatalogger` database. All observation columns are shared between `realtime` and `history`.
+Tables live in the `weatherdatalogger` database. All observation columns are shared between `realtime` and `history`. The complete schema is defined in `02_create_tables.sql`; migrations add incremental changes and must use `ADD COLUMN IF NOT EXISTS` for idempotency.
 
-| Table | Purpose |
+| Table / View | Purpose |
 |---|---|
 | `stations` | One row per device; auto-inserted on first observation |
 | `realtime` | Latest reading per station (PK = `station_id`) |
 | `history` | Full time-series; indexed on `(station_id, recorded_at)` |
+| `history_charting` | Pre-aggregated 10-min combined windows (one row per UTC `window_start`); populated by `evt_aggregate_history_charting` event |
+| `combined_realtime` | View merging latest Tempest (weather) + AirLink (air quality) into one row; use this for dashboards |
 | `schema_migrations` | Tracks applied migration filenames |
+
+### `history_charting` event
+
+`evt_aggregate_history_charting` runs every 10 minutes via the MariaDB event scheduler. It looks back 30 minutes and uses `INSERT IGNORE` on the unique `window_start` key so re-runs are safe. All window boundaries use `UTC_TIMESTAMP()` and pure datetime arithmetic — never `NOW()` or `FROM_UNIXTIME` — because `recorded_at` is stored in UTC and the server may run in a different timezone.
+
+The event scheduler must be enabled on the server:
+
+```bash
+echo -e "[mysqld]\nevent_scheduler = ON" | sudo tee /etc/mysql/mariadb.conf.d/99-local.cnf
+sudo systemctl restart mariadb
+```
 
 Migrations are SQL files in `database/migrations/` named `YYYYMMDD_description.sql`. The deploy script applies any file not yet recorded in `schema_migrations`.
 

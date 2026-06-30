@@ -12,7 +12,9 @@ Subscribes to MQTT observation topics published by the weather station loggers a
 - Auto-registers new stations in the `stations` table on first observation
 - **Upserts** the `realtime` table — always holds the single latest reading per station
 - **Appends** the `history` table — full time-series log for charting and trend analysis
-- Reconnects automatically to both MQTT and MariaDB on connection loss
+- Reconnects automatically to both MQTT and MariaDB on connection loss (handles both `OperationalError` and `InterfaceError`)
+
+All timestamps are stored in **UTC** as naive `DATETIME` values. Use `UTC_TIMESTAMP()` (not `NOW()`) when querying if the MariaDB server runs in a non-UTC timezone.
 
 ---
 
@@ -124,6 +126,28 @@ A single-row view that merges the latest readings from all station types into on
 | `airlink_recorded_at` | AirLink — timestamp of the latest air quality observation |
 | All weather columns | Tempest |
 | `pm_*`, `aqi_*` | AirLink |
+
+### `history_charting`
+
+Pre-aggregated 10-minute summaries combining Tempest and AirLink data into a single row per window. Intended for charting where raw per-observation granularity is unnecessary. Populated automatically by the `evt_aggregate_history_charting` MariaDB event.
+
+`window_start` is a clock-aligned UTC timestamp (00:00, 00:10, 00:20, …) and is the unique key. The event looks back 30 minutes on each run so late-arriving messages are captured, and `INSERT IGNORE` makes re-runs safe.
+
+| Column group | Aggregation | Notes |
+|---|---|---|
+| `wind_avg_ms` | AVG | 10-min mean wind speed |
+| `wind_lull_ms` | MIN | Calmest reading in window |
+| `wind_gust_ms` | MAX | Peak gust in window |
+| `wind_direction_deg` | Circular AVG | Uses `ATAN2(AVG(SIN), AVG(COS))` — handles 0°/360° boundary correctly |
+| Temperature, humidity, pressure, solar, derived fields | AVG | |
+| `rain_accumulation_mm` | SUM | Per-minute delta from Tempest — summed for 10-min total |
+| `rain_rate_mmh` | MAX | Peak rain rate in window |
+| `pressure_trend`, `sea_level_pressure_trend` | Last value | Most recent text label in window |
+| Lightning fields | MAX / MIN | Rolling 3-hour counters from device |
+| `pm_*` (instant) | AVG | |
+| `aqi_pm2p5`, `aqi_pm10` | MAX | Worst-case AQI in window |
+
+**Requires the MariaDB event scheduler** — see [server installation step 8](../../README.md#8-enable-the-mariadb-event-scheduler).
 
 ---
 

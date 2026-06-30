@@ -98,12 +98,13 @@ MQTT on_message() → _payload_to_row() → DbWriter.write_observation()
 ```
 
 ### Adding a new observation field to the database
-1. Add a migration file `database/migrations/YYYYMMDD_add_<field>.sql` with `ALTER TABLE realtime ADD COLUMN …` and `ALTER TABLE history ADD COLUMN …`
-2. Add the field name to `_OBS_FIELDS` in `db_writer.py` (if it maps 1:1 from the payload) or handle it in `_payload_to_row()` (if it needs conversion, like `lightning_last_detected`)
-3. The SQL column lists (`_COL_LIST`, `_PLACEHOLDERS`, `_UPDATE_CLAUSE`) are built from `_ALL_COLS` at import time — no further changes needed
+1. Add a migration file `database/migrations/YYYYMMDD_add_<field>.sql` with `ALTER TABLE realtime ADD COLUMN IF NOT EXISTS …` and `ALTER TABLE history ADD COLUMN IF NOT EXISTS …` — use `IF NOT EXISTS` so the migration is idempotent on a fresh install where `02_create_tables.sql` already added the column
+2. Add the same column to `02_create_tables.sql` so fresh installs have the complete schema without needing to run migrations
+3. Add the field name to `_OBS_FIELDS` in `db_writer.py` (if it maps 1:1 from the payload) or handle it in `_payload_to_row()` (if it needs conversion, like `lightning_last_detected`)
+4. The SQL column lists (`_COL_LIST`, `_PLACEHOLDERS`, `_UPDATE_CLAUSE`) are built from `_ALL_COLS` at import time — no further changes needed
 
 ### DB connection management
-- `DbWriter._execute()` retries once on `OperationalError` (lost connection), reconnecting via `_connect()` before the second attempt
+- `DbWriter._execute()` retries once on `OperationalError` **or `InterfaceError`** (lost connection), reconnecting via `_connect()` before the second attempt. Both error types must be caught: `OperationalError` fires on a failed new connection; `InterfaceError: (0, '')` fires when an existing connection is silently dropped (e.g. server restart).
 - `autocommit=True` — no explicit transaction management needed for single-statement writes
 - `_known_stations` is an in-memory set; it is rebuilt if the process restarts (safe — `INSERT IGNORE` is idempotent)
 
@@ -228,25 +229,29 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ### Database
 - [x] MariaDB on the same LXC, bound to `0.0.0.0:3306` for network access
-- [x] `stations`, `realtime`, `history`, `schema_migrations` tables
+- [x] `stations`, `realtime`, `history`, `schema_migrations` tables — all with PM/AQI columns included from the start in `02_create_tables.sql`
 - [x] DB writer service (`database/db_writer.py`) subscribing to `weatherdatalogger/+/observation`
 - [x] Auto-registration of new stations on first observation
 - [x] Upsert into `realtime`; append into `history` on every message
-- [x] systemd service unit (`database/systemd/weatherdb-writer.service`)
-- [x] Migration system: numbered SQL files in `database/migrations/`, tracked in `schema_migrations`
-
-### Database
+- [x] Reconnects on both `OperationalError` and `InterfaceError` (server restart safe)
+- [x] All timestamps stored in UTC (db_writer uses `datetime.fromtimestamp(..., tz=UTC)`)
+- [x] systemd service unit (`database/systemd/weatherdb-writer.service`) with `After=mariadb.service` and `Restart=on-failure`
+- [x] Migration system: numbered SQL files in `database/migrations/`, tracked in `schema_migrations`; migrations use `ADD COLUMN IF NOT EXISTS` for idempotency
 - [x] `combined_realtime` view — merges latest readings from `tempest` and `airlink` stations into one row; LEFT JOIN so it works without an AirLink registered
+- [x] `history_charting` table — pre-aggregated 10-minute combined windows (one row per clock-aligned UTC window); field aggregations: AVG for temperature/pressure/humidity/solar, MIN for lull, MAX for gust/rain rate, circular AVG for wind direction, SUM for rain accumulation, MAX for AQI
+- [x] `evt_aggregate_history_charting` MariaDB event — fires every 10 min, 30-min lookback, `INSERT IGNORE` for idempotency; uses `UTC_TIMESTAMP()` throughout (not `NOW()`) to match UTC-stored `recorded_at`
+- [x] MariaDB event scheduler enabled via `/etc/mysql/mariadb.conf.d/99-local.cnf`
 
 ### Infrastructure
 - [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all three services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
+- [x] `systemctl status` in deploy uses `--lines=20 || true` — avoids hanging and tolerates services still in "activating" state
 - [x] Single shared config at `/opt/weatherdatalogger/config.ini` — all services read from one file; auto-generates `db.cnf` for MySQL client
 - [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
 
 ## What's next / TODO
 
-- [ ] **Davis Vantage Vue** — ESPHome firmware written (`davis/davis-vantage-receiver.yaml`), hardware available; needs field testing and DB schema additions (e.g. `battery_low` column)
-- [ ] Dashboard / charting — Grafana or similar consuming MariaDB `history` table
+- [ ] **Davis Vantage Vue** — ESPHome firmware written (`davis/davis-vantage-receiver.yaml`), hardware available; needs field testing and DB schema additions (e.g. `battery_low` column); `history_charting` event may need extending to include `davis` station type for wind/temp/rain
+- [ ] Dashboard / charting — Grafana or similar consuming `history_charting` for 10-min resolution charts and `history` for raw data
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
 - [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with `online`/`offline` LWT and last-seen timestamp
 
@@ -260,3 +265,5 @@ bash scripts/lint      # ruff format + ruff check --fix
 - Do not change the MQTT topic structure without updating CONTEXT.md and the HA discovery sensor list
 - Do not store secrets in committed files — `config.ini` files are gitignored
 - Do not bump `target-version` in `.ruff.toml` past `py311` without verifying production Python version and checking for syntax-breaking reformats (especially `except` clauses)
+- Do not use `NOW()` in DB queries or events — `recorded_at` is stored in UTC; use `UTC_TIMESTAMP()` to avoid a mismatch when the MariaDB server runs in a non-UTC timezone
+- Do not use `ADD COLUMN` without `IF NOT EXISTS` in migration files — `02_create_tables.sql` is the canonical full schema for fresh installs; migrations must be idempotent so they can run safely on either a fresh or an upgraded database

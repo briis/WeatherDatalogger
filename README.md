@@ -115,7 +115,28 @@ mariadb -u root weatherdatalogger \
     < /opt/weatherdatalogger/database/02_create_tables.sql
 ```
 
-### 8. Create the shared config file
+This creates all schema objects in one step: the `stations`, `realtime`, `history`, and `history_charting` tables; the `combined_realtime` view; and the `evt_aggregate_history_charting` event.
+
+### 8. Enable the MariaDB event scheduler
+
+The `history_charting` table is populated by a MariaDB event that runs every 10 minutes. The event scheduler is off by default and must be enabled once:
+
+```bash
+# Persistent — survives reboots (recommended)
+echo -e "[mysqld]\nevent_scheduler = ON" \
+    | sudo tee /etc/mysql/mariadb.conf.d/99-local.cnf
+sudo systemctl restart mariadb
+```
+
+Verify:
+
+```bash
+mysql --defaults-extra-file=/opt/weatherdatalogger/db.cnf \
+    -e "SHOW VARIABLES LIKE 'event_scheduler';"
+# Expected: event_scheduler | ON
+```
+
+### 9. Create the shared config file
 
 All three services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
 
@@ -134,7 +155,7 @@ nano /opt/weatherdatalogger/config.ini
 
 Everything else has sensible defaults.
 
-### 9. Enable and start the services
+### 10. Enable and start the services
 
 ```bash
 # DB writer (must be running before station loggers send data)
