@@ -189,7 +189,7 @@ class DbWriter:
                 with self._conn.cursor() as cur:  # type: ignore[union-attr]
                     cur.execute(sql, args)
                 return
-            except pymysql.OperationalError:
+            except (pymysql.OperationalError, pymysql.InterfaceError):
                 if attempt == 0:
                     self._log.warning("DB connection lost — reconnecting…")
                     self._connect()
