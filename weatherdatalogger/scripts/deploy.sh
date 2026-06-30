@@ -216,7 +216,7 @@ for service in "$TEMPEST_SERVICE" "$WRITER_SERVICE" "$AIRLINK_SERVICE"; do
     if systemctl is-enabled --quiet "$service" 2>/dev/null; then
         echo "==> Restarting $service…"
         systemctl restart "$service"
-        systemctl --no-pager status "$service"
+        systemctl --no-pager --lines=20 status "$service" || true
     else
         echo "==> $service not yet enabled — skipping restart."
         echo "    To enable: systemctl enable --now $service"
