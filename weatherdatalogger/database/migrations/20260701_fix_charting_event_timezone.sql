@@ -1,113 +1,19 @@
--- Migration: 20260630_add_history_charting.sql
--- Pre-aggregated 10-minute summary table for charting.
+-- Migration: 20260701_fix_charting_event_timezone.sql
+-- Fix evt_aggregate_history_charting to use UTC_TIMESTAMP() instead of NOW().
 --
--- One combined row per 10-minute window (clock-aligned: 00:00, 00:10, …).
--- Merges Tempest (weather) and AirLink (air quality) into a single row,
--- matching the pattern of the combined_realtime view.
+-- recorded_at is stored in UTC (db_writer uses datetime.fromtimestamp(..., tz=UTC)).
+-- The original event used NOW() and FROM_UNIXTIME/UNIX_TIMESTAMP, which both
+-- return/interpret values in the server's local timezone (e.g. CEST = UTC+2),
+-- causing the window boundaries to be 2 hours ahead of the stored data.
+-- Result: the WHERE clause found zero rows and nothing was inserted.
 --
--- Populated by the evt_aggregate_history_charting MariaDB event.
--- The event must be enabled once on the server (requires SUPER or
--- SYSTEM_VARIABLES_ADMIN):
---
---   SET GLOBAL event_scheduler = ON;
---
--- Or add the following to [mysqld] in /etc/mysql/my.cnf (persistent):
---   event_scheduler = ON
+-- Fix: pure UTC_TIMESTAMP() arithmetic with no FROM_UNIXTIME conversion.
 
 USE weatherdatalogger;
 
--- ─────────────────────────────────────────────────────────────────────────────
--- Table
--- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS history_charting (
-    id                          BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
-    window_start                DATETIME          NOT NULL COMMENT '10-min boundary UTC (floor)',
+DROP EVENT IF EXISTS evt_aggregate_history_charting;
 
-    -- Wind (Tempest) — lull=MIN, avg=AVG, gust=MAX, dir=circular AVG
-    wind_lull_ms                FLOAT             NULL,
-    wind_avg_ms                 FLOAT             NULL,
-    wind_gust_ms                FLOAT             NULL,
-    wind_direction_deg          SMALLINT UNSIGNED NULL,
-
-    -- Pressure (Tempest) — AVG; trend text = last value in window
-    station_pressure_mb         FLOAT             NULL,
-    sea_level_pressure_mb       FLOAT             NULL,
-    pressure_trend_mb           FLOAT             NULL,
-    pressure_trend              VARCHAR(16)       NULL,
-    sea_level_pressure_trend_mb FLOAT             NULL,
-    sea_level_pressure_trend    VARCHAR(16)       NULL,
-
-    -- Temperature & humidity (Tempest) — AVG
-    air_temperature_c           FLOAT             NULL,
-    relative_humidity_pct       FLOAT             NULL,
-    dew_point_c                 FLOAT             NULL,
-    wet_bulb_c                  FLOAT             NULL,
-    delta_t_c                   FLOAT             NULL,
-    feels_like_c                FLOAT             NULL,
-    heat_index_c                FLOAT             NULL,
-    wind_chill_c                FLOAT             NULL,
-
-    -- Solar & UV (Tempest) — AVG
-    illuminance_lux             INT UNSIGNED      NULL,
-    uv_index                    FLOAT             NULL,
-    solar_radiation_wm2         FLOAT             NULL,
-
-    -- Rain (Tempest) — accumulation=SUM (per-minute delta), rate=MAX
-    rain_accumulation_mm        FLOAT             NULL,
-    rain_rate_mmh               FLOAT             NULL,
-
-    -- Lightning (Tempest) — last detected=MAX, count=MAX (rolling 3h from device),
-    --                        min dist=MIN, max dist=MAX
-    lightning_last_detected     DATETIME          NULL,
-    lightning_count_3h          SMALLINT UNSIGNED NULL,
-    lightning_min_dist_3h_km    FLOAT             NULL,
-    lightning_max_dist_3h_km    FLOAT             NULL,
-
-    -- Air properties (Tempest) — AVG
-    vapor_pressure_mb           FLOAT             NULL,
-    air_density_kgm3            FLOAT             NULL,
-
-    -- Device (Tempest) — AVG
-    battery_volts               FLOAT             NULL,
-
-    -- Air quality (AirLink) — instant PM=AVG, pre-averaged PM=AVG, AQI=MAX
-    pm_1_ugm3                   FLOAT             NULL,
-    pm_2p5_ugm3                 FLOAT             NULL,
-    pm_2p5_1h_ugm3              FLOAT             NULL,
-    pm_2p5_3h_ugm3              FLOAT             NULL,
-    pm_2p5_24h_ugm3             FLOAT             NULL,
-    pm_2p5_nowcast_ugm3         FLOAT             NULL,
-    pm_10_ugm3                  FLOAT             NULL,
-    pm_10_1h_ugm3               FLOAT             NULL,
-    pm_10_3h_ugm3               FLOAT             NULL,
-    pm_10_24h_ugm3              FLOAT             NULL,
-    pm_10_nowcast_ugm3          FLOAT             NULL,
-    aqi_pm2p5                   SMALLINT UNSIGNED NULL,
-    aqi_pm10                    SMALLINT UNSIGNED NULL,
-
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_history_charting_window (window_start)
-) ENGINE=InnoDB;
-
--- ─────────────────────────────────────────────────────────────────────────────
--- Event
--- ─────────────────────────────────────────────────────────────────────────────
--- Runs every 10 minutes. Aggregates the completed window(s) within the last
--- 30 minutes so late-arriving MQTT messages are included.
--- INSERT IGNORE makes re-runs safe: already-written windows are skipped.
---
--- Wind direction uses a vector (circular) average via ATAN2 so readings near
--- 0°/360° (e.g. 350° and 10°) correctly average to 0° rather than 180°.
---
--- Pressure-trend text fields (e.g. 'Rising', 'Steady', 'Falling') use
--- GROUP_CONCAT ordered DESC so SUBSTRING_INDEX picks the most-recent value.
--- GROUP_CONCAT skips NULLs, so AirLink rows never pollute Tempest fields.
--- recorded_at is stored in UTC (db_writer uses datetime.fromtimestamp(..., tz=UTC)).
--- All window boundaries must therefore use UTC_TIMESTAMP(), not NOW(), to avoid
--- a mismatch when the MariaDB server runs in a non-UTC timezone (e.g. CEST = UTC+2).
--- Pure datetime arithmetic is used instead of FROM_UNIXTIME/UNIX_TIMESTAMP so that
--- timezone conversion never enters the calculation.
-CREATE EVENT IF NOT EXISTS evt_aggregate_history_charting
+CREATE EVENT evt_aggregate_history_charting
     ON SCHEDULE EVERY 10 MINUTE
     STARTS CURRENT_TIMESTAMP
 DO
