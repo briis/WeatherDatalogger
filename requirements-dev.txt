@@ -1,4 +1,4 @@
--r tempest/requirements.txt
+-r weatherdatalogger/tempest/requirements.txt
 black
 coverage
 flake8
