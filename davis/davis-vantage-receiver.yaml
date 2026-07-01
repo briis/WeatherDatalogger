@@ -93,6 +93,10 @@ globals:
   - id: raw_wind_dir
     type: float
     initial_value: '0.0'
+  - id: wind_lull_min_ms
+    type: float
+    # 999.0 = "no sample yet this interval" sentinel, reset every 60s
+    initial_value: '999.0'
   - id: known_unit_id
     type: int
     # -1 = auto-lock on first valid station.
@@ -184,7 +188,7 @@ cc1101:
           id(davis_lqi).publish_state(lqi);
 
           char topic[80];
-          char buf[256];
+          char buf[512];
           snprintf(topic, sizeof(topic), "%s/device_status", base_topic);
           snprintf(buf, sizeof(buf),
             "{\"rssi\":%.1f,\"lqi\":%d,\"battery_low\":%s}",
@@ -200,6 +204,9 @@ cc1101:
             id(davis_wind_speed).publish_state(wind_avg_ms);
             if (std::isnan(id(davis_windgust).state)) {
               id(davis_windgust).publish_state(wind_avg_ms);
+            }
+            if (wind_avg_ms < id(wind_lull_min_ms)) {
+              id(wind_lull_min_ms) = wind_avg_ms;
             }
             snprintf(topic, sizeof(topic), "%s/rapid_wind", base_topic);
             snprintf(buf, sizeof(buf),
@@ -255,7 +262,53 @@ cc1101:
             id(rain_count_prev) = tips;
           }
 
-          // ── 7. Consolidated observation ─────────────────────────────
+          // ── 7. Comfort metrics (same formulas as tempest_datalogger.py) ──
+          float t_c = id(davis_temp).state;
+          float rh  = id(davis_hum).state;
+
+          if (!std::isnan(t_c) && !std::isnan(rh)) {
+            float t_f = t_c * 9.0f / 5.0f + 32.0f;
+            float v_mph = wind_avg_ms * 2.23694f;
+
+            // Dew point (Magnus formula)
+            float gamma = std::log(rh / 100.0f) + 17.625f * t_c / (243.04f + t_c);
+            id(davis_dew_point).publish_state(243.04f * gamma / (17.625f - gamma));
+
+            // Vapor pressure
+            id(davis_vapor_pressure).publish_state(
+              (rh / 100.0f) * 6.112f * std::exp(17.67f * t_c / (t_c + 243.5f)));
+
+            // Heat index (Rothfusz regression, valid ≥80°F and ≥40% RH)
+            float heat_index_c = t_c;
+            if (t_f >= 80.0f && rh >= 40.0f) {
+              float hi_f = -42.379f + 2.04901523f * t_f + 10.14333127f * rh
+                - 0.22475541f * t_f * rh - 6.83783e-3f * t_f * t_f
+                - 5.481717e-2f * rh * rh + 1.22874e-3f * t_f * t_f * rh
+                + 8.5282e-4f * t_f * rh * rh - 1.99e-6f * t_f * t_f * rh * rh;
+              heat_index_c = (hi_f - 32.0f) * 5.0f / 9.0f;
+            }
+            id(davis_heat_index).publish_state(heat_index_c);
+
+            // Wind chill (valid ≤50°F and >3 mph)
+            float wind_chill_c = t_c;
+            if (t_f <= 50.0f && v_mph > 3.0f) {
+              float wc_f = 35.74f + 0.6215f * t_f - 35.75f * std::pow(v_mph, 0.16f)
+                + 0.4275f * t_f * std::pow(v_mph, 0.16f);
+              wind_chill_c = (wc_f - 32.0f) * 5.0f / 9.0f;
+            }
+            id(davis_wind_chill).publish_state(wind_chill_c);
+
+            // Feels like: heat index above 80°F/40%, wind chill below 50°F/>3mph, else actual temp
+            if (t_f >= 80.0f && rh >= 40.0f) {
+              id(davis_feels_like).publish_state(heat_index_c);
+            } else if (t_f <= 50.0f && v_mph > 3.0f) {
+              id(davis_feels_like).publish_state(wind_chill_c);
+            } else {
+              id(davis_feels_like).publish_state(t_c);
+            }
+          }
+
+          // ── 8. Consolidated observation ─────────────────────────────
           // Published on every packet using the latest known values for
           // all fields. Fields not yet received remain absent (JSON null
           // equivalent — the DB writer treats missing keys as SQL NULL).
@@ -284,14 +337,41 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"rain_rate_mmh\":%.1f", id(davis_rain_rate).state);
 
+          if (!std::isnan(id(davis_wind_lull).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_lull_ms\":%.2f", id(davis_wind_lull).state);
+
+          if (!std::isnan(id(davis_dew_point).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"dew_point_c\":%.1f", id(davis_dew_point).state);
+
+          if (!std::isnan(id(davis_vapor_pressure).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"vapor_pressure_mb\":%.2f", id(davis_vapor_pressure).state);
+
+          if (!std::isnan(id(davis_heat_index).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"heat_index_c\":%.1f", id(davis_heat_index).state);
+
+          if (!std::isnan(id(davis_wind_chill).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_chill_c\":%.1f", id(davis_wind_chill).state);
+
+          if (!std::isnan(id(davis_feels_like).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"feels_like_c\":%.1f", id(davis_feels_like).state);
+
           snprintf(buf + pos, sizeof(buf) - pos,
             ",\"battery_low\":%s}", battery_low ? "true" : "false");
 
           id(mqtt_client).publish(topic, buf);
 
 # ─────────────────────────────────────────────────────────────
-# Rain rate — derived every 60s from the accumulation delta,
-# since tips arrive irregularly and can't be rated individually.
+# Rain rate and wind lull — derived every 60s.
+# Rain rate: from the accumulation delta, since tips arrive
+# irregularly and can't be rated individually.
+# Wind lull: minimum wind sample seen during the interval
+# (mirrors how gust is the transmitter's own rolling max).
 # ─────────────────────────────────────────────────────────────
 interval:
   - interval: 60s
@@ -300,6 +380,11 @@ interval:
           float delta = id(rain_total_mm) - id(rain_total_mm_last_interval);
           id(davis_rain_rate).publish_state(delta * 60.0f);
           id(rain_total_mm_last_interval) = id(rain_total_mm);
+
+          if (id(wind_lull_min_ms) < 900.0f) {
+            id(davis_wind_lull).publish_state(id(wind_lull_min_ms));
+          }
+          id(wind_lull_min_ms) = 999.0f;
 
 # ─────────────────────────────────────────────────────────────
 # Sensors — exposed to both HA (native API) and MQTT
@@ -364,11 +449,59 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
+    name: "Davis Wind Lull"
+    id: davis_wind_lull
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
     name: "Davis Wind Direction"
     id: davis_wind_dir
     unit_of_measurement: "°"
     device_class: wind_direction
     state_class: measurement_angle
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Dew Point"
+    id: davis_dew_point
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Vapor Pressure"
+    id: davis_vapor_pressure
+    unit_of_measurement: "hPa"
+    device_class: atmospheric_pressure
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "Davis Heat Index"
+    id: davis_heat_index
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Wind Chill"
+    id: davis_wind_chill
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Feels Like"
+    id: davis_feels_like
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
     accuracy_decimals: 1
 
   - platform: template

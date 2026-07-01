@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS realtime (
     air_density_kgm3            FLOAT         NULL,
     -- device
     battery_volts               FLOAT         NULL,
+    battery_low                 BOOLEAN       NULL COMMENT 'Low battery flag (Davis)',
     -- air quality — Davis AirLink (NULL for other station types)
     pm_1_ugm3                   FLOAT         NULL COMMENT 'PM1.0 2-min avg µg/m³',
     pm_2p5_ugm3                 FLOAT         NULL COMMENT 'PM2.5 2-min avg µg/m³',
@@ -130,6 +131,7 @@ CREATE TABLE IF NOT EXISTS history (
     air_density_kgm3            FLOAT         NULL,
     -- device
     battery_volts               FLOAT         NULL,
+    battery_low                 BOOLEAN       NULL,
     -- air quality — Davis AirLink (NULL for other station types)
     pm_1_ugm3                   FLOAT         NULL,
     pm_2p5_ugm3                 FLOAT         NULL,

@@ -91,6 +91,7 @@ _OBS_FIELDS: tuple[str, ...] = (
     "vapor_pressure_mb",
     "air_density_kgm3",
     "battery_volts",
+    "battery_low",
     # Air quality — Davis AirLink (NULL for other station types)
     "pm_1_ugm3",
     "pm_2p5_ugm3",

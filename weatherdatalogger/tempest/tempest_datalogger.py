@@ -148,6 +148,7 @@ def parse_obs_st(msg: dict) -> dict | None:
             "lightning_avg_dist_km": obs[14],
             "lightning_strike_count": obs[15],
             "battery_volts": obs[16],
+            "battery_low": obs[16] < _BATTERY_LOW_V,
             "reporting_interval_min": obs[17],
             "serial_number": msg.get("serial_number"),
             "hub_sn": msg.get("hub_sn"),
@@ -250,6 +251,11 @@ _WC_TEMP_MAX_F = 50.0  # wind chill valid below this (°F)
 _WC_WIND_MIN_MPH = 3.0  # wind chill valid above this (mph)
 _PRESSURE_TREND_MB = 1.0  # threshold for Rising/Falling label
 _PRESSURE_TREND_TOL_S = 600  # ±10 min tolerance when finding 3h-old reading
+
+# Legacy power-save threshold: below this the Tempest drops to reduced wind
+# sampling (once-per-minute), well ahead of the ~2.11V point where it stops
+# responding entirely — see community reports on battery cut-out thresholds.
+_BATTERY_LOW_V = 2.4
 
 
 def _c_to_f(t: float) -> float:
@@ -714,6 +720,15 @@ _ST_OBS_SENSORS = [
     ),
 ]
 
+# Each entry: (field, friendly_name, device_class)
+_ST_BINARY_SENSORS = [
+    ("battery_low", "Battery Low", "battery"),
+]
+
+_HA_BINARY_DISCOVERY_MAP = {
+    "obs_st": ("observation", _ST_BINARY_SENSORS),
+}
+
 _ST_STATUS_SENSORS = [
     ("rssi", "Signal Strength", "dBm", "signal_strength", "measurement"),
     ("uptime_s", "Uptime", "s", "duration", "total_increasing"),
@@ -808,6 +823,27 @@ def publish_ha_discovery(
             payload["icon"] = icon
 
         topic = f"{prefix}/sensor/{unique_id}/config"
+        try:
+            result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning("Discovery publish error rc=%s topic=%s", result.rc, topic)
+        except Exception:
+            log.exception("Discovery publish exception for %s", topic)
+
+    _, binary_sensors = _HA_BINARY_DISCOVERY_MAP.get(msg_type, ("", []))
+    for field, name, device_class in binary_sensors:
+        unique_id = f"tempest_{serial_id}_{field}"
+        payload = {
+            "name": name,
+            "unique_id": unique_id,
+            "state_topic": state_topic,
+            "value_template": f"{{{{ value_json.{field} }}}}",
+            "payload_on": "True",
+            "payload_off": "False",
+            "device_class": device_class,
+            "device": device,
+        }
+        topic = f"{prefix}/binary_sensor/{unique_id}/config"
         try:
             result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
