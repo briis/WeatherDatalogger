@@ -730,6 +730,12 @@ _HA_DISCOVERY_MAP = {
     "hub_status": ("hub_status", _HB_STATUS_SENSORS),
 }
 
+# Icon overrides for sensors with no matching HA device class (and thus no
+# built-in icon).
+_SENSOR_ICON_OVERRIDES = {
+    "uv_index": "mdi:sun-wireless",
+}
+
 _discovered: set[str] = set()
 
 
@@ -787,6 +793,9 @@ def publish_ha_discovery(
             payload["device_class"] = device_class
         if state_class:
             payload["state_class"] = state_class
+        icon = _SENSOR_ICON_OVERRIDES.get(field)
+        if icon:
+            payload["icon"] = icon
 
         topic = f"{prefix}/sensor/{unique_id}/config"
         try:
