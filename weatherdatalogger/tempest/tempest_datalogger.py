@@ -509,7 +509,7 @@ def compute_obs_derived(obs: dict, cfg: configparser.ConfigParser) -> dict:
     rain_mm = obs.get("rain_accumulation_mm")
     ts = obs.get("timestamp")
 
-    if None in (t_c, rh, p_mb, wind_ms):
+    if t_c is None or rh is None or p_mb is None or wind_ms is None:
         return {}
 
     wb = _wet_bulb_c(t_c, rh, p_mb)
@@ -612,7 +612,7 @@ def publish(
 ) -> None:
     """Serialise payload as JSON and publish it; log but do not raise on error."""
     m = cfg["mqtt"]
-    retain = m.getboolean("retain")
+    retain = m.getboolean("retain", fallback=False)
     qos = int(m["qos"])
     try:
         result = client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
