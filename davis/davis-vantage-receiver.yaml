@@ -46,6 +46,7 @@ ota:
 # ESPHome auto-discovery would create duplicate HA entities.
 # ─────────────────────────────────────────────────────────────
 mqtt:
+  id: mqtt_client
   broker: !secret mqtt_broker
   port: 1883
   username: !secret mqtt_username
