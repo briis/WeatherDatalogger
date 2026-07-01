@@ -284,7 +284,7 @@ def publish(
 ) -> None:
     """Serialise payload as JSON and publish; log but do not raise on error."""
     m = cfg["mqtt"]
-    retain = m.getboolean("retain")
+    retain = m.getboolean("retain", fallback=False)
     qos = int(m["qos"])
     try:
         result = client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
