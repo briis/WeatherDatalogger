@@ -738,8 +738,8 @@ _SENSOR_ICON_OVERRIDES = {
     "lightning_strike_count": "mdi:lightning-bolt",
     "lightning_count_3h": "mdi:lightning-bolt",
     "air_density_kgm3": "mdi:weight-kilogram",
-    "pressure_trend": "mdi:trending-up",
-    "sea_level_pressure_trend": "mdi:trending-up",
+    "pressure_trend": "mdi:arrow-collapse",
+    "sea_level_pressure_trend": "mdi:arrow-collapse",
     "condition": "mdi:weather-partly-cloudy",
     "wind_bearing": "mdi:compass-outline",
 }
