@@ -13,7 +13,7 @@ A weather data pipeline with two active Python services:
 1. **Tempest datalogger** (`tempest/tempest_datalogger.py`) — receives WeatherFlow Tempest UDP broadcasts, computes derived metrics, and publishes everything to MQTT
 2. **DB writer** (`database/db_writer.py`) — subscribes to MQTT observation topics and persists readings to MariaDB (`realtime` + `history` tables)
 
-A future component will handle Davis Vantage Vue via ESP32 + CC1101. Both station services publish under `weatherdatalogger/` so Home Assistant (or any MQTT subscriber) gets a unified feed.
+A third, non-Python component handles Davis Vantage Vue via ESP32 + CC1101, running ESPHome firmware (`davis/davis-vantage-receiver.yaml`) rather than a Python service — see "Davis Vantage Vue (ESPHome firmware)" below. All station services/firmware publish under `weatherdatalogger/` so Home Assistant (or any MQTT subscriber) gets a unified feed.
 
 ---
 
@@ -107,6 +107,31 @@ MQTT on_message() → _payload_to_row() → DbWriter.write_observation()
 - `DbWriter._execute()` retries once on `OperationalError` **or `InterfaceError`** (lost connection), reconnecting via `_connect()` before the second attempt. Both error types must be caught: `OperationalError` fires on a failed new connection; `InterfaceError: (0, '')` fires when an existing connection is silently dropped (e.g. server restart).
 - `autocommit=True` — no explicit transaction management needed for single-statement writes
 - `_known_stations` is an in-memory set; it is rebuilt if the process restarts (safe — `INSERT IGNORE` is idempotent)
+
+---
+
+## Davis Vantage Vue (ESPHome firmware)
+
+Unlike Tempest/AirLink, this is **not a Python service** — it's ESPHome YAML + inline C++ lambdas (`davis/davis-vantage-receiver.yaml`) flashed to an ESP32 + CC1101 radio module. Read `davis/README.md` for hardware/wiring and CONTEXT.md's "Known Issues" section before touching this file — several non-obvious RF findings are documented there and are expensive to re-derive.
+
+### Packet flow
+```
+CC1101 on_packet (raw 8 bytes)
+  → bit-reversal (LSB→MSB)
+  → CRC-16/CCITT with 3-position bit-shift fallback → drop if all fail
+  → station-ID lock (first valid ID seen; ignore other transmitter IDs after)
+  → per-packet-type decode (wind every packet; temp=8, rain-rate=5, rain-tip=14 on this hardware)
+  → comfort metrics computed from davis_temp/davis_hum (same formulas as tempest_datalogger.py)
+  → consolidated `observation` JSON published to weatherdatalogger/davis-<id>/observation
+```
+
+### Known hardware limitation — no RF humidity or gust
+This specific transmitter **never sends packet types 9 (gust) or 10 (humidity)** — confirmed by a 40-minute continuous packet-type histogram (see CONTEXT.md "Known Issues" for the full investigation: ruled out frequency-hopping, filter bandwidth/noise floor, and decode-formula bugs). **Workaround in place:** `airlink_datalogger.py` publishes a fixed-name convenience topic (`weatherdatalogger/airlink/humidity`, no dynamic device id) that the Davis firmware subscribes to via `mqtt: on_json_message`, feeding the AirLink's humidity into the same `davis_hum` sensor the comfort-metric lambda code reads from. This is a stopgap, not a permanent design — see TODO.
+
+### Debugging this file
+- Diagnostic/calibration logging used to investigate the above is still present but **commented out** (search `CALIBRATION (disabled)`) — uncomment to re-run the same packet-type histogram test against different CC1101 hardware, rather than re-deriving the approach from scratch.
+- `esphome logs davis/davis-vantage-receiver.yaml` streams logs remotely over the native API (`api:` block) — kept in the config solely for this; do **not** also add this node via Home Assistant's "ESPHome" integration UI, since HA entities come from `mqtt: discovery: true` instead, and having both would duplicate every entity.
+- Repeating `[I][safe_mode:142]: Boot seems successful` lines in the log are the tell for a reboot loop, even when nothing else looks wrong — check `reboot_timeout` settings (`mqtt:`, `api:`, `wifi:`) if this shows up more than once per intentional flash.
 
 ---
 
@@ -242,6 +267,17 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] `evt_aggregate_history_charting` MariaDB event — fires every 10 min, 30-min lookback, `INSERT IGNORE` for idempotency; uses `UTC_TIMESTAMP()` throughout (not `NOW()`) to match UTC-stored `recorded_at`
 - [x] MariaDB event scheduler enabled via `/etc/mysql/mariadb.conf.d/99-local.cnf`
 
+### Davis Vantage Vue (ESPHome)
+- [x] ESPHome firmware (`davis/davis-vantage-receiver.yaml`) — CC1101 packet decode, CRC validation, station-ID lock
+- [x] Field-tested against real hardware — temperature/wind speed+direction/rain(+rate)/wind lull/battery-low all reliable
+- [x] Derived comfort metrics computed on-device (dew point, vapor pressure, heat index, wind chill, feels like) — same formulas as `tempest_datalogger.py`
+- [x] `battery_low` DB column added (`database/migrations/20260701_add_battery_low.sql`)
+- [x] HA integration via ESPHome's own `mqtt: discovery: true` (one grouped device), not the native API
+- [x] RF frequency/filter empirically recentred (868.3206MHz / 102kHz) based on measured `freq_offset`
+- [x] `reboot_timeout: 0s` — was 15s, which force-rebooted the device on routine MQTT hiccups
+- [x] Interim humidity workaround: subscribes to AirLink's `weatherdatalogger/airlink/humidity` convenience topic
+- [ ] **RF humidity/gust still unreceived on current CC1101 hardware** — see "Known hardware limitation" above and CONTEXT.md; a different-brand CC1101 module has been ordered to test whether this is module-specific — **not abandoned**
+
 ### Infrastructure
 - [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all three services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
 - [x] `systemctl status` in deploy uses `--lines=20 || true` — avoids hanging and tolerates services still in "activating" state
@@ -250,7 +286,8 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## What's next / TODO
 
-- [ ] **Davis Vantage Vue** — ESPHome firmware written (`davis/davis-vantage-receiver.yaml`), hardware available; needs field testing and DB schema additions (e.g. `battery_low` column); `history_charting` event may need extending to include `davis` station type for wind/temp/rain
+- [ ] **Davis RF humidity/gust** — this transmitter's current CC1101 module never receives packet types 9 (gust) or 10 (humidity); AirLink-relayed humidity is an interim workaround, not a fix. A different-brand CC1101 has been ordered — when it arrives, re-enable the commented-out `CALIBRATION` packet-type histogram in `davis-vantage-receiver.yaml` and re-run the same 40-minute test. If it still fails, the RF/decode-side explanations have already been exhausted (see CONTEXT.md "Known Issues") and next steps would need to look at the console/protocol itself. **Not abandoned.**
+- [ ] `history_charting` event (`evt_aggregate_history_charting`) may need extending to include `davis` station type for wind/temp/rain — currently only aggregates `tempest`/`airlink`
 - [ ] Dashboard / charting — Grafana or similar consuming `history_charting` for 10-min resolution charts and `history` for raw data
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
 - [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with `online`/`offline` LWT and last-seen timestamp
@@ -267,3 +304,5 @@ bash scripts/lint      # ruff format + ruff check --fix
 - Do not bump `target-version` in `.ruff.toml` past `py311` without verifying production Python version and checking for syntax-breaking reformats (especially `except` clauses)
 - Do not use `NOW()` in DB queries or events — `recorded_at` is stored in UTC; use `UTC_TIMESTAMP()` to avoid a mismatch when the MariaDB server runs in a non-UTC timezone
 - Do not use `ADD COLUMN` without `IF NOT EXISTS` in migration files — `02_create_tables.sql` is the canonical full schema for fresh installs; migrations must be idempotent so they can run safely on either a fresh or an upgraded database
+- Do not assume an MQTT `+` wildcard can match part of a topic level — it must occupy an entire level (`airlink-+` is invalid; `+` or `airlink-<did>` literal are the only valid forms). If a subscriber needs to reach a dynamically-generated topic segment (like the AirLink's runtime-discovered device id), publish an additional fixed-name convenience topic instead of trying to wildcard around it
+- Do not set aggressive `reboot_timeout` values (e.g. ESPHome's `mqtt:`/`api:` components) without accounting for normal network flakiness — a 15s MQTT `reboot_timeout` caused the Davis receiver to silently reboot every 10-25 minutes on routine broker hiccups, resetting in-memory state each time. Repeating `Boot seems successful` log lines are the tell

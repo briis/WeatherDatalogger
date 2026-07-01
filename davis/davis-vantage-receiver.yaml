@@ -42,18 +42,51 @@ ota:
 
 # ─────────────────────────────────────────────────────────────
 # MQTT — set credentials in secrets.yaml
-# discovery: false — we publish our own structured topics;
-# ESPHome auto-discovery would create duplicate HA entities.
+# discovery: true — publishes ESPHome's built-in HA MQTT discovery config,
+# grouping all sensors under one "Davis Vantage Receiver" device, matching
+# how the Tempest/AirLink Python services register their devices.
+# api: is kept solely for remote `esphome logs`/OTA — do NOT also add this
+# node via Home Assistant's "ESPHome" integration UI, or entities would be
+# duplicated (once via native API, once via MQTT discovery).
 # ─────────────────────────────────────────────────────────────
 mqtt:
+  id: mqtt_client
   broker: !secret mqtt_broker
   port: 1883
   username: !secret mqtt_username
   password: !secret mqtt_password
   client_id: davis-vantage-receiver
-  discovery: false
+  discovery: true
   skip_cert_cn_check: true
-  reboot_timeout: 15s
+  # Was 15s — far too aggressive: any MQTT hiccup lasting >15s (which we've
+  # seen repeatedly throughout this session's logs) force-rebooted the whole
+  # device, silently resetting the CAL histogram globals before they could
+  # ever reach the 5-minute mark. Disabled so the device stays up through
+  # routine network blips; MQTT itself already auto-reconnects on its own.
+  reboot_timeout: 0s
+
+  # Interim humidity source: this transmitter never sends packet types 9
+  # (gust) or 10 (humidity) at all — confirmed by a 40-minute packet-type
+  # histogram capture (see CONTEXT.md "Known Issues"). Until different CC1101
+  # hardware is tried, borrow humidity from the co-located Davis AirLink
+  # sensor instead, so the comfort-metric calculations (dew point, heat
+  # index, vapor pressure, feels like) aren't permanently stuck at "unknown".
+  # NOTE: a "+" wildcard can't match "airlink-<did>" (a wildcard must occupy
+  # a whole topic level, not just a prefix within one), and the AirLink's
+  # device id is discovered at runtime from its own API, not fixed in
+  # config — so airlink_datalogger.py additionally publishes this reading to
+  # a small fixed-name convenience topic (weatherdatalogger/airlink/humidity)
+  # specifically so it can be subscribed to without knowing the device id.
+  # If RF humidity (ptype 10) ever starts arriving with new hardware, it
+  # will simply overwrite this value going forward — no conflict.
+  on_json_message:
+    - topic: weatherdatalogger/airlink/humidity
+      then:
+        - lambda: |-
+            if (x.containsKey("relative_humidity_pct")) {
+              float hum = x["relative_humidity_pct"];
+              id(davis_hum).publish_state(hum);
+            }
 
 # ─────────────────────────────────────────────────────────────
 # SPI bus for GERUI CC1101 868 MHz module
@@ -92,12 +125,25 @@ globals:
   - id: raw_wind_dir
     type: float
     initial_value: '0.0'
+  - id: wind_lull_min_ms
+    type: float
+    # 999.0 = "no sample yet this interval" sentinel, reset every 60s
+    initial_value: '999.0'
   - id: known_unit_id
     type: int
     # -1 = auto-lock on first valid station.
     # If your Vue is set to Transmitter ID 2, write initial_value: '1'
     # (Davis ID 1 = 0, ID 2 = 1, ID 3 = 2, etc.)
     initial_value: '-1'
+  # CALIBRATION (disabled — uncomment along with the matching lambda code
+  # below if testing new CC1101 hardware to check whether types 9/10 ever
+  # appear). Tally of every packet type seen (index = ptype 0-15).
+  # - id: ptype_counts
+  #   type: 'std::array<uint32_t, 16>'
+  #   initial_value: '{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}'
+  # - id: cal_tick
+  #   type: int
+  #   initial_value: '0'
 
 # ─────────────────────────────────────────────────────────────
 # CC1101 — 868 MHz EU configuration
@@ -106,7 +152,10 @@ cc1101:
   id: my_cc1101
   cs_pin: GPIO5
   gdo0_pin: GPIO4
-  frequency: 868.35MHz         # Centre frequency covering all 5 EU hop channels passively
+  # Recentred from 868.35MHz using empirical freq_offset data captured at this
+  # bandwidth (avg ~-29.4kHz, two clusters 1.6kHz apart — normal crystal
+  # jitter, NOT separate hop channels; this transmitter does not hop).
+  frequency: 868.3206MHz
   modulation_type: GFSK
   symbol_rate: 19200
   fsk_deviation: 9.5kHz
@@ -184,7 +233,7 @@ cc1101:
           id(davis_lqi).publish_state(lqi);
 
           char topic[80];
-          char buf[256];
+          char buf[512];
           snprintf(topic, sizeof(topic), "%s/device_status", base_topic);
           snprintf(buf, sizeof(buf),
             "{\"rssi\":%.1f,\"lqi\":%d,\"battery_low\":%s}",
@@ -201,6 +250,9 @@ cc1101:
             if (std::isnan(id(davis_windgust).state)) {
               id(davis_windgust).publish_state(wind_avg_ms);
             }
+            if (wind_avg_ms < id(wind_lull_min_ms)) {
+              id(wind_lull_min_ms) = wind_avg_ms;
+            }
             snprintf(topic, sizeof(topic), "%s/rapid_wind", base_topic);
             snprintf(buf, sizeof(buf),
               "{\"wind_avg_ms\":%.2f,\"wind_direction_deg\":%.1f}",
@@ -215,6 +267,12 @@ cc1101:
 
           // ── 6. Packet-type-specific data ────────────────────────────
           uint8_t ptype = d[0] >> 4;
+          // CALIBRATION (disabled — uncomment to re-check whether new
+          // CC1101 hardware ever receives types 9/10; see globals above).
+          // id(ptype_counts)[ptype]++;
+          // ESP_LOGI("davis", "Packet type: %u (unit %d)", ptype, unit_id);
+          // ESP_LOGI("davis", "CAL type=%u rssi=%.1f lqi=%u freq_offset=%.0f",
+          //   ptype, rssi, lqi, freq_offset);
 
           if (ptype == 8) {
             // Outdoor temperature
@@ -228,6 +286,7 @@ cc1101:
           } else if (ptype == 9) {
             // Wind gust
             float gust_ms = d[3] * 0.44704f;
+            // CALIBRATION (disabled): ESP_LOGI("davis", "Gust candidate: %.2f m/s (raw byte d[3]=%u)", gust_ms, d[3]);
             if (gust_ms >= 0.0f && gust_ms < 90.0f) {
               id(davis_windgust).publish_state(gust_ms);
             }
@@ -236,6 +295,8 @@ cc1101:
             // Humidity
             uint16_t raw = (((uint16_t)(d[4] >> 4) & 0x03) << 8) | d[3];
             float hum = raw / 10.0f;
+            // CALIBRATION (disabled): ESP_LOGI("davis", "Humidity candidate: %.1f%% (raw=%u, d[3]=%u, d[4]=%u)",
+            //   hum, raw, d[3], d[4]);
             if (hum > 0.0f && hum <= 100.0f) {
               id(davis_hum).publish_state(hum);
               ESP_LOGI("davis", "Humidity: %.0f%%", hum);
@@ -253,9 +314,66 @@ cc1101:
               }
             }
             id(rain_count_prev) = tips;
+
+          }
+          // CALIBRATION (disabled) — ptype 3 is unknown on this transmitter
+          // (never documented as humidity upstream); it fires at the same
+          // cadence as temperature (8), but its raw bytes (d3 pinned at 255,
+          // d4 barely moving) don't track the real console humidity value,
+          // so it's very unlikely to be a disguised humidity/gust reading.
+          // Uncomment to log its raw bytes again if revisiting with new
+          // hardware: else if (ptype == 3) {
+          //   ESP_LOGI("davis", "Type 3 raw bytes: d1=%u d2=%u d3=%u d4=%u",
+          //     d[1], d[2], d[3], d[4]);
+          // }
+
+          // ── 7. Comfort metrics (same formulas as tempest_datalogger.py) ──
+          float t_c = id(davis_temp).state;
+          float rh  = id(davis_hum).state;
+
+          if (!std::isnan(t_c) && !std::isnan(rh)) {
+            float t_f = t_c * 9.0f / 5.0f + 32.0f;
+            float v_mph = wind_avg_ms * 2.23694f;
+
+            // Dew point (Magnus formula)
+            float gamma = std::log(rh / 100.0f) + 17.625f * t_c / (243.04f + t_c);
+            id(davis_dew_point).publish_state(243.04f * gamma / (17.625f - gamma));
+
+            // Vapor pressure
+            id(davis_vapor_pressure).publish_state(
+              (rh / 100.0f) * 6.112f * std::exp(17.67f * t_c / (t_c + 243.5f)));
+
+            // Heat index (Rothfusz regression, valid ≥80°F and ≥40% RH)
+            float heat_index_c = t_c;
+            if (t_f >= 80.0f && rh >= 40.0f) {
+              float hi_f = -42.379f + 2.04901523f * t_f + 10.14333127f * rh
+                - 0.22475541f * t_f * rh - 6.83783e-3f * t_f * t_f
+                - 5.481717e-2f * rh * rh + 1.22874e-3f * t_f * t_f * rh
+                + 8.5282e-4f * t_f * rh * rh - 1.99e-6f * t_f * t_f * rh * rh;
+              heat_index_c = (hi_f - 32.0f) * 5.0f / 9.0f;
+            }
+            id(davis_heat_index).publish_state(heat_index_c);
+
+            // Wind chill (valid ≤50°F and >3 mph)
+            float wind_chill_c = t_c;
+            if (t_f <= 50.0f && v_mph > 3.0f) {
+              float wc_f = 35.74f + 0.6215f * t_f - 35.75f * std::pow(v_mph, 0.16f)
+                + 0.4275f * t_f * std::pow(v_mph, 0.16f);
+              wind_chill_c = (wc_f - 32.0f) * 5.0f / 9.0f;
+            }
+            id(davis_wind_chill).publish_state(wind_chill_c);
+
+            // Feels like: heat index above 80°F/40%, wind chill below 50°F/>3mph, else actual temp
+            if (t_f >= 80.0f && rh >= 40.0f) {
+              id(davis_feels_like).publish_state(heat_index_c);
+            } else if (t_f <= 50.0f && v_mph > 3.0f) {
+              id(davis_feels_like).publish_state(wind_chill_c);
+            } else {
+              id(davis_feels_like).publish_state(t_c);
+            }
           }
 
-          // ── 7. Consolidated observation ─────────────────────────────
+          // ── 8. Consolidated observation ─────────────────────────────
           // Published on every packet using the latest known values for
           // all fields. Fields not yet received remain absent (JSON null
           // equivalent — the DB writer treats missing keys as SQL NULL).
@@ -284,14 +402,41 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"rain_rate_mmh\":%.1f", id(davis_rain_rate).state);
 
+          if (!std::isnan(id(davis_wind_lull).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_lull_ms\":%.2f", id(davis_wind_lull).state);
+
+          if (!std::isnan(id(davis_dew_point).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"dew_point_c\":%.1f", id(davis_dew_point).state);
+
+          if (!std::isnan(id(davis_vapor_pressure).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"vapor_pressure_mb\":%.2f", id(davis_vapor_pressure).state);
+
+          if (!std::isnan(id(davis_heat_index).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"heat_index_c\":%.1f", id(davis_heat_index).state);
+
+          if (!std::isnan(id(davis_wind_chill).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_chill_c\":%.1f", id(davis_wind_chill).state);
+
+          if (!std::isnan(id(davis_feels_like).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"feels_like_c\":%.1f", id(davis_feels_like).state);
+
           snprintf(buf + pos, sizeof(buf) - pos,
             ",\"battery_low\":%s}", battery_low ? "true" : "false");
 
           id(mqtt_client).publish(topic, buf);
 
 # ─────────────────────────────────────────────────────────────
-# Rain rate — derived every 60s from the accumulation delta,
-# since tips arrive irregularly and can't be rated individually.
+# Rain rate and wind lull — derived every 60s.
+# Rain rate: from the accumulation delta, since tips arrive
+# irregularly and can't be rated individually.
+# Wind lull: minimum wind sample seen during the interval
+# (mirrors how gust is the transmitter's own rolling max).
 # ─────────────────────────────────────────────────────────────
 interval:
   - interval: 60s
@@ -300,6 +445,25 @@ interval:
           float delta = id(rain_total_mm) - id(rain_total_mm_last_interval);
           id(davis_rain_rate).publish_state(delta * 60.0f);
           id(rain_total_mm_last_interval) = id(rain_total_mm);
+
+          if (id(wind_lull_min_ms) < 900.0f) {
+            id(davis_wind_lull).publish_state(id(wind_lull_min_ms));
+          }
+          id(wind_lull_min_ms) = 999.0f;
+
+          // CALIBRATION (disabled — uncomment along with ptype_counts/
+          // cal_tick globals above to re-run the packet-type histogram
+          // check against new CC1101 hardware):
+          // id(cal_tick)++;
+          // if (id(cal_tick) % 5 == 0) {
+          //   char hist[192];
+          //   int hpos = snprintf(hist, sizeof(hist), "CAL histogram:");
+          //   for (int t = 0; t < 16; t++) {
+          //     hpos += snprintf(hist + hpos, sizeof(hist) - hpos,
+          //       " %d=%u", t, id(ptype_counts)[t]);
+          //   }
+          //   ESP_LOGI("davis", "%s", hist);
+          // }
 
 # ─────────────────────────────────────────────────────────────
 # Sensors — exposed to both HA (native API) and MQTT
@@ -320,6 +484,8 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
+    # Sourced from the AirLink over MQTT (see mqtt: on_json_message above) —
+    # this transmitter doesn't send RF humidity packets (ptype 10).
     name: "Davis Humidity"
     id: davis_hum
     unit_of_measurement: "%"
@@ -364,11 +530,59 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
+    name: "Davis Wind Lull"
+    id: davis_wind_lull
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
     name: "Davis Wind Direction"
     id: davis_wind_dir
     unit_of_measurement: "°"
     device_class: wind_direction
     state_class: measurement_angle
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Dew Point"
+    id: davis_dew_point
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Vapor Pressure"
+    id: davis_vapor_pressure
+    unit_of_measurement: "hPa"
+    device_class: atmospheric_pressure
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "Davis Heat Index"
+    id: davis_heat_index
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Wind Chill"
+    id: davis_wind_chill
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Feels Like"
+    id: davis_feels_like
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
     accuracy_decimals: 1
 
   - platform: template

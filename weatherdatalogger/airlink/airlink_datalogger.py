@@ -437,6 +437,22 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
                     publish(client, cfg, topic, payload, log)
                     if ha_discovery:
                         publish_ha_discovery(did, client, cfg, log)
+
+                    # Fixed-name convenience topic (no dynamic device id) so
+                    # other subscribers can pick up humidity without an MQTT
+                    # wildcard — "+" can't match a partial segment like
+                    # "airlink-<did>", only a whole topic level. Used by the
+                    # Davis ESPHome receiver, whose current CC1101 hardware
+                    # never receives RF humidity/gust (see CONTEXT.md).
+                    humidity = payload.get("relative_humidity_pct")
+                    if humidity is not None:
+                        publish(
+                            client,
+                            cfg,
+                            f"{base}/airlink/humidity",
+                            {"relative_humidity_pct": humidity},
+                            log,
+                        )
             except Exception:
                 log.exception("Unexpected error in poll loop")
             time.sleep(interval_s)

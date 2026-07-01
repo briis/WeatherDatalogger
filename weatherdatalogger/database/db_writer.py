@@ -22,6 +22,7 @@ import configparser
 import json
 import logging
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -91,6 +92,7 @@ _OBS_FIELDS: tuple[str, ...] = (
     "vapor_pressure_mb",
     "air_density_kgm3",
     "battery_volts",
+    "battery_low",
     # Air quality — Davis AirLink (NULL for other station types)
     "pm_1_ugm3",
     "pm_2p5_ugm3",
@@ -267,9 +269,17 @@ def _on_message(
 
     # Derive station type from the topic segment: "tempest-ST-XXXXX" → "tempest"
     try:
-        station_type = msg.topic.split("/")[1].split("-")[0]
+        station_segment = msg.topic.split("/")[1]
+        station_type = station_segment.split("-")[0]
     except IndexError:
+        station_segment = "unknown"
         station_type = "unknown"
+
+    # Davis (ESPHome) has no hardware serial or clock sync, unlike the
+    # Tempest/AirLink Python dataloggers — fall back to the topic segment
+    # and message-arrival time so its observations aren't dropped as malformed.
+    payload.setdefault("serial_number", station_segment)
+    payload.setdefault("timestamp", int(time.time()))
 
     log.debug("Message on %s", msg.topic)
     writer.write_observation(payload, station_type)
