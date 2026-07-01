@@ -21,8 +21,13 @@ weatherdatalogger/
     current                — current conditions JSON object
     forecast_hourly        — hourly forecast JSON array (up to forecast_hours entries)
     forecast_daily         — 10-day daily forecast JSON array
-  davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, planned)
-    <sensor topics>
+  davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, active)
+    observation            — flat JSON: wind, temp, rain(+rate), derived
+                              comfort metrics; relative_humidity_pct is
+                              relayed from the AirLink over MQTT, NOT from
+                              this station's own RF link (see Known Issues)
+    rapid_wind
+    device_status
   airlink-<did>/           ← Davis AirLink air quality sensor (Python service)
     observation            — PM1/PM2.5/PM10, AQI, temperature, humidity
 ```
@@ -45,10 +50,16 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 ### Davis Vantage Vue
 - 868 MHz ISM band wireless sensor suite (EU frequency plan)
 - Protocol is community-reverse-engineered (not officially documented)
-- Receiver: **ESP32-WROOM-32** (30-pin devkit) + **GERUI CC1101** (868.35 MHz, CRC-16/CCITT, 5 EU hop channels)
+- Receiver: **ESP32-WROOM-32** (30-pin devkit) + **GERUI CC1101** — recentred to
+  868.3206MHz / 102kHz filter (empirically derived; see Known Issues), CRC-16/CCITT
 - Runs **ESPHome** firmware (`davis/davis-vantage-receiver.yaml`) which handles RF decoding and MQTT publishing
-- ESPHome also exposes sensors to Home Assistant via the native API
-- **Status: active — hardware available, ESPHome firmware written**
+- HA entities come from ESPHome's own MQTT discovery (`mqtt: discovery: true`), grouped
+  under one "Davis Vantage Receiver" device — same visual result as Tempest/AirLink's
+  hand-rolled discovery, just via ESPHome's built-in mechanism instead
+- `api:` is kept solely for remote `esphome logs`/OTA — this node must NOT also be
+  added via Home Assistant's "ESPHome" integration UI, or entities would duplicate
+- **Status: active and field-tested — temperature/wind/rain reliable; humidity/gust
+  not receivable over RF on this hardware (workaround in place, see Known Issues)**
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter
@@ -58,6 +69,66 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - Temperature and humidity readings are included (device internal sensors, used for PM correction)
 - AQI (US EPA) is computed from NowCast concentration before publishing
 - **Status: active**
+
+---
+
+## Known Issues
+
+### Davis Vantage Vue never receives RF humidity/gust packets
+
+The Vantage Vue ISS transmits wind + temperature + rain reliably, but **packet
+types 9 (wind gust) and 10 (humidity) never occur on this hardware** — confirmed
+by a 40-minute on-device packet-type histogram capture (every one of the 16
+possible 4-bit packet types was tallied continuously; only types 3, 5, 8, 14
+ever appeared, with zero occurrences of 9 or 10). This was investigated
+extensively before concluding it's not fixable in software:
+
+- **Not a frequency-hop problem** — `freq_offset` telemetry showed every packet
+  type arriving on the exact same frequency; this transmitter does not hop.
+- **Not a filter-bandwidth/noise-floor problem** — recentring the CC1101 onto
+  the empirically-measured true frequency (868.3206MHz) and narrowing
+  `filter_bandwidth` from 325kHz to 102kHz changed nothing about which packet
+  types are received.
+- **Not a decode-formula bug** — the humidity bit-math matches the documented
+  Davis protocol (DavisRFM69) exactly, and packet type 3 (received often, at
+  the same cadence as temperature) was checked and ruled out as a disguised
+  humidity/gust reading — its payload bytes don't track the real console
+  humidity value.
+- The physical console *does* show correct, live humidity, proving the ISS
+  can produce it somehow — just not via whatever this specific CC1101 module
+  and its passive-listening approach can capture.
+
+**Current workaround:** `airlink_datalogger.py` publishes an extra, fixed-name
+convenience topic (`weatherdatalogger/airlink/humidity`) alongside its normal
+`airlink-<did>/observation` topic — needed because the AirLink's device id is
+discovered at runtime (not fixed in config), and an MQTT `+` wildcard can't
+match a partial segment like `airlink-<did>` (a wildcard must occupy an
+entire topic level, learned the hard way when `airlink-+` failed to compile).
+`davis-vantage-receiver.yaml` subscribes to that fixed topic and feeds
+`relative_humidity_pct` into the same `davis_hum` sensor the on-device
+comfort-metric calculations (dew point, heat index, vapor pressure, feels
+like) already read from — so those stay populated using a nearby,
+independently-measured humidity reading instead of Davis's own RF link.
+
+**Not abandoned** — a different-brand CC1101 module has been ordered to test
+whether this is module-specific. The on-device packet-type histogram/`CAL`
+logging used to diagnose this is still in the yaml, commented out for quick
+re-enabling (search `CALIBRATION (disabled)` in `davis-vantage-receiver.yaml`).
+See the "What's next / TODO" list in AGENT.md.
+
+### MQTT `reboot_timeout` can mask its own diagnostics
+
+`mqtt: reboot_timeout: 15s` (ESPHome) forces a full device reboot if the MQTT
+connection stays down longer than the timeout. This silently reset in-memory
+diagnostic counters (globals) before they could accumulate — the symptom
+looked like "the data never gets created," when actually the device was
+rebooting every 10-25 minutes on routine MQTT hiccups. Fixed by setting
+`reboot_timeout: 0s` (disabled) on the Davis receiver. Worth checking on any
+other ESPHome node using aggressive `reboot_timeout` values combined with a
+flaky broker connection, and worth remembering generally: repeating
+`[I][safe_mode:142]: Boot seems successful` log lines are the tell that a
+device has been reboot-looping, even when nothing else in the log obviously
+says so.
 
 ---
 
