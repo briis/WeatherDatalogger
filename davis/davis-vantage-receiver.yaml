@@ -25,13 +25,13 @@ wifi:
 captive_portal:
 
 # Web UI for diagnostics (optional — can be removed)
-# web_server:
-#   port: 80
+web_server:
+  port: 80
 
 # HA native API (can be omitted if only MQTT is used)
-api:
-  encryption:
-    key: !secret ha_api_key
+#api:
+#  encryption:
+#    key: !secret ha_api_key
 
 logger:
   level: INFO
@@ -83,7 +83,7 @@ mqtt:
     - topic: weatherdatalogger/airlink/humidity
       then:
         - lambda: |-
-            if (x.containsKey("relative_humidity_pct")) {
+            if (x["relative_humidity_pct"].is<float>()) {
               float hum = x["relative_humidity_pct"];
               id(davis_hum).publish_state(hum);
             }
@@ -159,8 +159,13 @@ cc1101:
   modulation_type: GFSK
   symbol_rate: 19200
   fsk_deviation: 9.5kHz
-  filter_bandwidth: 650kHz     # 325kHz was too narrow — humidity (ptype 10) packets
-                                # were failing CRC on some hop channels; 650kHz fixed it
+  # Narrowed from 325kHz (originally wide to passively cover 5 hop channels
+  # that, per the freq_offset data above, don't actually get used — this is
+  # a single fixed-frequency transmitter). 19.2kbaud GFSK at 9.5kHz deviation
+  # only needs ~38kHz (Carson's rule); 102kHz keeps margin for thermal drift
+  # while cutting admitted noise ~5x vs the old 325kHz, which should improve
+  # the ~1-in-5 packet capture rate and may surface types 9/10 (gust/humidity).
+  filter_bandwidth: 650kHz
   magn_target: 33dB
   packet_mode: true
   packet_length: 8
@@ -211,9 +216,13 @@ cc1101:
           }
           if (!crc_ok) return;
 
+          uint8_t ptype = d[0] >> 4;
+
           // ── 3. Station-ID lock ──────────────────────────────────────
           uint8_t unit_id = d[0] & 0x07;
           bool battery_low = (d[0] & 0x08) != 0;
+
+          ESP_LOGI("davis", "Packet type: %d (0x%X), unit_id: %d", ptype, ptype, unit_id);
 
           if (id(known_unit_id) < 0) {
             id(known_unit_id) = unit_id;
@@ -266,11 +275,9 @@ cc1101:
           }
 
           // ── 6. Packet-type-specific data ────────────────────────────
-          uint8_t ptype = d[0] >> 4;
           // CALIBRATION (disabled — uncomment to re-check whether new
           // CC1101 hardware ever receives types 9/10; see globals above).
           // id(ptype_counts)[ptype]++;
-          // ESP_LOGI("davis", "Packet type: %u (unit %d)", ptype, unit_id);
           // ESP_LOGI("davis", "CAL type=%u rssi=%.1f lqi=%u freq_offset=%.0f",
           //   ptype, rssi, lqi, freq_offset);
 
