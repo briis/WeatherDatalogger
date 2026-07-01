@@ -25,8 +25,8 @@ wifi:
 captive_portal:
 
 # Web UI for diagnostics (optional — can be removed)
-web_server:
-  port: 80
+# web_server:
+#   port: 80
 
 # HA native API (can be omitted if only MQTT is used)
 api:
@@ -110,7 +110,8 @@ cc1101:
   modulation_type: GFSK
   symbol_rate: 19200
   fsk_deviation: 9.5kHz
-  filter_bandwidth: 325kHz     # Wide enough to capture all channels (~868.04–868.52)
+  filter_bandwidth: 650kHz     # 325kHz was too narrow — humidity (ptype 10) packets
+                                # were failing CRC on some hop channels; 650kHz fixed it
   magn_target: 33dB
   packet_mode: true
   packet_length: 8
