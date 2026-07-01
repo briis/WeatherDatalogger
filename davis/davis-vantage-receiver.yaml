@@ -86,6 +86,9 @@ globals:
   - id: rain_total_mm
     type: float
     initial_value: '0.0'
+  - id: rain_total_mm_last_interval
+    type: float
+    initial_value: '0.0'
   - id: raw_wind_dir
     type: float
     initial_value: '0.0'
@@ -205,7 +208,8 @@ cc1101:
           }
           if (wind_dir_deg >= 0.0f && wind_dir_deg <= 360.0f) {
             id(raw_wind_dir) = wind_dir_deg;
-            id(davis_wind_dir_combined).update();
+            id(davis_wind_dir).publish_state(wind_dir_deg);
+            id(davis_wind_cardinal).update();
           }
 
           // ── 6. Packet-type-specific data ────────────────────────────
@@ -275,10 +279,26 @@ cc1101:
           pos += snprintf(buf + pos, sizeof(buf) - pos,
             ",\"rain_accumulation_mm\":%.1f", id(rain_total_mm));
 
+          if (!std::isnan(id(davis_rain_rate).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"rain_rate_mmh\":%.1f", id(davis_rain_rate).state);
+
           snprintf(buf + pos, sizeof(buf) - pos,
             ",\"battery_low\":%s}", battery_low ? "true" : "false");
 
           id(mqtt_client).publish(topic, buf);
+
+# ─────────────────────────────────────────────────────────────
+# Rain rate — derived every 60s from the accumulation delta,
+# since tips arrive irregularly and can't be rated individually.
+# ─────────────────────────────────────────────────────────────
+interval:
+  - interval: 60s
+    then:
+      - lambda: |-
+          float delta = id(rain_total_mm) - id(rain_total_mm_last_interval);
+          id(davis_rain_rate).publish_state(delta * 60.0f);
+          id(rain_total_mm_last_interval) = id(rain_total_mm);
 
 # ─────────────────────────────────────────────────────────────
 # Sensors — exposed to both HA (native API) and MQTT
@@ -335,6 +355,22 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
+    name: "Davis Rain Rate"
+    id: davis_rain_rate
+    unit_of_measurement: "mm/h"
+    device_class: precipitation_intensity
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Davis Wind Direction"
+    id: davis_wind_dir
+    unit_of_measurement: "°"
+    device_class: wind_direction
+    state_class: measurement_angle
+    accuracy_decimals: 1
+
+  - platform: template
     name: "Davis RSSI"
     id: davis_rssi
     unit_of_measurement: "dBm"
@@ -352,8 +388,8 @@ sensor:
 
 text_sensor:
   - platform: template
-    name: "Davis Wind Direction"
-    id: davis_wind_dir_combined
+    name: "Davis Wind Cardinal"
+    id: davis_wind_cardinal
     icon: "mdi:compass-outline"
     lambda: |-
       float deg = id(raw_wind_dir);
@@ -362,6 +398,4 @@ text_sensor:
         "N","NNE","NE","ENE","E","ESE","SE","SSE",
         "S","SSW","SW","WSW","W","WNW","NW","NNW"
       };
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%.0f° %s", deg, pts[index]);
-      return std::string(buf);
+      return std::string(pts[index]);

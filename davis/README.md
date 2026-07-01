@@ -90,6 +90,7 @@ All topics are under `weatherdatalogger/davis-<id>/` where `<id>` is the locked 
   "air_temperature_c": 18.2,
   "relative_humidity_pct": 72.0,
   "rain_accumulation_mm": 4.2,
+  "rain_rate_mmh": 0.6,
   "battery_low": false
 }
 ```
@@ -108,6 +109,7 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `air_temperature_c` | °C | |
 | `relative_humidity_pct` | % | |
 | `rain_accumulation_mm` | mm | Cumulative since last boot; 0.2 mm per tip |
+| `rain_rate_mmh` | mm/h | Derived every 60s from the accumulation delta |
 | `battery_low` | boolean | True when transmitter battery is low |
 
 ---
@@ -174,10 +176,12 @@ The ESPHome firmware connects to HA via the **native API** (the `api:` block in 
 | Davis Humidity | Sensor | % |
 | Davis Wind Speed | Sensor | m/s |
 | Davis Wind Gust | Sensor | m/s |
+| Davis Wind Direction | Sensor | ° |
+| Davis Wind Cardinal | Text sensor | e.g. `WSW` |
 | Davis Daily Rain | Sensor | mm |
-| Davis Wind Direction | Text sensor | e.g. `247° WSW` |
+| Davis Rain Rate | Sensor | mm/h |
 | Davis Battery Low | Binary sensor | on/off |
 | Davis RSSI | Sensor (diagnostic) | dBm |
 | Davis LQI | Sensor (diagnostic) | — |
 
-Wind speed is smoothed with a 5-sample sliding window average. The text sensor shows degrees and the nearest compass point (16-point, English).
+Wind speed is smoothed with a 5-sample sliding window average. Wind direction is exposed both as a numeric degrees sensor (`device_class: wind_direction`) and as a separate 16-point compass text sensor. Rain rate is derived every 60 s from the change in accumulated rainfall.
