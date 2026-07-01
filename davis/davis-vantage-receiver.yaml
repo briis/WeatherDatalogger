@@ -309,6 +309,34 @@ cc1101:
               ESP_LOGI("davis", "Humidity: %.0f%%", hum);
             }
 
+          } else if (ptype == 3) {
+            // UV index — byte d[3] holds raw value (raw/10 = UV index).
+            // Davis marks "no sensor attached" with 0xFF.
+            if (d[3] == 0xFF) {
+              ESP_LOGI("davis", "UV: no sensor attached (raw=0xFF)");
+            } else {
+              float uv = d[3] / 10.0f;
+              if (uv >= 0.0f && uv < 20.0f) {
+                id(davis_uv_index).publish_state(uv);
+                ESP_LOGI("davis", "UV Index: %.1f", uv);
+              }
+            }
+
+          } else if (ptype == 5) {
+            // Solar radiation — 10-bit raw value across d[3] (high 8 bits)
+            // and top 2 bits of d[4]. "No sensor attached" is marked with
+            // all 10 bits set (0x3FF).
+            uint16_t raw = ((uint16_t)d[3] << 2) | (d[4] >> 6);
+            if (raw == 0x3FF) {
+              ESP_LOGI("davis", "Solar radiation: no sensor attached (raw=0x3FF)");
+            } else {
+              float solar_wm2 = raw * 1.757936f;
+              if (solar_wm2 >= 0.0f && solar_wm2 < 1800.0f) {
+                id(davis_solar_radiation).publish_state(solar_wm2);
+                ESP_LOGI("davis", "Solar Radiation: %.0f W/m²", solar_wm2);
+              }
+            }
+
           } else if (ptype == 14) {
             // Rainfall (tip counter, 0.2 mm per tip)
             int tips = ((int)d[3] + (((int)d[4] >> 7) << 8)) & 0x7F;
@@ -323,16 +351,6 @@ cc1101:
             id(rain_count_prev) = tips;
 
           }
-          // CALIBRATION (disabled) — ptype 3 is unknown on this transmitter
-          // (never documented as humidity upstream); it fires at the same
-          // cadence as temperature (8), but its raw bytes (d3 pinned at 255,
-          // d4 barely moving) don't track the real console humidity value,
-          // so it's very unlikely to be a disguised humidity/gust reading.
-          // Uncomment to log its raw bytes again if revisiting with new
-          // hardware: else if (ptype == 3) {
-          //   ESP_LOGI("davis", "Type 3 raw bytes: d1=%u d2=%u d3=%u d4=%u",
-          //     d[1], d[2], d[3], d[4]);
-          // }
 
           // ── 7. Comfort metrics (same formulas as tempest_datalogger.py) ──
           float t_c = id(davis_temp).state;
@@ -433,6 +451,14 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"feels_like_c\":%.1f", id(davis_feels_like).state);
 
+          if (!std::isnan(id(davis_uv_index).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"uv_index\":%.1f", id(davis_uv_index).state);
+
+          if (!std::isnan(id(davis_solar_radiation).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"solar_radiation_wm2\":%.0f", id(davis_solar_radiation).state);
+
           snprintf(buf + pos, sizeof(buf) - pos,
             ",\"battery_low\":%s}", battery_low ? "true" : "false");
 
@@ -491,12 +517,33 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    # Sourced from the AirLink over MQTT (see mqtt: on_json_message above) —
-    # this transmitter doesn't send RF humidity packets (ptype 10).
+    # RF humidity (ptype 10) is received directly since widening
+    # filter_bandwidth to 650kHz. AirLink MQTT fallback (see mqtt:
+    # on_json_message above) remains in place as a backup source.
     name: "Davis Humidity"
     id: davis_hum
     unit_of_measurement: "%"
     device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    # No UV sensor attached to this ISS — will read "unknown" unless one
+    # is fitted. Packet type 3 sends 0xFF as a "no sensor" sentinel.
+    name: "Davis UV Index"
+    id: davis_uv_index
+    unit_of_measurement: "UV Index"
+    icon: "mdi:sun-wireless"
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    # No solar radiation sensor attached to this ISS — will read "unknown"
+    # unless one is fitted. Packet type 5 sends 0x3FF as a "no sensor" sentinel.
+    name: "Davis Solar Radiation"
+    id: davis_solar_radiation
+    unit_of_measurement: "W/m²"
+    device_class: irradiance
     state_class: measurement
     accuracy_decimals: 0
 
