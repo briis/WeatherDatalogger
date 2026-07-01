@@ -155,7 +155,7 @@ cc1101:
   # Recentred from 868.35MHz using empirical freq_offset data captured at this
   # bandwidth (avg ~-29.4kHz, two clusters 1.6kHz apart — normal crystal
   # jitter, NOT separate hop channels; this transmitter does not hop).
-  frequency: 868.3206MHz
+  frequency: 868.35MHz
   modulation_type: GFSK
   symbol_rate: 19200
   fsk_deviation: 9.5kHz
