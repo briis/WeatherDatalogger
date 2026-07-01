@@ -325,6 +325,13 @@ _AIRLINK_SENSORS: list[tuple[str, str, str | None, str | None, str | None]] = [
     ("pct_pm_data_nowcast", "PM Data Quality (NowCast)", "%", None, "measurement"),
 ]
 
+# Icon overrides for sensors with no matching HA device class (and thus no
+# built-in icon).
+_SENSOR_ICON_OVERRIDES = {
+    "pct_pm_data_1h": "mdi:percent",
+    "pct_pm_data_nowcast": "mdi:percent",
+}
+
 _discovered: set[str] = set()
 
 
@@ -367,6 +374,9 @@ def publish_ha_discovery(
             payload["device_class"] = device_class
         if state_class:
             payload["state_class"] = state_class
+        icon = _SENSOR_ICON_OVERRIDES.get(field)
+        if icon:
+            payload["icon"] = icon
 
         topic = f"{prefix}/sensor/{unique_id}/config"
         try:

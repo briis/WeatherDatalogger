@@ -382,6 +382,7 @@ sensor:
   - platform: template
     name: "Davis LQI"
     id: davis_lqi
+    icon: "mdi:signal"
     state_class: measurement
     entity_category: diagnostic
     accuracy_decimals: 0

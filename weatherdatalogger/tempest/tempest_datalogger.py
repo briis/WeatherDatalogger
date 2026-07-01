@@ -731,9 +731,17 @@ _HA_DISCOVERY_MAP = {
 }
 
 # Icon overrides for sensors with no matching HA device class (and thus no
-# built-in icon).
+# built-in icon). Shared by both the obs/status discovery loop and the
+# forecast discovery loop — field names don't collide between the two.
 _SENSOR_ICON_OVERRIDES = {
     "uv_index": "mdi:sun-wireless",
+    "lightning_strike_count": "mdi:lightning-bolt",
+    "lightning_count_3h": "mdi:lightning-bolt",
+    "air_density_kgm3": "mdi:weight-kilogram",
+    "pressure_trend": "mdi:trending-up",
+    "sea_level_pressure_trend": "mdi:trending-up",
+    "condition": "mdi:weather-partly-cloudy",
+    "wind_bearing": "mdi:compass-outline",
 }
 
 _discovered: set[str] = set()
@@ -974,6 +982,9 @@ def _publish_forecast_discovery(
             pl["device_class"] = device_class
         if state_class:
             pl["state_class"] = state_class
+        icon = _SENSOR_ICON_OVERRIDES.get(field)
+        if icon:
+            pl["icon"] = icon
         topic = f"{prefix}/sensor/{uid}/config"
         try:
             result = client.publish(topic, json.dumps(pl), qos=1, retain=True)
