@@ -58,8 +58,8 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   hand-rolled discovery, just via ESPHome's built-in mechanism instead
 - `api:` is kept solely for remote `esphome logs`/OTA — this node must NOT also be
   added via Home Assistant's "ESPHome" integration UI, or entities would duplicate
-- **Status: active and field-tested — temperature/wind/rain reliable; humidity/gust
-  not receivable over RF on this hardware (workaround in place, see Known Issues)**
+- **Status: active and field-tested — temperature/wind/rain/humidity reliable; gust
+  not receivable over RF on this hardware, see Known Issues**
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter
@@ -74,41 +74,25 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 
 ## Known Issues
 
-### Davis Vantage Vue never receives RF humidity/gust packets
+### Davis Vantage Vue never receives RF gust packets
 
 The Vantage Vue ISS transmits wind + temperature + rain reliably, but **packet
-types 9 (wind gust) and 10 (humidity) never occur on this hardware** — confirmed
-by a 40-minute on-device packet-type histogram capture (every one of the 16
-possible 4-bit packet types was tallied continuously; only types 3, 5, 8, 14
-ever appeared, with zero occurrences of 9 or 10). This was investigated
-extensively before concluding it's not fixable in software:
+type 9 (wind gust) never occurs on this hardware** — confirmed by a 40-minute
+on-device packet-type histogram capture (every one of the 16 possible 4-bit
+packet types was tallied continuously; only types 3, 5, 8, 14 ever appeared,
+with zero occurrences of 9). Packet type 10 (humidity) was also missing under
+the original 102kHz `filter_bandwidth`, but widening it to 650kHz resolved
+that — humidity is now received directly over RF and no MQTT-relayed fallback
+is needed. Gust investigation before concluding it's not fixable in software:
 
 - **Not a frequency-hop problem** — `freq_offset` telemetry showed every packet
   type arriving on the exact same frequency; this transmitter does not hop.
-- **Not a filter-bandwidth/noise-floor problem** — recentring the CC1101 onto
-  the empirically-measured true frequency (868.3206MHz) and narrowing
-  `filter_bandwidth` from 325kHz to 102kHz changed nothing about which packet
-  types are received.
-- **Not a decode-formula bug** — the humidity bit-math matches the documented
-  Davis protocol (DavisRFM69) exactly, and packet type 3 (received often, at
-  the same cadence as temperature) was checked and ruled out as a disguised
-  humidity/gust reading — its payload bytes don't track the real console
-  humidity value.
-- The physical console *does* show correct, live humidity, proving the ISS
-  can produce it somehow — just not via whatever this specific CC1101 module
-  and its passive-listening approach can capture.
-
-**Current workaround:** `airlink_datalogger.py` publishes an extra, fixed-name
-convenience topic (`weatherdatalogger/airlink/humidity`) alongside its normal
-`airlink-<did>/observation` topic — needed because the AirLink's device id is
-discovered at runtime (not fixed in config), and an MQTT `+` wildcard can't
-match a partial segment like `airlink-<did>` (a wildcard must occupy an
-entire topic level, learned the hard way when `airlink-+` failed to compile).
-`davis-vantage-receiver.yaml` subscribes to that fixed topic and feeds
-`relative_humidity_pct` into the same `davis_hum` sensor the on-device
-comfort-metric calculations (dew point, heat index, vapor pressure, feels
-like) already read from — so those stay populated using a nearby,
-independently-measured humidity reading instead of Davis's own RF link.
+- **Not a decode-formula bug** — packet type 3 (received often, at the same
+  cadence as temperature) was checked and ruled out as a disguised gust
+  reading — its payload bytes don't track a plausible gust value.
+- The physical console *does* show correct, live gust, proving the ISS can
+  produce it somehow — just not via whatever this specific CC1101 module and
+  its passive-listening approach can capture.
 
 **Not abandoned** — a different-brand CC1101 module has been ordered to test
 whether this is module-specific. The on-device packet-type histogram/`CAL`

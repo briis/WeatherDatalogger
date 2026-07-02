@@ -65,29 +65,6 @@ mqtt:
   # routine network blips; MQTT itself already auto-reconnects on its own.
   reboot_timeout: 0s
 
-  # Interim humidity source: this transmitter never sends packet types 9
-  # (gust) or 10 (humidity) at all — confirmed by a 40-minute packet-type
-  # histogram capture (see CONTEXT.md "Known Issues"). Until different CC1101
-  # hardware is tried, borrow humidity from the co-located Davis AirLink
-  # sensor instead, so the comfort-metric calculations (dew point, heat
-  # index, vapor pressure, feels like) aren't permanently stuck at "unknown".
-  # NOTE: a "+" wildcard can't match "airlink-<did>" (a wildcard must occupy
-  # a whole topic level, not just a prefix within one), and the AirLink's
-  # device id is discovered at runtime from its own API, not fixed in
-  # config — so airlink_datalogger.py additionally publishes this reading to
-  # a small fixed-name convenience topic (weatherdatalogger/airlink/humidity)
-  # specifically so it can be subscribed to without knowing the device id.
-  # If RF humidity (ptype 10) ever starts arriving with new hardware, it
-  # will simply overwrite this value going forward — no conflict.
-  on_json_message:
-    - topic: weatherdatalogger/airlink/humidity
-      then:
-        - lambda: |-
-            if (x["relative_humidity_pct"].is<float>()) {
-              float hum = x["relative_humidity_pct"];
-              id(davis_hum).publish_state(hum);
-            }
-
 # ─────────────────────────────────────────────────────────────
 # SPI bus for GERUI CC1101 868 MHz module
 #
@@ -518,8 +495,7 @@ sensor:
 
   - platform: template
     # RF humidity (ptype 10) is received directly since widening
-    # filter_bandwidth to 650kHz. AirLink MQTT fallback (see mqtt:
-    # on_json_message above) remains in place as a backup source.
+    # filter_bandwidth to 650kHz.
     name: "Davis Humidity"
     id: davis_hum
     unit_of_measurement: "%"

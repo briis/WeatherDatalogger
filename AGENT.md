@@ -125,8 +125,8 @@ CC1101 on_packet (raw 8 bytes)
   → consolidated `observation` JSON published to weatherdatalogger/davis-<id>/observation
 ```
 
-### Known hardware limitation — no RF humidity or gust
-This specific transmitter **never sends packet types 9 (gust) or 10 (humidity)** — confirmed by a 40-minute continuous packet-type histogram (see CONTEXT.md "Known Issues" for the full investigation: ruled out frequency-hopping, filter bandwidth/noise floor, and decode-formula bugs). **Workaround in place:** `airlink_datalogger.py` publishes a fixed-name convenience topic (`weatherdatalogger/airlink/humidity`, no dynamic device id) that the Davis firmware subscribes to via `mqtt: on_json_message`, feeding the AirLink's humidity into the same `davis_hum` sensor the comfort-metric lambda code reads from. This is a stopgap, not a permanent design — see TODO.
+### RF humidity
+Packet type 10 (humidity) is decoded directly from RF (see `ptype == 10` in the packet-type decode) since `filter_bandwidth` was widened to 650 kHz. The earlier AirLink MQTT humidity fallback (`weatherdatalogger/airlink/humidity` → `davis_hum` via `mqtt: on_json_message`) has been removed now that RF humidity is reliable.
 
 ### Debugging this file
 - Diagnostic/calibration logging used to investigate the above is still present but **commented out** (search `CALIBRATION (disabled)`) — uncomment to re-run the same packet-type histogram test against different CC1101 hardware, rather than re-deriving the approach from scratch.
@@ -275,8 +275,8 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] HA integration via ESPHome's own `mqtt: discovery: true` (one grouped device), not the native API
 - [x] RF frequency/filter empirically recentred (868.3206MHz / 102kHz) based on measured `freq_offset`
 - [x] `reboot_timeout: 0s` — was 15s, which force-rebooted the device on routine MQTT hiccups
-- [x] Interim humidity workaround: subscribes to AirLink's `weatherdatalogger/airlink/humidity` convenience topic
-- [ ] **RF humidity/gust still unreceived on current CC1101 hardware** — see "Known hardware limitation" above and CONTEXT.md; a different-brand CC1101 module has been ordered to test whether this is module-specific — **not abandoned**
+- [x] RF humidity (ptype 10) now received directly since widening `filter_bandwidth` to 650 kHz — AirLink MQTT humidity fallback removed
+- [ ] **RF gust (ptype 9) still unreceived on current CC1101 hardware** — see CONTEXT.md "Known Issues"; a different-brand CC1101 module has been ordered to test whether this is module-specific — **not abandoned**
 
 ### Infrastructure
 - [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all three services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
@@ -286,7 +286,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## What's next / TODO
 
-- [ ] **Davis RF humidity/gust** — this transmitter's current CC1101 module never receives packet types 9 (gust) or 10 (humidity); AirLink-relayed humidity is an interim workaround, not a fix. A different-brand CC1101 has been ordered — when it arrives, re-enable the commented-out `CALIBRATION` packet-type histogram in `davis-vantage-receiver.yaml` and re-run the same 40-minute test. If it still fails, the RF/decode-side explanations have already been exhausted (see CONTEXT.md "Known Issues") and next steps would need to look at the console/protocol itself. **Not abandoned.**
+- [ ] **Davis RF gust** — this transmitter's current CC1101 module still never receives packet type 9 (gust); humidity (ptype 10) is now received reliably since widening `filter_bandwidth` to 650 kHz. A different-brand CC1101 has been ordered — when it arrives, re-enable the commented-out `CALIBRATION` packet-type histogram in `davis-vantage-receiver.yaml` and re-run the same 40-minute test. If it still fails, the RF/decode-side explanations have already been exhausted (see CONTEXT.md "Known Issues") and next steps would need to look at the console/protocol itself. **Not abandoned.**
 - [ ] `history_charting` event (`evt_aggregate_history_charting`) may need extending to include `davis` station type for wind/temp/rain — currently only aggregates `tempest`/`airlink`
 - [ ] Dashboard / charting — Grafana or similar consuming `history_charting` for 10-min resolution charts and `history` for raw data
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
