@@ -5,6 +5,14 @@ substitutions:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  on_boot:
+    then:
+      - lambda: |-
+          // Publish the restored (or freshly-initialized) daily rain total
+          // immediately, so the sensor reads 0/actual-value on boot instead
+          // of sitting at "Unknown" until the next tip. See rain_total_mm's
+          // restore_value comment in the globals section.
+          id(davis_rain).publish_state(id(rain_total_mm));
 
 esp32:
   board: esp32dev
@@ -21,6 +29,23 @@ wifi:
   ap:
     ssid: "Davis-Vantage-Fallback"
     password: "changeme123"
+
+# ─────────────────────────────────────────────────────────────
+# Time — used solely to reset the daily rain total at local
+# midnight (see the on_time trigger and rain_total_mm below).
+# ─────────────────────────────────────────────────────────────
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Copenhagen  # adjust if the receiver isn't in Denmark
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - lambda: |-
+              id(rain_total_mm) = 0.0f;
+              id(davis_rain).publish_state(0.0f);
 
 captive_portal:
 
@@ -92,9 +117,19 @@ spi:
 globals:
   - id: rain_count_prev
     type: int
+    restore_value: yes
+    # Raw hardware tip-counter baseline (0-127, wraps). Persisted across
+    # reboots so the first packet after a restart can compute a correct
+    # delta against it, instead of re-seeding blind and silently dropping
+    # any tips that happened during the (usually brief) reboot gap.
     initial_value: '-1'
   - id: rain_total_mm
     type: float
+    restore_value: yes
+    # Today's accumulated rain. Persisted across reboots (paired with
+    # rain_count_prev above) so a mid-day restart doesn't lose rain already
+    # counted; reset to 0 once daily at local midnight by the `time:`
+    # component's on_time trigger.
     initial_value: '0.0'
   - id: rain_last_tip_ms
     type: uint32_t
