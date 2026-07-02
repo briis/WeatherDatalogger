@@ -262,8 +262,8 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] All timestamps stored in UTC (db_writer uses `datetime.fromtimestamp(..., tz=UTC)`)
 - [x] systemd service unit (`database/systemd/weatherdb-writer.service`) with `After=mariadb.service` and `Restart=on-failure`
 - [x] Migration system: numbered SQL files in `database/migrations/`, tracked in `schema_migrations`; migrations use `ADD COLUMN IF NOT EXISTS` for idempotency
-- [x] `combined_realtime` view — merges latest readings from `tempest` and `airlink` stations into one row; LEFT JOIN so it works without an AirLink registered
-- [x] `history_charting` table — pre-aggregated 10-minute combined windows (one row per clock-aligned UTC window); field aggregations: AVG for temperature/pressure/humidity/solar, MIN for lull, MAX for gust/rain rate, circular AVG for wind direction, SUM for rain accumulation, MAX for AQI
+- [x] `combined_realtime` view — merges latest readings from `davis` (primary weather), `tempest` (pressure/lightning/UV/solar/wet-bulb/delta-T/air-density/battery-volts — sensors the Davis ISS lacks), and `airlink` (air quality) into one row; LEFT JOINs so it works without Tempest/AirLink registered (`database/migrations/20260702_davis_primary_combined_view.sql`)
+- [x] `history_charting` table — pre-aggregated 10-minute combined windows (one row per clock-aligned UTC window), same Davis/Tempest/AirLink source split as the view; field aggregations: AVG for temperature/pressure/humidity/solar, MIN for lull, MAX for gust/rain rate, circular AVG for wind direction, SUM for rain accumulation, MAX for AQI/low-battery
 - [x] `evt_aggregate_history_charting` MariaDB event — fires every 10 min, 30-min lookback, `INSERT IGNORE` for idempotency; uses `UTC_TIMESTAMP()` throughout (not `NOW()`) to match UTC-stored `recorded_at`
 - [x] MariaDB event scheduler enabled via `/etc/mysql/mariadb.conf.d/99-local.cnf`
 
@@ -272,6 +272,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] Field-tested against real hardware — temperature/wind speed+direction/rain(+rate)/wind lull/battery-low all reliable
 - [x] Derived comfort metrics computed on-device (dew point, vapor pressure, heat index, wind chill, feels like) — same formulas as `tempest_datalogger.py`
 - [x] `battery_low` DB column added (`database/migrations/20260701_add_battery_low.sql`)
+- [x] Promoted to primary weather source in `combined_realtime`/`history_charting`, now that it's field-tested — Tempest kept only for pressure/lightning/UV/solar/wet-bulb/delta-T/air-density/battery-volts, which Davis doesn't sense (`database/migrations/20260702_davis_primary_combined_view.sql`)
 - [x] HA integration via ESPHome's own `mqtt: discovery: true` (one grouped device), not the native API
 - [x] RF frequency/filter empirically recentred (868.3206MHz / 102kHz) based on measured `freq_offset`
 - [x] `reboot_timeout: 0s` — was 15s, which force-rebooted the device on routine MQTT hiccups
@@ -287,7 +288,6 @@ bash scripts/lint      # ruff format + ruff check --fix
 ## What's next / TODO
 
 - [ ] **Davis RF gust** — this transmitter's current CC1101 module still never receives packet type 9 (gust); humidity (ptype 10) is now received reliably since widening `filter_bandwidth` to 650 kHz. A different-brand CC1101 has been ordered — when it arrives, re-enable the commented-out `CALIBRATION` packet-type histogram in `davis-vantage-receiver.yaml` and re-run the same 40-minute test. If it still fails, the RF/decode-side explanations have already been exhausted (see CONTEXT.md "Known Issues") and next steps would need to look at the console/protocol itself. **Not abandoned.**
-- [ ] `history_charting` event (`evt_aggregate_history_charting`) may need extending to include `davis` station type for wind/temp/rain — currently only aggregates `tempest`/`airlink`
 - [ ] Dashboard / charting — Grafana or similar consuming `history_charting` for 10-min resolution charts and `history` for raw data
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
 - [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with `online`/`offline` LWT and last-seen timestamp

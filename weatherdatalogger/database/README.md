@@ -116,36 +116,41 @@ Both `realtime` and `history` share the same observation columns:
 
 ### `combined_realtime` (view)
 
-A single-row view that merges the latest readings from all station types into one record. Weather fields are sourced from the `tempest` station; air quality fields from the `airlink` station. Air quality columns are `NULL` if no AirLink station has been registered yet.
+A single-row view that merges the latest readings from all station types into one record. Most weather fields are sourced from the `davis` station; pressure, lightning, UV, solar, illuminance, wet bulb/delta T, air density, and battery voltage come from `tempest` (the Davis ISS has no sensors for these); air quality fields come from `airlink`. Tempest-only and air quality columns are `NULL` until those stations are registered.
 
 **Use this view as the primary source for dashboards and downstream consumers** — it hides the per-station layout of `realtime` and provides a unified snapshot of all current conditions.
 
 | Column | Source |
 |---|---|
-| `recorded_at` | Tempest — timestamp of the latest weather observation |
+| `recorded_at` | Davis — timestamp of the latest weather observation |
+| `tempest_recorded_at` | Tempest — timestamp of the latest Tempest-sourced observation |
 | `airlink_recorded_at` | AirLink — timestamp of the latest air quality observation |
-| All weather columns | Tempest |
+| Wind, temperature, humidity, dew point, feels like/heat index/wind chill, rain, vapor pressure | Davis |
+| `davis_battery_low` | Davis — low-battery flag (Davis reports low/ok, not voltage) |
+| Pressure, lightning, UV, solar, illuminance, wet bulb, delta T, air density, `battery_volts` | Tempest |
 | `pm_*`, `aqi_*` | AirLink |
 
 ### `history_charting`
 
-Pre-aggregated 10-minute summaries combining Tempest and AirLink data into a single row per window. Intended for charting where raw per-observation granularity is unnecessary. Populated automatically by the `evt_aggregate_history_charting` MariaDB event.
+Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data into a single row per window, using the same per-field source split as `combined_realtime`. Intended for charting where raw per-observation granularity is unnecessary. Populated automatically by the `evt_aggregate_history_charting` MariaDB event.
 
 `window_start` is a clock-aligned UTC timestamp (00:00, 00:10, 00:20, …) and is the unique key. The event looks back 30 minutes on each run so late-arriving messages are captured, and `INSERT IGNORE` makes re-runs safe.
 
 | Column group | Aggregation | Notes |
 |---|---|---|
-| `wind_avg_ms` | AVG | 10-min mean wind speed |
-| `wind_lull_ms` | MIN | Calmest reading in window |
-| `wind_gust_ms` | MAX | Peak gust in window |
-| `wind_direction_deg` | Circular AVG | Uses `ATAN2(AVG(SIN), AVG(COS))` — handles 0°/360° boundary correctly |
-| Temperature, humidity, pressure, solar, derived fields | AVG | |
-| `rain_accumulation_mm` | SUM | Per-minute delta from Tempest — summed for 10-min total |
-| `rain_rate_mmh` | MAX | Peak rain rate in window |
-| `pressure_trend`, `sea_level_pressure_trend` | Last value | Most recent text label in window |
-| Lightning fields | MAX / MIN | Rolling 3-hour counters from device |
-| `pm_*` (instant) | AVG | |
-| `aqi_pm2p5`, `aqi_pm10` | MAX | Worst-case AQI in window |
+| `wind_avg_ms` | AVG | 10-min mean wind speed (Davis) |
+| `wind_lull_ms` | MIN | Calmest reading in window (Davis) |
+| `wind_gust_ms` | MAX | Peak gust in window (Davis) |
+| `wind_direction_deg` | Circular AVG | Uses `ATAN2(AVG(SIN), AVG(COS))` — handles 0°/360° boundary correctly (Davis) |
+| Temperature, humidity, dew point, feels like/heat index/wind chill, vapor pressure | AVG | Davis |
+| Pressure, illuminance, UV, solar, wet bulb, delta T, air density, `battery_volts` | AVG | Tempest |
+| `rain_accumulation_mm` | SUM | Per-minute delta from Davis — summed for 10-min total |
+| `rain_rate_mmh` | MAX | Peak rain rate in window (Davis) |
+| `pressure_trend`, `sea_level_pressure_trend` | Last value | Most recent text label in window (Tempest) |
+| Lightning fields | MAX / MIN | Rolling 3-hour counters from device (Tempest) |
+| `davis_battery_low` | MAX | True if a low-battery reading occurred anywhere in the window |
+| `pm_*` (instant) | AVG | AirLink |
+| `aqi_pm2p5`, `aqi_pm10` | MAX | Worst-case AQI in window (AirLink) |
 
 **Requires the MariaDB event scheduler** — see [server installation step 8](../../README.md#8-enable-the-mariadb-event-scheduler).
 

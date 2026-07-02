@@ -221,7 +221,7 @@ Tables live in the `weatherdatalogger` database. All observation columns are sha
 | `realtime` | Latest reading per station (PK = `station_id`) |
 | `history` | Full time-series; indexed on `(station_id, recorded_at)` |
 | `history_charting` | Pre-aggregated 10-min combined windows (one row per UTC `window_start`); populated by `evt_aggregate_history_charting` event |
-| `combined_realtime` | View merging latest Tempest (weather) + AirLink (air quality) into one row; use this for dashboards |
+| `combined_realtime` | View merging latest Davis (primary weather) + Tempest (pressure/lightning/UV/solar — sensors Davis lacks) + AirLink (air quality) into one row; use this for dashboards |
 | `schema_migrations` | Tracks applied migration filenames |
 
 ### `history_charting` event

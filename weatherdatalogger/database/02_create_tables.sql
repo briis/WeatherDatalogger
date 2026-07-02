@@ -155,53 +155,57 @@ CREATE TABLE IF NOT EXISTS history (
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- View: combined_realtime
--- Merges the latest Tempest (weather) and AirLink (air quality) readings into
--- a single row. Uses LEFT JOIN so the view returns a row as long as a Tempest
--- station is registered, with air quality columns NULL until an AirLink is present.
+-- Merges the latest Davis (weather), Tempest (pressure/lightning/UV/solar —
+-- sensors the Davis ISS doesn't have), and AirLink (air quality) readings into
+-- a single row. Uses LEFT JOIN so the view returns a row as long as a Davis
+-- station is registered, with Tempest-only and air quality columns NULL until
+-- those stations are present.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW combined_realtime AS
 SELECT
     -- Timestamps
-    t.recorded_at                   AS recorded_at,
+    d.recorded_at                   AS recorded_at,
+    t.recorded_at                   AS tempest_recorded_at,
     a.recorded_at                   AS airlink_recorded_at,
-    -- Wind (Tempest)
-    t.wind_lull_ms,
-    t.wind_avg_ms,
-    t.wind_gust_ms,
-    t.wind_direction_deg,
-    -- Pressure (Tempest)
+    -- Wind (Davis)
+    d.wind_lull_ms,
+    d.wind_avg_ms,
+    d.wind_gust_ms,
+    d.wind_direction_deg,
+    -- Pressure (Tempest — Davis ISS has no barometer)
     t.station_pressure_mb,
     t.sea_level_pressure_mb,
     t.pressure_trend_mb,
     t.pressure_trend,
     t.sea_level_pressure_trend_mb,
     t.sea_level_pressure_trend,
-    -- Temperature & humidity (Tempest)
-    t.air_temperature_c,
-    t.relative_humidity_pct,
-    t.dew_point_c,
+    -- Temperature & humidity (Davis)
+    d.air_temperature_c,
+    d.relative_humidity_pct,
+    d.dew_point_c,
     t.wet_bulb_c,
     t.delta_t_c,
-    t.feels_like_c,
-    t.heat_index_c,
-    t.wind_chill_c,
-    -- Solar & UV (Tempest)
+    d.feels_like_c,
+    d.heat_index_c,
+    d.wind_chill_c,
+    -- Solar & UV (Tempest — no sensor fitted on the Davis ISS)
     t.illuminance_lux,
     t.uv_index,
     t.solar_radiation_wm2,
-    -- Rain (Tempest)
-    t.rain_accumulation_mm,
-    t.rain_rate_mmh,
-    -- Lightning (Tempest)
+    -- Rain (Davis)
+    d.rain_accumulation_mm,
+    d.rain_rate_mmh,
+    -- Lightning (Tempest — Davis has no lightning detector)
     t.lightning_last_detected,
     t.lightning_count_3h,
     t.lightning_min_dist_3h_km,
     t.lightning_max_dist_3h_km,
-    -- Air properties (Tempest)
-    t.vapor_pressure_mb,
+    -- Air properties
+    d.vapor_pressure_mb,
     t.air_density_kgm3,
-    -- Device (Tempest)
+    -- Device
     t.battery_volts,
+    d.battery_low                   AS davis_battery_low,
     -- Air quality — PM1/PM2.5/PM10 (AirLink)
     a.pm_1_ugm3,
     a.pm_2p5_ugm3,
@@ -221,9 +225,17 @@ FROM
         SELECT r.*
         FROM   realtime r
         JOIN   stations s ON r.station_id = s.station_id
+        WHERE  s.station_type = 'davis'
+        LIMIT  1
+    ) d
+LEFT JOIN
+    (
+        SELECT r.*
+        FROM   realtime r
+        JOIN   stations s ON r.station_id = s.station_id
         WHERE  s.station_type = 'tempest'
         LIMIT  1
-    ) t
+    ) t ON TRUE
 LEFT JOIN
     (
         SELECT r.*
@@ -243,13 +255,13 @@ CREATE TABLE IF NOT EXISTS history_charting (
     id                          BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
     window_start                DATETIME          NOT NULL COMMENT '10-min boundary UTC (floor)',
 
-    -- Wind (Tempest) — lull=MIN, avg=AVG, gust=MAX, dir=circular AVG
+    -- Wind (Davis) — lull=MIN, avg=AVG, gust=MAX, dir=circular AVG
     wind_lull_ms                FLOAT             NULL,
     wind_avg_ms                 FLOAT             NULL,
     wind_gust_ms                FLOAT             NULL,
     wind_direction_deg          SMALLINT UNSIGNED NULL,
 
-    -- Pressure (Tempest) — AVG; trend text = last value in window
+    -- Pressure (Tempest — Davis has no barometer) — AVG; trend text = last value in window
     station_pressure_mb         FLOAT             NULL,
     sea_level_pressure_mb       FLOAT             NULL,
     pressure_trend_mb           FLOAT             NULL,
@@ -257,7 +269,7 @@ CREATE TABLE IF NOT EXISTS history_charting (
     sea_level_pressure_trend_mb FLOAT             NULL,
     sea_level_pressure_trend    VARCHAR(16)       NULL,
 
-    -- Temperature & humidity (Tempest) — AVG
+    -- Temperature & humidity (Davis, except wet bulb / delta T which stay Tempest) — AVG
     air_temperature_c           FLOAT             NULL,
     relative_humidity_pct       FLOAT             NULL,
     dew_point_c                 FLOAT             NULL,
@@ -267,27 +279,28 @@ CREATE TABLE IF NOT EXISTS history_charting (
     heat_index_c                FLOAT             NULL,
     wind_chill_c                FLOAT             NULL,
 
-    -- Solar & UV (Tempest) — AVG
+    -- Solar & UV (Tempest — no sensor fitted on the Davis ISS) — AVG
     illuminance_lux             INT UNSIGNED      NULL,
     uv_index                    FLOAT             NULL,
     solar_radiation_wm2         FLOAT             NULL,
 
-    -- Rain (Tempest) — accumulation=SUM (per-minute delta), rate=MAX
+    -- Rain (Davis) — accumulation=SUM (per-minute delta), rate=MAX
     rain_accumulation_mm        FLOAT             NULL,
     rain_rate_mmh               FLOAT             NULL,
 
-    -- Lightning (Tempest)
+    -- Lightning (Tempest — Davis has no lightning detector)
     lightning_last_detected     DATETIME          NULL,
     lightning_count_3h          SMALLINT UNSIGNED NULL,
     lightning_min_dist_3h_km    FLOAT             NULL,
     lightning_max_dist_3h_km    FLOAT             NULL,
 
-    -- Air properties (Tempest) — AVG
+    -- Air properties — vapor pressure (Davis) / air density (Tempest) — AVG
     vapor_pressure_mb           FLOAT             NULL,
     air_density_kgm3            FLOAT             NULL,
 
-    -- Device (Tempest) — AVG
+    -- Device
     battery_volts               FLOAT             NULL,
+    davis_battery_low           BOOLEAN           NULL,
 
     -- Air quality (AirLink) — instant PM=AVG, pre-averaged PM=AVG, AQI=MAX
     pm_1_ugm3                   FLOAT             NULL,
@@ -357,6 +370,7 @@ DO
         vapor_pressure_mb,
         air_density_kgm3,
         battery_volts,
+        davis_battery_low,
         pm_1_ugm3,
         pm_2p5_ugm3,
         pm_2p5_1h_ugm3,
@@ -373,15 +387,15 @@ DO
     )
     SELECT
         window_start,
-        -- Wind
-        MIN(CASE WHEN station_type = 'tempest' THEN wind_lull_ms END),
-        AVG(CASE WHEN station_type = 'tempest' THEN wind_avg_ms END),
-        MAX(CASE WHEN station_type = 'tempest' THEN wind_gust_ms END),
+        -- Wind (Davis)
+        MIN(CASE WHEN station_type = 'davis' THEN wind_lull_ms END),
+        AVG(CASE WHEN station_type = 'davis' THEN wind_avg_ms END),
+        MAX(CASE WHEN station_type = 'davis' THEN wind_gust_ms END),
         MOD(ROUND(DEGREES(ATAN2(
-            AVG(CASE WHEN station_type = 'tempest' THEN SIN(RADIANS(wind_direction_deg)) END),
-            AVG(CASE WHEN station_type = 'tempest' THEN COS(RADIANS(wind_direction_deg)) END)
+            AVG(CASE WHEN station_type = 'davis' THEN SIN(RADIANS(wind_direction_deg)) END),
+            AVG(CASE WHEN station_type = 'davis' THEN COS(RADIANS(wind_direction_deg)) END)
         ))) + 360, 360),
-        -- Pressure
+        -- Pressure (Tempest)
         AVG(CASE WHEN station_type = 'tempest' THEN station_pressure_mb END),
         AVG(CASE WHEN station_type = 'tempest' THEN sea_level_pressure_mb END),
         AVG(CASE WHEN station_type = 'tempest' THEN pressure_trend_mb END),
@@ -394,32 +408,33 @@ DO
             CASE WHEN station_type = 'tempest' THEN sea_level_pressure_trend END
             ORDER BY recorded_at DESC SEPARATOR '\x1F'
         ), '\x1F', 1),
-        -- Temperature & humidity
-        AVG(CASE WHEN station_type = 'tempest' THEN air_temperature_c END),
-        AVG(CASE WHEN station_type = 'tempest' THEN relative_humidity_pct END),
-        AVG(CASE WHEN station_type = 'tempest' THEN dew_point_c END),
+        -- Temperature & humidity (Davis, except wet bulb / delta T)
+        AVG(CASE WHEN station_type = 'davis' THEN air_temperature_c END),
+        AVG(CASE WHEN station_type = 'davis' THEN relative_humidity_pct END),
+        AVG(CASE WHEN station_type = 'davis' THEN dew_point_c END),
         AVG(CASE WHEN station_type = 'tempest' THEN wet_bulb_c END),
         AVG(CASE WHEN station_type = 'tempest' THEN delta_t_c END),
-        AVG(CASE WHEN station_type = 'tempest' THEN feels_like_c END),
-        AVG(CASE WHEN station_type = 'tempest' THEN heat_index_c END),
-        AVG(CASE WHEN station_type = 'tempest' THEN wind_chill_c END),
-        -- Solar & UV
+        AVG(CASE WHEN station_type = 'davis' THEN feels_like_c END),
+        AVG(CASE WHEN station_type = 'davis' THEN heat_index_c END),
+        AVG(CASE WHEN station_type = 'davis' THEN wind_chill_c END),
+        -- Solar & UV (Tempest)
         ROUND(AVG(CASE WHEN station_type = 'tempest' THEN illuminance_lux END)),
         AVG(CASE WHEN station_type = 'tempest' THEN uv_index END),
         AVG(CASE WHEN station_type = 'tempest' THEN solar_radiation_wm2 END),
-        -- Rain
-        SUM(CASE WHEN station_type = 'tempest' THEN rain_accumulation_mm END),
-        MAX(CASE WHEN station_type = 'tempest' THEN rain_rate_mmh END),
-        -- Lightning
+        -- Rain (Davis)
+        SUM(CASE WHEN station_type = 'davis' THEN rain_accumulation_mm END),
+        MAX(CASE WHEN station_type = 'davis' THEN rain_rate_mmh END),
+        -- Lightning (Tempest)
         MAX(CASE WHEN station_type = 'tempest' THEN lightning_last_detected END),
         MAX(CASE WHEN station_type = 'tempest' THEN lightning_count_3h END),
         MIN(CASE WHEN station_type = 'tempest' THEN lightning_min_dist_3h_km END),
         MAX(CASE WHEN station_type = 'tempest' THEN lightning_max_dist_3h_km END),
         -- Air properties
-        AVG(CASE WHEN station_type = 'tempest' THEN vapor_pressure_mb END),
+        AVG(CASE WHEN station_type = 'davis' THEN vapor_pressure_mb END),
         AVG(CASE WHEN station_type = 'tempest' THEN air_density_kgm3 END),
         -- Device
         AVG(CASE WHEN station_type = 'tempest' THEN battery_volts END),
+        MAX(CASE WHEN station_type = 'davis' THEN battery_low END),
         -- Air quality (AirLink)
         AVG(CASE WHEN station_type = 'airlink' THEN pm_1_ugm3 END),
         AVG(CASE WHEN station_type = 'airlink' THEN pm_2p5_ugm3 END),
@@ -453,6 +468,6 @@ DO
                   - INTERVAL (MINUTE(UTC_TIMESTAMP()) % 10) MINUTE
                   - INTERVAL SECOND(UTC_TIMESTAMP()) SECOND
               )
-          AND s.station_type IN ('tempest', 'airlink')
+          AND s.station_type IN ('tempest', 'airlink', 'davis')
     ) windowed
     GROUP BY window_start;
