@@ -59,11 +59,7 @@ web_server:
 #    key: !secret ha_api_key
 
 logger:
-  # Temporarily DEBUG (was INFO) to catch the raw-packet-arrival diagnostic
-  # in on_packet above while tracking down why no packets are logging at
-  # all post-reflash. Revert to INFO once resolved — DEBUG will log every
-  # ~2.5s wind packet indefinitely otherwise.
-  level: DEBUG
+  level: INFO
 
 ota:
   - platform: esphome
@@ -233,12 +229,12 @@ cc1101:
   on_packet:
     then:
       - lambda: |-
-          // Temporary diagnostic (DEBUG-only, silent at the default INFO
-          // level) to distinguish "CC1101 isn't receiving raw RF frames at
-          // all" from "frames arrive but fail CRC" — if neither this line
-          // nor any "Packet type: ..." line appears with logger set to
-          // DEBUG, the radio itself isn't receiving anything and this
-          // isn't a firmware-logic issue. Safe to remove once diagnosed.
+          // Raw-packet-arrival diagnostic, silent at the default INFO
+          // level. Useful if packets ever stop again: set logger to DEBUG
+          // and check whether this line appears at all (radio not
+          // receiving anything — RF/hardware issue) vs. it appearing
+          // without any following "Packet type: ..." line (frames arrive
+          // but fail CRC — a decode-side issue).
           ESP_LOGD("davis", "Raw packet received: %d bytes", x.size());
           if (x.size() < 8) return;
 
