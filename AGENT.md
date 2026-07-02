@@ -8,12 +8,14 @@ full architecture overview.
 
 ## What this project is
 
-A weather data pipeline with two active Python services:
+A weather data pipeline with four active Python services:
 
 1. **Tempest datalogger** (`tempest/tempest_datalogger.py`) — receives WeatherFlow Tempest UDP broadcasts, computes derived metrics, and publishes everything to MQTT
-2. **DB writer** (`database/db_writer.py`) — subscribes to MQTT observation topics and persists readings to MariaDB (`realtime` + `history` tables)
+2. **AirLink datalogger** (`airlink/airlink_datalogger.py`) — polls the Davis AirLink's local REST API for air quality and publishes to MQTT
+3. **DB writer** (`database/db_writer.py`) — subscribes to MQTT observation topics and persists readings to MariaDB (`realtime` + `history` tables)
+4. **Meteobridge corrector** (`meteobridge/meteobridge_datalogger.py`) — optional; polls a Meteobridge Pro and republishes rain corrections to the Davis receiver's MQTT control topics (not a full station integration — see "Meteobridge corrector" below)
 
-A third, non-Python component handles Davis Vantage Vue via ESP32 + CC1101, running ESPHome firmware (`davis/davis-vantage-receiver.yaml`) rather than a Python service — see "Davis Vantage Vue (ESPHome firmware)" below. All station services/firmware publish under `weatherdatalogger/` so Home Assistant (or any MQTT subscriber) gets a unified feed.
+A fifth, non-Python component handles Davis Vantage Vue via ESP32 + CC1101, running ESPHome firmware (`davis/davis-vantage-receiver.yaml`) rather than a Python service — see "Davis Vantage Vue (ESPHome firmware)" below. All station services/firmware publish under `weatherdatalogger/` so Home Assistant (or any MQTT subscriber) gets a unified feed.
 
 ---
 
@@ -143,13 +145,18 @@ Packet type 9 (gust) has never been observed on this hardware (confirmed by a 40
 
 ### Rain accumulation & rate
 - `rain_total_mm` and `rain_count_prev` (the raw hardware tip-counter baseline) both use `restore_value: yes` so a reboot mid-day doesn't lose already-counted rain or misalign the tip delta. `rain_total_mm` resets to 0 once daily at local midnight via the `time: (sntp)` component's `on_time` trigger (`timezone: Europe/Copenhagen` — adjust if the receiver moves).
-- `esphome: on_boot:` immediately publishes the restored `rain_total_mm`, so the entity reads `0`/the actual value on boot instead of sitting at "Unknown" until the next tip.
+- `esphome: on_boot:` immediately publishes the restored `rain_total_mm`, so the entity reads `0`/the actual value on boot instead of sitting at "Unknown" until the next tip. It also publishes `0.0` for `davis_rain_rate` — unlike the daily total, an instantaneous rate has no meaningful "restored" value across a reboot; without this, `rain_tip_seen` resetting to `false` on boot means the 60s decay logic can't fire until a tip happens *after* boot, so if it doesn't rain again post-reboot the entity would otherwise keep showing whatever MQTT/HA last cached from before the reboot indefinitely — this bit a real debugging session (a stale 7.0mm/h reading looked like a decay-timeout bug but was actually this).
 - Rate is computed per-tip as `0.2mm / (time since the previous tip)`, mirroring the console's own algorithm, rather than a fixed 60s bucket sum — updates immediately per tip and isn't quantized to arbitrary clock windows.
 - The 60s `interval:` block decays the rate to `0` after 5 minutes without a tip **and** clears the `rain_tip_seen` flag. The flag-clear matters: without it, the first tip of a new rain event after a dry spell would compute its rate against an hours/days-old timestamp and report ~0 despite real rain just starting; clearing it makes that first tip skip rate calc (same as the very-first-tip-ever case) so the rate resumes correctly from the second tip of the new event.
 - Manual correction: publish a plain-mm float to the static control topic `weatherdatalogger/davis-vantage-receiver/set_daily_rain` (see `mqtt: on_message:` in the YAML, or run `davis/scripts/set_daily_rain.sh <mm>` — installed by `deploy.sh` alongside `deploy.sh` itself at `/opt/weatherdatalogger/scripts/`). Clamped to `< 500mm`; a rejected value is logged, not applied. This topic is intentionally static (not the dynamic `davis-<id>` prefix) since the transmitter ID auto-locks at runtime and isn't known at compile time.
+- A sibling control topic `weatherdatalogger/davis-vantage-receiver/set_rain_rate` (plain mm/h) does the same for rain rate, and also re-anchors `rain_last_tip_ms`/`rain_tip_seen` to the correction so the 5-minute decay and the next real tip's calculation both continue to behave correctly from the corrected value — without this, a correction landing while `rain_tip_seen` was still `false` (e.g. right after boot) would just sit there forever with nothing to ever decay or replace it.
+- Automated correction source: `weatherdatalogger/meteobridge/meteobridge_datalogger.py` polls a Meteobridge Pro (also wired to the same ISS, proven consistent with the console) and republishes both corrections on a fixed interval — see "Meteobridge corrector" below. This closes the reboot warm-up gap within one poll interval instead of waiting for two real tips.
 
 ### Solar radiation
 No sensor is fitted on this Vantage Vue ISS. The `raw == 0x3FF` "no sensor" sentinel (and later a `raw >= 1000` tolerance band) both proved unreliable against RF noise on this 10-bit field — occasional noise landed low enough to slip through as a bogus reading (e.g. raw≈1021 decoding as a fake ~1795 W/m²). Publishing is now disabled entirely in the `ptype == 5` handler; the entity correctly reads "Unavailable" in HA. Raw values are still logged at `ESP_LOGD` for reference if a real sensor is ever fitted (search for `davis_solar_radiation` to re-enable).
+
+### Meteobridge corrector
+`weatherdatalogger/meteobridge/meteobridge_datalogger.py` — a small Python service (structurally identical to `airlink_datalogger.py`: HTTP poll → parse → publish MQTT), **not** a full station integration. It has no observation topic and no database rows of its own; it exists solely to periodically correct the Davis receiver's rain entities via the `set_daily_rain`/`set_rain_rate` control topics described above, using a Meteobridge Pro wired to the same ISS as a more trustworthy source (proven consistent with the console — unlike the CC1101 receiver, it doesn't need a post-reboot warm-up period). Optional: the service logs an error and idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured. Requests use a hand-built template (`MM_TEMPLATE` — double-quoted keys, unquoted numeric macros) so Meteobridge's substituted response is already valid JSON; assumes Meteobridge is configured for metric units. See `weatherdatalogger/meteobridge/README.md`.
 
 ### Debugging this file
 - Diagnostic/calibration logging used to investigate the packet-type histogram is still present but **commented out** (search `CALIBRATION (disabled)`) — uncomment to re-run the same test against different CC1101 hardware, rather than re-deriving the approach from scratch.
@@ -162,7 +169,7 @@ No sensor is fitted on this Vantage Vue ISS. The `raw == 0x3FF` "no sensor" sent
 
 ## Config sections
 
-All three services share a single config file at `/opt/weatherdatalogger/config.ini`. Each service reads only the sections it needs — extra sections are ignored. The full template is `config.example.ini` at the repo root.
+All four services (tempest, airlink, db_writer, meteobridge) share a single config file at `/opt/weatherdatalogger/config.ini`. Each service reads only the sections it needs — extra sections are ignored. The full template is `config.example.ini` at the repo root.
 
 `client_id` is **not** in the shared config — each service's `DEFAULT_CONFIG` provides its own unique value so they don't collide on the MQTT broker.
 
@@ -170,9 +177,9 @@ All three services share a single config file at `/opt/weatherdatalogger/config.
 
 | Section | Notable keys |
 |---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `qos` — `retain` is also here but `meteobridge_datalogger.py` doesn't read it (corrections are always unretained, hardcoded) |
 | `[logging]` | `level`, `file` |
-| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
+| `[homeassistant]` | `discovery` (bool), `discovery_prefix` — not used by `meteobridge_datalogger.py`, which creates no entities of its own |
 
 ### Service-specific sections
 
@@ -183,6 +190,7 @@ All three services share a single config file at `/opt/weatherdatalogger/config.
 | | `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` |
 | `airlink_datalogger.py` | `[airlink]` | `host` (**REQUIRED**), `port` (80), `interval_s` (60), `timeout_s` (10) |
 | `db_writer.py` | `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
+| `meteobridge_datalogger.py` | `[meteobridge]` | `host` (optional — service idles if unset), `port` (80), `interval_s` (60), `timeout_s` (10) |
 
 `data_dir` (tempest) defaults to `/opt/weatherdatalogger/tempest`. That is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 
@@ -303,14 +311,20 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] `reboot_timeout: 0s` — was 15s, which force-rebooted the device on routine MQTT hiccups
 - [x] RF humidity (ptype 10) now received directly since widening `filter_bandwidth` to 650 kHz — AirLink MQTT humidity fallback removed
 - [x] Wind gust and lull both locally-derived — packet type 9 (Davis' own gust broadcast) is never sent by this ISS; gust is computed as the rolling max (lull as rolling min) of the ordinary wind samples present in every packet, over each 60s interval. Confirmed working. If a real ptype-9 packet is ever observed, it still takes priority. See CONTEXT.md "Known Issues".
-- [x] Rain rate switched from a fixed 60s bucket-sum to per-tip tip-interval calculation (mirrors the console's own algorithm) — updates immediately per tip instead of quantizing to arbitrary clock windows; decays to 0 after 5 minutes without a tip (tunable, was 20 minutes initially).
+- [x] Rain rate switched from a fixed 60s bucket-sum to per-tip tip-interval calculation (mirrors the console's own algorithm) — updates immediately per tip instead of quantizing to arbitrary clock windows; decays to 0 after 5 minutes without a tip (tunable, was 20 minutes initially); also explicitly zeroed on boot (see "Rain accumulation & rate" above — without this a stale pre-reboot value would persist in HA indefinitely if it doesn't rain again after a reboot).
 - [x] Daily rain total (`rain_total_mm`) persisted across reboots via `restore_value: yes` (paired with the `rain_count_prev` tip-counter baseline), published immediately on boot via `esphome: on_boot:` so it reads 0/actual instead of "Unknown", and reset to 0 once daily at local midnight via a `time: (sntp)` component.
-- [x] Manual daily-rain correction — publish to the static MQTT control topic `weatherdatalogger/davis-vantage-receiver/set_daily_rain`, or run `davis/scripts/set_daily_rain.sh <mm>` (installed by `deploy.sh` to `/opt/weatherdatalogger/scripts/`).
+- [x] Manual daily-rain and rain-rate correction — publish to the static MQTT control topics `weatherdatalogger/davis-vantage-receiver/set_daily_rain` / `set_rain_rate`, or run `davis/scripts/set_daily_rain.sh <mm>` (installed by `deploy.sh` to `/opt/weatherdatalogger/scripts/`).
 - [x] Solar radiation publishing disabled entirely — no sensor is fitted on this Vue, and RF noise on the 10-bit field made every "no sensor" sentinel check tried (exact `raw == 0x3FF` match, then a `raw >= 1000` tolerance band) unreliable enough that occasional garbage still got published as a fake reading. Entity now correctly reads "Unavailable"; raw values still logged at DEBUG for reference.
 - [x] Diagnostic "Restart" button (`button: platform: restart`) — available on the local web UI (`web_server: port: 80`) and as a diagnostic entity in HA.
 
+### Meteobridge corrector
+- [x] New service `weatherdatalogger/meteobridge/meteobridge_datalogger.py` — polls a Meteobridge Pro's REST template API (proven consistent with the console) and republishes rain_today/rain_rate as corrections to the Davis receiver's own MQTT control topics, on a configurable interval (default 60s). Not a full station integration — no observation topic, no database rows.
+- [x] Optional service — logs an error and idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured
+- [x] Full service scaffold: `config.example.ini`, `requirements.txt`, `systemd/meteobridge-datalogger.service`, `README.md` — structurally mirrors `airlink/` exactly
+- [x] `[meteobridge]` section added to the shared `weatherdatalogger/config.example.ini`
+
 ### Infrastructure
-- [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all three services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
+- [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all four services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
 - [x] `systemctl status` in deploy uses `--lines=20 || true` — avoids hanging and tolerates services still in "activating" state
 - [x] Single shared config at `/opt/weatherdatalogger/config.ini` — all services read from one file; auto-generates `db.cnf` for MySQL client
 - [x] Ruff linting (`scripts/lint`, `.ruff.toml`)

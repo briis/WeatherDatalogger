@@ -14,6 +14,16 @@ esphome:
           // restore_value comment in the globals section.
           id(davis_rain).publish_state(id(rain_total_mm));
 
+          // Rain rate has no meaningful "restored" value — unlike the daily
+          // total, an instantaneous rate genuinely doesn't apply across a
+          // reboot. Without this, the entity would just keep showing
+          // whatever MQTT/HA last cached from before the reboot forever,
+          // since rain_tip_seen resets to false on boot and the 60s decay
+          // logic can't fire until a tip happens *after* boot to set it —
+          // if it doesn't rain again post-reboot, that stale pre-reboot
+          // value would never get corrected.
+          id(davis_rain_rate).publish_state(0.0f);
+
 esp32:
   board: esp32dev
 
@@ -89,14 +99,16 @@ mqtt:
   # ever reach the 5-minute mark. Disabled so the device stays up through
   # routine network blips; MQTT itself already auto-reconnects on its own.
   reboot_timeout: 0s
-  # Manual correction for the daily rain total — e.g. after a reflash/reboot
-  # that landed between tips and lost sync with the physical tip counter, or
-  # if the running total simply drifts from the console's own reading over
-  # time. Uses a fixed control topic (not the dynamic weatherdatalogger/
-  # davis-<id> observation prefix, since the transmitter ID auto-locks at
-  # runtime and isn't known at compile time). Read the correct value off the
-  # console and publish it as plain mm, e.g.:
+  # Manual/automated corrections for the daily rain total and rain rate —
+  # e.g. after a reflash/reboot that landed between tips and lost sync with
+  # the physical tip counter, or a periodic correction source like the
+  # Meteobridge poller (weatherdatalogger/meteobridge/), which has proven
+  # consistent with the console. Both use fixed control topics (not the
+  # dynamic weatherdatalogger/davis-<id> observation prefix, since the
+  # transmitter ID auto-locks at runtime and isn't known at compile time).
+  # Publish a plain mm / mm-per-hour value, e.g.:
   #   mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
+  #   mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_rain_rate -m "2.3"
   on_message:
     - topic: weatherdatalogger/davis-vantage-receiver/set_daily_rain
       then:
@@ -108,6 +120,24 @@ mqtt:
               ESP_LOGI("davis", "Daily rain manually corrected to %.1f mm via MQTT", new_total);
             } else {
               ESP_LOGW("davis", "Ignored implausible daily-rain correction: %s", x.c_str());
+            }
+    - topic: weatherdatalogger/davis-vantage-receiver/set_rain_rate
+      then:
+        - lambda: |-
+            float new_rate = atof(x.c_str());
+            if (new_rate >= 0.0f && new_rate < 500.0f) {
+              id(davis_rain_rate).publish_state(new_rate);
+              // Anchor our own tip-interval baseline to this correction, so
+              // the existing 5-minute decay (and the next real tip's rate
+              // calculation) both continue to behave correctly from here —
+              // without this, rain_tip_seen could still be false (e.g.
+              // right after boot), leaving the corrected value stuck
+              // forever since nothing would ever decay or replace it.
+              id(rain_last_tip_ms) = millis();
+              id(rain_tip_seen) = true;
+              ESP_LOGI("davis", "Rain rate corrected to %.1f mm/h via MQTT", new_rate);
+            } else {
+              ESP_LOGW("davis", "Ignored implausible rain-rate correction: %s", x.c_str());
             }
 
 # ─────────────────────────────────────────────────────────────

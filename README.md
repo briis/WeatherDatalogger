@@ -10,15 +10,16 @@ A unified weather data pipeline that collects data from multiple weather station
 
 | Directory | Hardware | Status |
 |---|---|---|
-| [`tempest/`](tempest/) | WeatherFlow Tempest (UDP → MQTT) | Active |
+| [`weatherdatalogger/tempest/`](weatherdatalogger/tempest/) | WeatherFlow Tempest (UDP → MQTT) | Active |
 | [`davis/`](davis/) | Davis Vantage Vue (ESP32-WROOM-32 + CC1101, ESPHome) | Active — field-tested |
-| [`airlink/`](airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
+| [`weatherdatalogger/airlink/`](weatherdatalogger/airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
+| [`weatherdatalogger/meteobridge/`](weatherdatalogger/meteobridge/) | Meteobridge Pro rain corrector (HTTP polling → MQTT corrections) | Active, optional |
 
 ### Infrastructure (MQTT → storage)
 
 | Directory | Purpose | Status |
 |---|---|---|
-| [`database/`](database/) | WeatherDB Writer — persists observations to MariaDB | Active |
+| [`weatherdatalogger/database/`](weatherdatalogger/database/) | WeatherDB Writer — persists observations to MariaDB | Active |
 
 ---
 
@@ -41,11 +42,14 @@ weatherdatalogger/
     observation
     rapid_wind
     device_status
-  davis-vantage-receiver/   ← Static control topic — manual daily-rain correction
+  davis-vantage-receiver/   ← Static control topics — manual/automated rain corrections
     set_daily_rain
+    set_rain_rate
   airlink-<did>/            ← Davis AirLink air quality sensor
     observation
 ```
+
+The optional Meteobridge corrector (`weatherdatalogger/meteobridge/`) has no observation topic of its own — it only publishes to the `davis-vantage-receiver` control topics above.
 
 ---
 
@@ -142,7 +146,7 @@ mysql --defaults-extra-file=/opt/weatherdatalogger/db.cnf \
 
 ### 9. Create the shared config file
 
-All three services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
+All four services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
 
 ```bash
 cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
@@ -156,6 +160,7 @@ nano /opt/weatherdatalogger/config.ini
 | `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
 | `password` | `[database]` | Database password (set in step 6) |
 | `host` | `[airlink]` | IP address or hostname of your Davis AirLink (if installed) |
+| `host` | `[meteobridge]` | IP address or hostname of your Meteobridge Pro (optional — leave empty to skip; it idles rather than crash-loops) |
 
 Everything else has sensible defaults.
 
@@ -173,6 +178,10 @@ journalctl -u tempest-datalogger -f
 # AirLink datalogger (skip if you don't have an AirLink)
 systemctl enable --now airlink-datalogger
 journalctl -u airlink-datalogger -f
+
+# Meteobridge corrector (skip if you don't have a Meteobridge)
+systemctl enable --now meteobridge-datalogger
+journalctl -u meteobridge-datalogger -f
 ```
 
 On the first observation you should see a `Registered station` line in the DB writer log, then `Wrote … @ …` every 10–15 s.

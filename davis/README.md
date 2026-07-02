@@ -121,28 +121,33 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `relative_humidity_pct` | % | |
 | `dew_point_c`, `vapor_pressure_mb`, `heat_index_c`, `wind_chill_c`, `feels_like_c` | °C / hPa | Comfort metrics computed on-device from temperature/humidity/wind — same formulas as `tempest_datalogger.py` |
 | `rain_accumulation_mm` | mm | Today's accumulated rain; persisted across reboots, resets to 0 at local midnight; 0.2 mm per tip |
-| `rain_rate_mmh` | mm/h | Derived per-tip from the actual gap since the previous tip (like the console's own algorithm); decays to 0 after 5 minutes without a new tip |
+| `rain_rate_mmh` | mm/h | Derived per-tip from the actual gap since the previous tip (like the console's own algorithm); decays to 0 after 5 minutes without a new tip, and explicitly reset to 0 on every boot (an instantaneous rate has no valid "restored" value across a reboot, unlike the daily total) |
 | `uv_index` | UV Index | Packet type 3 decoded, but this ISS has no UV sensor fitted — will essentially never populate |
 | `solar_radiation_wm2` | W/m² | Not published — no solar sensor fitted, and RF noise made the "no sensor" sentinel unreliable enough that publishing was disabled entirely rather than risk showing a bogus value |
 | `battery_low` | boolean | True when transmitter battery is low |
 
 ---
 
-## Manual Daily Rain Correction
+## Manual & Automated Rain Corrections
 
-The receiver accumulates its own daily rain total from the raw RF tip counter, persisted across reboots. If it ever drifts from the console's own reading (e.g. a reflash that landed between tips), correct it by publishing to a fixed MQTT control topic — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
+The receiver accumulates its own daily rain total from the raw RF tip counter, persisted across reboots, and computes rain rate per-tip from the gap since the previous tip. Two known weak points: the daily total can drift from the console's own reading over time, and rain rate needs to see **two** tips after every reboot before it can compute a value (it briefly reads `0` after a reflash even if it's actively raining — see [`AGENT.md`](../AGENT.md#rain-accumulation--rate)).
+
+Both are correctable via fixed MQTT control topics — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
 
 ```bash
 mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
+mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_rain_rate -m "2.3"
 ```
 
-Or on the server, using the shared config for broker/credentials (installed by `deploy.sh` alongside its own script):
+Or on the server, for the daily total, using the shared config for broker/credentials (installed by `deploy.sh` alongside its own script):
 
 ```bash
 /opt/weatherdatalogger/scripts/set_daily_rain.sh 5.4
 ```
 
-By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. The value is clamped to `< 500mm` on-device (implausible values are logged and ignored, not applied).
+By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. Both values are clamped to `< 500mm` (or mm/h) on-device — implausible values are logged and ignored, not applied. Correcting rain rate also re-anchors the on-device tip-interval baseline (`rain_last_tip_ms`/`rain_tip_seen`), so the existing 5-minute decay and the next real tip's rate calculation both continue to behave correctly from the corrected value.
+
+**Automated correction:** if you have a Meteobridge Pro also wired to the same Vantage Vue ISS, [`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/) is a small service that polls it periodically and publishes both corrections automatically — closing the reboot warm-up gap within one poll interval instead of waiting for two real tips, and keeping the daily total continuously in sync. See its README for setup.
 
 ---
 

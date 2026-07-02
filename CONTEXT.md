@@ -31,13 +31,17 @@ weatherdatalogger/
                               publishing is disabled outright (see Known Issues)
     rapid_wind
     device_status
-  davis-vantage-receiver/  ← Static control topic (device name, not station
-    set_daily_rain            ID — not known at compile time): manual daily
-                               rain correction, e.g. after a reflash loses
-                               sync with the tip counter
+  davis-vantage-receiver/  ← Static control topics (device name, not station
+    set_daily_rain             ID — not known at compile time): manual/
+    set_rain_rate               automated corrections for the Davis
+                                 receiver's own rain entities, e.g. after a
+                                 reflash loses sync with the tip counter, or
+                                 from the Meteobridge corrector below
   airlink-<did>/           ← Davis AirLink air quality sensor (Python service)
     observation            — PM1/PM2.5/PM10, AQI, temperature, humidity
 ```
+
+The Meteobridge corrector (`meteobridge/meteobridge_datalogger.py`) is not a station — it has no observation topic of its own. It only publishes to the `davis-vantage-receiver/set_daily_rain` / `set_rain_rate` control topics above.
 
 `<serial>` for Tempest comes from the hub's UDP broadcast (`ST-…` for the sensor, `HB-…` for the hub).
 `<id>` for Davis is the station ID locked by the CC1101 receiver.
@@ -84,6 +88,13 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - Temperature and humidity readings are included (device internal sensors, used for PM correction)
 - AQI (US EPA) is computed from NowCast concentration before publishing
 - **Status: active**
+
+### Meteobridge Pro (optional)
+- Third-party bridge device, separately owned/configured, also wired to the same Vantage Vue ISS — not part of this project's own hardware, just a data source it can optionally consume
+- Exposes a local REST template API (`cgi-bin/template.cgi?template=...`) where `[bracket]` macros are substituted server-side — see the [Meteobridge Add-On Services wiki](https://www.meteobridge.com/wiki/index.php?title=Add-On_Services)
+- Proven consistent with the physical console, unlike the CC1101 receiver's own rain rate (which needs two tips after every reboot before it can compute a value)
+- `meteobridge_datalogger.py` polls it every 60s (configurable) and republishes rain_today/rain_rate as corrections to the Davis receiver's MQTT control topics — not its own station, no observation topic or database rows
+- **Status: active, optional** — the service idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured
 
 ---
 
@@ -166,9 +177,17 @@ WeatherDatalogger/                   ← repo root
 │   │   ├── systemd/
 │   │   │   └── weatherdb-writer.service
 │   │   └── README.md
+│   ├── meteobridge/                 ← Optional Meteobridge → Davis rain corrector
+│   │   ├── meteobridge_datalogger.py ← Main Python service (HTTP polling → MQTT
+│   │   │                                corrections, single file); no observation
+│   │   │                                topic or database rows of its own
+│   │   ├── requirements.txt        ← Runtime dependency: paho-mqtt
+│   │   ├── systemd/
+│   │   │   └── meteobridge-datalogger.service
+│   │   └── README.md
 │   ├── scripts/
 │   │   └── deploy.sh               ← Pull from GitHub, install all services, run migrations
-│   └── config.example.ini          ← Shared config template for all three services
+│   └── config.example.ini          ← Shared config template for all four services
 ├── davis/                           ← Davis Vantage Vue (ESPHome receiver)
 │   ├── davis-vantage-receiver.yaml ← ESPHome firmware (CC1101 RF → MQTT); flashed
 │   │                                  independently, not part of the LXC deploy
@@ -196,7 +215,8 @@ WeatherDatalogger/                   ← repo root
   - `tempest-datalogger` — files at `/opt/weatherdatalogger/tempest/`, venv at `.../tempest/venv`
   - `airlink-datalogger` — files at `/opt/weatherdatalogger/airlink/`, venv at `.../airlink/venv`
   - `weatherdb-writer` — files at `/opt/weatherdatalogger/database/`, venv at `.../database/venv`
-- **Single shared config** at `/opt/weatherdatalogger/config.ini` — all three services read from this one file; never overwritten by the deploy script
+  - `meteobridge-datalogger` — files at `/opt/weatherdatalogger/meteobridge/`, venv at `.../meteobridge/venv` (optional — idles if `[meteobridge] host` is unset)
+- **Single shared config** at `/opt/weatherdatalogger/config.ini` — all four services read from this one file; never overwritten by the deploy script
 - **MariaDB** running on the same LXC, bound to `0.0.0.0:3306` for network access
   - `db.cnf` (MySQL client format, `chmod 600`) auto-generated at `/opt/weatherdatalogger/db.cnf` by the deploy script from the shared `config.ini`
 - Deploy script: `sudo bash /opt/weatherdatalogger/scripts/deploy.sh`
@@ -267,7 +287,7 @@ Migrations are SQL files in `database/migrations/` named `YYYYMMDD_description.s
 
 ## Config Sections
 
-All three services read from a single shared `config.ini`. The template with all documented keys is `config.example.ini` at the repo root (deployed to `/opt/weatherdatalogger/config.example.ini`).
+All four services read from a single shared `config.ini`. The template with all documented keys is `config.example.ini` at the repo root (deployed to `/opt/weatherdatalogger/config.example.ini`).
 
 Each service uses only the sections relevant to it — extra sections are ignored by `configparser`.
 
@@ -275,11 +295,11 @@ Each service uses only the sections relevant to it — extra sections are ignore
 
 | Section | Key settings |
 |---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` — `meteobridge_datalogger.py` doesn't read `retain` (its corrections are always unretained, hardcoded) |
 | `[logging]` | `level`, `file` |
-| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
+| `[homeassistant]` | `discovery` (bool), `discovery_prefix` — not used by `meteobridge_datalogger.py`, which creates no entities of its own |
 
-> **Note:** `client_id` is NOT in the shared config — each service's `DEFAULT_CONFIG` provides its own unique default (`tempest-datalogger`, `airlink-datalogger`, `weatherdb-writer`).
+> **Note:** `client_id` is NOT in the shared config — each service's `DEFAULT_CONFIG` provides its own unique default (`tempest-datalogger`, `airlink-datalogger`, `weatherdb-writer`, `meteobridge-datalogger`).
 
 ### tempest_datalogger.py
 
@@ -304,6 +324,12 @@ Each service uses only the sections relevant to it — extra sections are ignore
 | Section | Key settings |
 |---|---|
 | `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
+
+### meteobridge_datalogger.py
+
+| Section | Key settings |
+|---|---|
+| `[meteobridge]` | `host` (optional — service idles rather than crash-loops if unset), `port` (80), `interval_s` (60), `timeout_s` (10) |
 
 ---
 
