@@ -89,6 +89,26 @@ mqtt:
   # ever reach the 5-minute mark. Disabled so the device stays up through
   # routine network blips; MQTT itself already auto-reconnects on its own.
   reboot_timeout: 0s
+  # Manual correction for the daily rain total — e.g. after a reflash/reboot
+  # that landed between tips and lost sync with the physical tip counter, or
+  # if the running total simply drifts from the console's own reading over
+  # time. Uses a fixed control topic (not the dynamic weatherdatalogger/
+  # davis-<id> observation prefix, since the transmitter ID auto-locks at
+  # runtime and isn't known at compile time). Read the correct value off the
+  # console and publish it as plain mm, e.g.:
+  #   mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
+  on_message:
+    - topic: weatherdatalogger/davis-vantage-receiver/set_daily_rain
+      then:
+        - lambda: |-
+            float new_total = atof(x.c_str());
+            if (new_total >= 0.0f && new_total < 500.0f) {
+              id(rain_total_mm) = new_total;
+              id(davis_rain).publish_state(new_total);
+              ESP_LOGI("davis", "Daily rain manually corrected to %.1f mm via MQTT", new_total);
+            } else {
+              ESP_LOGW("davis", "Ignored implausible daily-rain correction: %s", x.c_str());
+            }
 
 # ─────────────────────────────────────────────────────────────
 # SPI bus for GERUI CC1101 868 MHz module

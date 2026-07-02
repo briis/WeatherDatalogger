@@ -114,6 +114,24 @@ All field names follow the project standard — descriptive snake_case with SI u
 
 ---
 
+## Manual Daily Rain Correction
+
+The receiver accumulates its own daily rain total from the raw RF tip counter, persisted across reboots. If it ever drifts from the console's own reading (e.g. a reflash that landed between tips), correct it by publishing to a fixed MQTT control topic — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
+
+```bash
+mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
+```
+
+Or from the server, using the shared config for broker/credentials:
+
+```bash
+davis/scripts/set_daily_rain.sh 5.4
+```
+
+By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. The value is clamped to `< 500mm` on-device (implausible values are logged and ignored, not applied).
+
+---
+
 ## Setup
 
 ### 1. Create `secrets.yaml`
