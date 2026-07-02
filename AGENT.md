@@ -190,7 +190,7 @@ All four services (tempest, airlink, db_writer, meteobridge) share a single conf
 | | `[forecast]` | `enabled`, `station_id`, `api_key`, `location`, `interval_min`, `forecast_hours` |
 | `airlink_datalogger.py` | `[airlink]` | `host` (**REQUIRED**), `port` (80), `interval_s` (60), `timeout_s` (10) |
 | `db_writer.py` | `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
-| `meteobridge_datalogger.py` | `[meteobridge]` | `host` (optional — service idles if unset), `port` (80), `interval_s` (60), `timeout_s` (10) |
+| `meteobridge_datalogger.py` | `[meteobridge]` | `host` (optional — service idles if unset), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10) |
 
 `data_dir` (tempest) defaults to `/opt/weatherdatalogger/tempest`. That is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 

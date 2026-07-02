@@ -69,6 +69,8 @@ Settings live in the shared `/opt/weatherdatalogger/config.ini`. Meteobridge-spe
 [meteobridge]
 host       =               # REQUIRED — Meteobridge IP address or hostname
 port       = 80            # HTTP port (default 80)
+username   = meteobridge   # HTTP basic auth username — Meteobridge's own factory default; empty = no auth header sent
+password   =               # HTTP basic auth password
 interval_s = 60            # Poll interval in seconds
 timeout_s  = 10            # HTTP request timeout
 ```

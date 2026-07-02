@@ -329,7 +329,7 @@ Each service uses only the sections relevant to it — extra sections are ignore
 
 | Section | Key settings |
 |---|---|
-| `[meteobridge]` | `host` (optional — service idles rather than crash-loops if unset), `port` (80), `interval_s` (60), `timeout_s` (10) |
+| `[meteobridge]` | `host` (optional — service idles rather than crash-loops if unset), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — HTTP basic auth; empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10) |
 
 ---
 

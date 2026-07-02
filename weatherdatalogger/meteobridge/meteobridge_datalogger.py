@@ -28,6 +28,7 @@ Usage:
 """
 
 import argparse
+import base64
 import configparser
 import json
 import logging
@@ -46,6 +47,12 @@ DEFAULT_CONFIG = {
     "meteobridge": {
         "host": "",
         "port": "80",
+        # "meteobridge" is Meteobridge's own factory-default admin username;
+        # most units require HTTP basic auth for the template API even
+        # without other security configured. Set username to empty to send
+        # the request without an Authorization header at all.
+        "username": "meteobridge",
+        "password": "",
         "interval_s": "60",
         "timeout_s": "10",
     },
@@ -111,6 +118,15 @@ def load_config(path: str) -> configparser.ConfigParser:
 # ---------------------------------------------------------------------------
 
 
+def _auth_headers(mb: configparser.SectionProxy) -> dict[str, str]:
+    """Build a preemptive HTTP Basic Auth header, or none if username is blank."""
+    username = mb["username"].strip()
+    if not username:
+        return {}
+    token = base64.b64encode(f"{username}:{mb['password']}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
 def fetch_rain(
     cfg: configparser.ConfigParser, log: logging.Logger
 ) -> tuple[float, float] | None:
@@ -123,7 +139,8 @@ def fetch_rain(
     url = f"http://{host}:{port}/cgi-bin/template.cgi?{query}"
 
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+        req = urllib.request.Request(url, headers=_auth_headers(mb))  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             body = resp.read()
     except Exception:  # noqa: BLE001
         log.warning("Meteobridge request failed (%s)", url)
