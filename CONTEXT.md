@@ -58,8 +58,8 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   hand-rolled discovery, just via ESPHome's built-in mechanism instead
 - `api:` is kept solely for remote `esphome logs`/OTA — this node must NOT also be
   added via Home Assistant's "ESPHome" integration UI, or entities would duplicate
-- **Status: active and field-tested — temperature/wind/rain/humidity reliable; gust
-  not receivable over RF on this hardware, see Known Issues**
+- **Status: active and field-tested — temperature/wind/rain/humidity/gust all reliable
+  (gust is locally derived, not received over RF — see Known Issues)**
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter
@@ -74,7 +74,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 
 ## Known Issues
 
-### Davis Vantage Vue never receives RF gust packets
+### Davis Vantage Vue never receives RF gust packets — resolved by deriving gust locally
 
 The Vantage Vue ISS transmits wind + temperature + rain reliably, but **packet
 type 9 (wind gust) never occurs on this hardware** — confirmed by a 40-minute
@@ -91,14 +91,20 @@ is needed. Gust investigation before concluding it's not fixable in software:
   cadence as temperature) was checked and ruled out as a disguised gust
   reading — its payload bytes don't track a plausible gust value.
 - The physical console *does* show correct, live gust, proving the ISS can
-  produce it somehow — just not via whatever this specific CC1101 module and
-  its passive-listening approach can capture.
+  produce it somehow — but by locally tracking the rolling max of its own wind
+  samples over the last 60s, the same way the console evidently does, rather
+  than by receiving a separate gust broadcast.
 
-**Not abandoned** — a different-brand CC1101 module has been ordered to test
-whether this is module-specific. The on-device packet-type histogram/`CAL`
-logging used to diagnose this is still in the yaml, commented out for quick
-re-enabling (search `CALIBRATION (disabled)` in `davis-vantage-receiver.yaml`).
-See the "What's next / TODO" list in AGENT.md.
+**Fix**: gust is now derived on-device the same way the console does it —
+`wind_gust_max_ms` tracks the max of every `wind_avg_ms` sample (present in
+every packet) since the last 60s tick, and is published as `davis_windgust`
+on that tick (mirroring how wind lull is already the rolling min). The
+`ptype == 9` handling is left in place and still takes priority if a real
+gust packet is ever observed on different hardware. Confirmed working via
+field testing. The on-device packet-type histogram/`CAL` logging used to
+diagnose this is still in the yaml, commented out for quick re-enabling
+(search `CALIBRATION (disabled)` in `davis-vantage-receiver.yaml`), useful if
+this or the humidity/solar decoding ever needs re-validating on new hardware.
 
 ### MQTT `reboot_timeout` can mask its own diagnostics
 

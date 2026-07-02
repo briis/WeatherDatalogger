@@ -106,6 +106,17 @@ globals:
     type: float
     # 999.0 = "no sample yet this interval" sentinel, reset every 60s
     initial_value: '999.0'
+  - id: wind_gust_max_ms
+    type: float
+    # Locally-derived gust: max wind sample seen this interval.
+    # Packet type 9 (Davis' own "gust" broadcast) appears to never be
+    # sent by this ISS — confirmed absent from packet-type histogram
+    # even at 650kHz bandwidth, alongside humidity (type 10) which WAS
+    # recovered by the bandwidth change. Rather than depend on a packet
+    # type this transmitter may simply not emit, derive gust the same
+    # way the console itself likely does: rolling max of the ordinary
+    # wind samples present in every packet.
+    initial_value: '-1.0'
   - id: known_unit_id
     type: int
     # -1 = auto-lock on first valid station.
@@ -238,6 +249,9 @@ cc1101:
             }
             if (wind_avg_ms < id(wind_lull_min_ms)) {
               id(wind_lull_min_ms) = wind_avg_ms;
+            }
+            if (wind_avg_ms > id(wind_gust_max_ms)) {
+              id(wind_gust_max_ms) = wind_avg_ms;
             }
             snprintf(topic, sizeof(topic), "%s/rapid_wind", base_topic);
             snprintf(buf, sizeof(buf),
@@ -468,6 +482,15 @@ interval:
           }
           id(wind_lull_min_ms) = 999.0f;
 
+          // Locally-derived gust (see wind_gust_max_ms comment above).
+          // ptype==9 handling in the packet lambda still takes priority
+          // and will overwrite this if Davis' own gust packet is ever
+          // observed on this transmitter.
+          if (id(wind_gust_max_ms) >= 0.0f) {
+            id(davis_windgust).publish_state(id(wind_gust_max_ms));
+          }
+          id(wind_gust_max_ms) = -1.0f;
+
           // CALIBRATION (disabled — uncomment along with ptype_counts/
           // cal_tick globals above to re-run the packet-type histogram
           // check against new CC1101 hardware):
@@ -543,6 +566,10 @@ sensor:
           send_every: 1
 
   - platform: template
+    # Published every 60s as the max wind sample seen in that interval
+    # (see wind_gust_max_ms), since this transmitter has never been
+    # observed sending Davis' own ptype==9 gust packet. Also updated
+    # immediately from ptype==9 if that ever changes.
     name: "Davis Wind Gust"
     id: davis_windgust
     unit_of_measurement: "m/s"

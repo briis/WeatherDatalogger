@@ -277,7 +277,8 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] RF frequency/filter empirically recentred (868.3206MHz / 102kHz) based on measured `freq_offset`
 - [x] `reboot_timeout: 0s` — was 15s, which force-rebooted the device on routine MQTT hiccups
 - [x] RF humidity (ptype 10) now received directly since widening `filter_bandwidth` to 650 kHz — AirLink MQTT humidity fallback removed
-- [ ] **RF gust (ptype 9) still unreceived on current CC1101 hardware** — see CONTEXT.md "Known Issues"; a different-brand CC1101 module has been ordered to test whether this is module-specific — **not abandoned**
+- [x] Wind gust — packet type 9 (Davis' own gust broadcast) is never sent by this ISS; the console derives gust the same way, so gust is now computed locally as the rolling max of the ordinary wind samples (present in every packet) over each 60s interval (`wind_gust_max_ms` global), published alongside wind lull. Confirmed working. If a real ptype-9 packet is ever observed, it still takes priority. See CONTEXT.md "Known Issues".
+- [x] Solar radiation "no sensor" sentinel widened from an exact `raw == 0x3FF` match to a `raw >= 1000` tolerance band — on a Vue with no solar cell fitted, RF noise on the 10-bit field occasionally landed 1-2 counts short of the sentinel, slipping past the old check as a bogus near-1800 W/m² reading. The wider band still stays far below any realistic reading from a real sensor on a Pro2.
 
 ### Infrastructure
 - [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all three services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
@@ -287,7 +288,6 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## What's next / TODO
 
-- [ ] **Davis RF gust** — this transmitter's current CC1101 module still never receives packet type 9 (gust); humidity (ptype 10) is now received reliably since widening `filter_bandwidth` to 650 kHz. A different-brand CC1101 has been ordered — when it arrives, re-enable the commented-out `CALIBRATION` packet-type histogram in `davis-vantage-receiver.yaml` and re-run the same 40-minute test. If it still fails, the RF/decode-side explanations have already been exhausted (see CONTEXT.md "Known Issues") and next steps would need to look at the console/protocol itself. **Not abandoned.**
 - [ ] Dashboard / charting — Grafana or similar consuming `history_charting` for 10-min resolution charts and `history` for raw data
 - [ ] Unit tests for parser functions (no network required, just dicts in / dict out)
 - [ ] Health/watchdog topic: `weatherdatalogger/tempest-<serial>/status` with `online`/`offline` LWT and last-seen timestamp
