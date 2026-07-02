@@ -78,7 +78,7 @@ DEFAULT_CONFIG = {
 # PHP/CGI-style addslashes() to template output), which broke json.loads.
 # A plain comma-separated pair sidesteps that entirely — nothing for
 # Meteobridge to escape, and no JSON parser needed on our end either.
-MM_TEMPLATE = "[rain0total-act],[rain0rate-act]"
+MM_TEMPLATE = "[rain0total-daysum],[rain0rate-act]"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -283,8 +283,10 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
                         rain_today,
                         rain_rate,
                     )
-                    publish_correction(client, cfg, rain_total_topic, rain_today, log)
-                    publish_correction(client, cfg, rain_rate_topic, rain_rate, log)
+                    publish_correction(
+                        client, cfg, rain_total_topic, rain_today, log)
+                    publish_correction(
+                        client, cfg, rain_rate_topic, rain_rate, log)
             except Exception:
                 log.exception("Unexpected error in poll loop")
             time.sleep(interval_s)
@@ -302,7 +304,8 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
 
 def main() -> None:
     """Parse CLI arguments and run the datalogger."""
-    parser = argparse.ArgumentParser(description="Meteobridge → Davis rain corrector")
+    parser = argparse.ArgumentParser(
+        description="Meteobridge → Davis rain corrector")
     parser.add_argument(
         "--config",
         default="/opt/weatherdatalogger/config.ini",
