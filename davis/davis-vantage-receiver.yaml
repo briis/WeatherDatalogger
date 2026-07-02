@@ -59,7 +59,11 @@ web_server:
 #    key: !secret ha_api_key
 
 logger:
-  level: INFO
+  # Temporarily DEBUG (was INFO) to catch the raw-packet-arrival diagnostic
+  # in on_packet above while tracking down why no packets are logging at
+  # all post-reflash. Revert to INFO once resolved — DEBUG will log every
+  # ~2.5s wind packet indefinitely otherwise.
+  level: DEBUG
 
 ota:
   - platform: esphome
@@ -229,6 +233,13 @@ cc1101:
   on_packet:
     then:
       - lambda: |-
+          // Temporary diagnostic (DEBUG-only, silent at the default INFO
+          // level) to distinguish "CC1101 isn't receiving raw RF frames at
+          // all" from "frames arrive but fail CRC" — if neither this line
+          // nor any "Packet type: ..." line appears with logger set to
+          // DEBUG, the radio itself isn't receiving anything and this
+          // isn't a firmware-logic issue. Safe to remove once diagnosed.
+          ESP_LOGD("davis", "Raw packet received: %d bytes", x.size());
           if (x.size() < 8) return;
 
           // ── 1. Bit-reversal (LSB→MSB) ──────────────────────────────
@@ -376,26 +387,17 @@ cc1101:
             }
 
           } else if (ptype == 5) {
-            // Solar radiation — 10-bit raw value across d[3] (high 8 bits)
-            // and top 2 bits of d[4]. "No sensor attached" is marked with
-            // all 10 bits set (0x3FF), but on a Vantage Vue with no solar
-            // cell fitted, RF noise on this wider 10-bit field occasionally
-            // flips 1-2 bits near the sentinel instead of landing on it
-            // exactly (e.g. raw=1021 decoding as a bogus ~1795 W/m² reading
-            // that still passes the old exact-match check). A tolerance
-            // band catches that while staying well above any realistic
-            // reading from an actual sensor on a Vantage Pro2 (irradiance
-            // this high does not occur outdoors).
+            // Solar radiation — no sensor is fitted on this Vantage Vue
+            // ISS. Even the widened >=1000 "no sensor" tolerance band
+            // (see git history) didn't reliably catch all the RF noise on
+            // this 10-bit field — some garbage still landed low enough to
+            // slip through as a bogus reading. Publishing is disabled
+            // entirely for now so the entity correctly reads "Unavailable"
+            // in HA instead of occasionally showing a fake value; raw
+            // values are still logged at DEBUG for reference. Re-enable
+            // publish_state() below if a real solar sensor is ever fitted.
             uint16_t raw = ((uint16_t)d[3] << 2) | (d[4] >> 6);
-            if (raw >= 1000) {
-              ESP_LOGI("davis", "Solar radiation: no sensor attached (raw=%u)", raw);
-            } else {
-              float solar_wm2 = raw * 1.757936f;
-              if (solar_wm2 >= 0.0f && solar_wm2 < 1800.0f) {
-                id(davis_solar_radiation).publish_state(solar_wm2);
-                ESP_LOGI("davis", "Solar Radiation: %.0f W/m²", solar_wm2);
-              }
-            }
+            ESP_LOGD("davis", "Solar radiation raw=%u (publishing disabled — no sensor fitted)", raw);
 
           } else if (ptype == 14) {
             // Rainfall (tip counter, 0.2 mm per tip)
@@ -555,11 +557,12 @@ interval:
   - interval: 60s
     then:
       - lambda: |-
-          // No tip in the last 20 minutes — force the rate back to 0
+          // No tip in the last 5 minutes — force the rate back to 0
           // instead of leaving it stuck at whatever the last tip implied.
-          // 20 min comfortably covers the tip gap for light-but-real rain
-          // (e.g. ~0.6 mm/h implies one tip every 20 min) while still
-          // clearing a stale reading reasonably promptly once it stops.
+          // Chosen for responsiveness once rain stops; the trade-off is
+          // that genuinely light, steady rain below ~2.4 mm/h (one tip
+          // every >5 min) will read as 0 between tips instead of holding
+          // a light-rain value.
           // Also clears rain_tip_seen: without this, the *first* tip of a
           // new rain event after a long dry spell would compute its rate
           // against a stale rain_last_tip_ms from hours/days earlier,
@@ -568,7 +571,7 @@ interval:
           // treated like the very first tip ever (rate calc skipped, same
           // as the rain_tip_seen==false case below) — rate then resumes
           // correctly from the second tip of the new event onward.
-          if (id(rain_tip_seen) && (millis() - id(rain_last_tip_ms) > 1200000UL)) {
+          if (id(rain_tip_seen) && (millis() - id(rain_last_tip_ms) > 300000UL)) {
             id(davis_rain_rate).publish_state(0.0f);
             id(rain_tip_seen) = false;
           }
@@ -640,8 +643,9 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    # No solar radiation sensor attached to this ISS — will read "unknown"
-    # unless one is fitted. Packet type 5 sends 0x3FF as a "no sensor" sentinel.
+    # No solar radiation sensor attached to this ISS. publish_state() is
+    # disabled in the ptype==5 handler above (RF noise made the "no sensor"
+    # sentinel unreliable), so this correctly stays "Unavailable" in HA.
     name: "Solar Radiation"
     id: davis_solar_radiation
     unit_of_measurement: "W/m²"
@@ -775,3 +779,8 @@ text_sensor:
         "S","SSW","SW","WSW","W","WNW","NW","NNW"
       };
       return std::string(pts[index]);
+
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: diagnostic
