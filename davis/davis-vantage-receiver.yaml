@@ -302,10 +302,17 @@ cc1101:
           } else if (ptype == 5) {
             // Solar radiation — 10-bit raw value across d[3] (high 8 bits)
             // and top 2 bits of d[4]. "No sensor attached" is marked with
-            // all 10 bits set (0x3FF).
+            // all 10 bits set (0x3FF), but on a Vantage Vue with no solar
+            // cell fitted, RF noise on this wider 10-bit field occasionally
+            // flips 1-2 bits near the sentinel instead of landing on it
+            // exactly (e.g. raw=1021 decoding as a bogus ~1795 W/m² reading
+            // that still passes the old exact-match check). A tolerance
+            // band catches that while staying well above any realistic
+            // reading from an actual sensor on a Vantage Pro2 (irradiance
+            // this high does not occur outdoors).
             uint16_t raw = ((uint16_t)d[3] << 2) | (d[4] >> 6);
-            if (raw == 0x3FF) {
-              ESP_LOGI("davis", "Solar radiation: no sensor attached (raw=0x3FF)");
+            if (raw >= 1000) {
+              ESP_LOGI("davis", "Solar radiation: no sensor attached (raw=%u)", raw);
             } else {
               float solar_wm2 = raw * 1.757936f;
               if (solar_wm2 >= 0.0f && solar_wm2 < 1800.0f) {
