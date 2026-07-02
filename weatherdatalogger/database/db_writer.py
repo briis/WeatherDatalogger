@@ -131,6 +131,18 @@ _SQL_ENSURE_STATION = (
     "INSERT IGNORE INTO stations (station_id, station_type) VALUES (%s, %s)"
 )
 
+# rain_raw_log — temporary table for the raw RF tip-counter rain value
+# (davis_rain_raw), logged alongside the Meteobridge-corrected figure in
+# history.rain_accumulation_mm for accuracy comparison. No FK to `stations`:
+# unlike /observation, this can arrive before a station is registered.
+# raw_tip_count is the unfiltered 0-127 counter straight off the packet;
+# rain_raw_mm is the on-device delta math's derived total — both are stored
+# so the math can be checked against the raw counter, not just trusted.
+_SQL_INSERT_RAIN_RAW = (
+    "INSERT INTO rain_raw_log (station_id, recorded_at, raw_tip_count, rain_raw_mm) "
+    "VALUES (%s, %s, %s, %s)"
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -224,6 +236,30 @@ class DbWriter:
         except pymysql.Error as exc:
             self._log.error("DB write error for %s: %s", station_id, exc)
 
+    def write_rain_raw(self, station_id: str, payload: dict) -> None:
+        try:
+            raw_tip_count = int(payload["raw_tip_count"])
+            rain_raw_mm = float(payload["rain_raw_mm"])
+        except (KeyError, TypeError, ValueError) as exc:
+            self._log.warning("Skipping malformed rain_raw payload: %s", exc)
+            return
+
+        # Davis (ESPHome) has no hardware clock — stamp with arrival time,
+        # same as the fallback used for /observation in _on_message below.
+        recorded_at = datetime.now(UTC).replace(tzinfo=None)
+        row = (station_id, recorded_at, raw_tip_count, rain_raw_mm)
+        try:
+            self._execute(_SQL_INSERT_RAIN_RAW, row)
+            self._log.debug(
+                "Wrote rain_raw %s @ %s: raw_tip_count=%d rain_raw_mm=%.1f",
+                station_id,
+                recorded_at,
+                raw_tip_count,
+                rain_raw_mm,
+            )
+        except pymysql.Error as exc:
+            self._log.error("DB write error for rain_raw %s: %s", station_id, exc)
+
 
 # ---------------------------------------------------------------------------
 # MQTT
@@ -242,9 +278,9 @@ def _on_connect(
         log.error("MQTT connect failed with rc=%s", rc)
         return
     base = cfg["mqtt"]["base_topic"].rstrip("/")
-    topic = f"{base}/+/observation"
-    client.subscribe(topic, qos=0)
-    log.info("MQTT connected — subscribed to %s", topic)
+    client.subscribe(f"{base}/+/observation", qos=0)
+    client.subscribe(f"{base}/+/rain_raw", qos=0)
+    log.info("MQTT connected — subscribed to %s/+/{observation,rain_raw}", base)
 
 
 def _on_disconnect(
@@ -269,13 +305,23 @@ def _on_message(
         log.warning("Non-JSON message on %s — ignored", msg.topic)
         return
 
-    # Derive station type from the topic segment: "tempest-ST-XXXXX" → "tempest"
+    # Derive station segment/message type from the topic:
+    # "weatherdatalogger/tempest-ST-XXXXX/observation" → "tempest-ST-XXXXX", "observation"
+    topic_parts = msg.topic.split("/")
     try:
-        station_segment = msg.topic.split("/")[1]
+        station_segment = topic_parts[1]
+        message_type = topic_parts[2]
         station_type = station_segment.split("-")[0]
     except IndexError:
         station_segment = "unknown"
+        message_type = "unknown"
         station_type = "unknown"
+
+    log.debug("Message on %s", msg.topic)
+
+    if message_type == "rain_raw":
+        writer.write_rain_raw(station_segment, payload)
+        return
 
     # Davis (ESPHome) has no hardware serial or clock sync, unlike the
     # Tempest/AirLink Python dataloggers — fall back to the topic segment
@@ -283,7 +329,6 @@ def _on_message(
     payload.setdefault("serial_number", station_segment)
     payload.setdefault("timestamp", int(time.time()))
 
-    log.debug("Message on %s", msg.topic)
     writer.write_observation(payload, station_type)
 
 
