@@ -266,12 +266,13 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] HTTP polling service (`airlink/airlink_datalogger.py`) — polls `/v1/current_conditions` every 60 s
 - [x] Publishes PM1/PM2.5/PM10, AQI, temperature, humidity to `weatherdatalogger/airlink-<did>/observation`
 - [x] AQI computed from NowCast using US EPA breakpoints
+- [x] CAQI (EU CITEAIR) also computed, from *current* (not NowCast) concentration — different index philosophy than US AQI (real-time hourly vs. 12h-smoothed). Added alongside `aqi_pm2p5`/`aqi_pm10`, not replacing them — `caqi_pm2p5`/`caqi_pm10`. Official bands only go to 100; extrapolated (same slope, capped at 200) beyond that rather than returning `None`
 - [x] Temperature/dew point converted from °F → °C
-- [x] HA MQTT discovery (18 sensors auto-discovered)
+- [x] HA MQTT discovery (20 sensors auto-discovered)
 - [x] INI config with documented defaults (`airlink/config.example.ini`)
 - [x] systemd service unit (`airlink/systemd/airlink-datalogger.service`)
-- [x] DB migration (`database/migrations/20260629_add_airquality.sql`) — PM + AQI columns in `realtime` + `history`
-- [x] DB writer updated — PM/AQI fields added to `_OBS_FIELDS`
+- [x] DB migrations: `database/migrations/20260629_add_airquality.sql` (PM + US AQI columns), `database/migrations/20260702_add_caqi.sql` (CAQI columns, also threaded through `combined_realtime` and `history_charting`)
+- [x] DB writer updated — PM/AQI/CAQI fields added to `_OBS_FIELDS`
 
 ### Tempest datalogger
 - [x] UDP listener with all 6 message type parsers

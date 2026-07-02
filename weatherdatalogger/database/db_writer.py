@@ -107,6 +107,8 @@ _OBS_FIELDS: tuple[str, ...] = (
     "pm_10_nowcast_ugm3",
     "aqi_pm2p5",
     "aqi_pm10",
+    "caqi_pm2p5",
+    "caqi_pm10",
 )
 
 _ALL_COLS: tuple[str, ...] = (*_OBS_FIELDS, "lightning_last_detected")

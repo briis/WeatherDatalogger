@@ -29,6 +29,8 @@ All fields in a single flat JSON object.
 | `pm_10_nowcast_ugm3` | µg/m³ | PM10 NowCast |
 | `aqi_pm2p5` | — | US EPA AQI computed from PM2.5 NowCast |
 | `aqi_pm10` | — | US EPA AQI computed from PM10 NowCast |
+| `caqi_pm2p5` | — | EU CAQI (CITEAIR) computed from current PM2.5 concentration |
+| `caqi_pm10` | — | EU CAQI (CITEAIR) computed from current PM10 concentration |
 | `air_temperature_c` | °C | Internal temperature (converted from °F) |
 | `relative_humidity_pct` | % | Relative humidity |
 | `dew_point_c` | °C | Dew point (converted from °F) |
@@ -114,8 +116,11 @@ discovery_prefix = homeassistant
 
 ## Home Assistant Discovery
 
-Set `[homeassistant] discovery = true` to auto-create an **AirLink \<device_id\>** device in Home Assistant with 18 sensors covering all PM readings, AQI, temperature, humidity, and data quality metrics.
+Set `[homeassistant] discovery = true` to auto-create an **AirLink \<device_id\>** device in Home Assistant with 20 sensors covering all PM readings, AQI (both standards), temperature, humidity, and data quality metrics.
 
 ## AQI Calculation
 
-AQI is computed from the NowCast concentration using the US EPA linear interpolation formula. NowCast is a 12-hour weighted average designed for real-time air quality displays — it responds faster than a straight 24-hour average while still smoothing short-term spikes.
+Two independent air quality index standards are computed, since consoles/dashboards outside the US commonly expect a different scale than the US EPA one:
+
+- **`aqi_pm2p5`/`aqi_pm10`** — US EPA AQI (0-500 scale), computed from the **NowCast** concentration using the standard linear interpolation formula. NowCast is a 12-hour weighted average designed for real-time air quality displays — it responds faster than a straight 24-hour average while still smoothing short-term spikes.
+- **`caqi_pm2p5`/`caqi_pm10`** — EU CAQI ([CITEAIR](https://www.airqualitynow.eu) Common Air Quality Index, nominally 0-100 but open-ended above that for genuinely poor air), computed from the **current** (not NowCast) concentration, since CAQI is designed as a real-time hourly index rather than a smoothed one. The official CAQI bands only go up to 100 ("Very High"); values beyond that are extrapolated at the same index-per-µg/m³ slope as the High→Very High transition, capped at 200, so a smog-level reading still returns a number rather than `null`.

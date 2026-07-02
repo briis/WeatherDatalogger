@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS realtime (
     pm_10_nowcast_ugm3          FLOAT         NULL COMMENT 'PM10 NowCast µg/m³',
     aqi_pm2p5                   SMALLINT UNSIGNED NULL COMMENT 'US EPA AQI from PM2.5 NowCast',
     aqi_pm10                    SMALLINT UNSIGNED NULL COMMENT 'US EPA AQI from PM10 NowCast',
+    caqi_pm2p5                  SMALLINT UNSIGNED NULL COMMENT 'EU CAQI (CITEAIR) from current PM2.5',
+    caqi_pm10                   SMALLINT UNSIGNED NULL COMMENT 'EU CAQI (CITEAIR) from current PM10',
     PRIMARY KEY (station_id),
     CONSTRAINT fk_realtime_station
         FOREIGN KEY (station_id) REFERENCES stations (station_id)
@@ -146,6 +148,8 @@ CREATE TABLE IF NOT EXISTS history (
     pm_10_nowcast_ugm3          FLOAT         NULL,
     aqi_pm2p5                   SMALLINT UNSIGNED NULL,
     aqi_pm10                    SMALLINT UNSIGNED NULL,
+    caqi_pm2p5                  SMALLINT UNSIGNED NULL,
+    caqi_pm10                   SMALLINT UNSIGNED NULL,
     PRIMARY KEY (id),
     KEY idx_history_station_time (station_id, recorded_at),
     CONSTRAINT fk_history_station
@@ -219,7 +223,9 @@ SELECT
     a.pm_10_24h_ugm3,
     a.pm_10_nowcast_ugm3,
     a.aqi_pm2p5,
-    a.aqi_pm10
+    a.aqi_pm10,
+    a.caqi_pm2p5,
+    a.caqi_pm10
 FROM
     (
         SELECT r.*
@@ -316,6 +322,8 @@ CREATE TABLE IF NOT EXISTS history_charting (
     pm_10_nowcast_ugm3          FLOAT             NULL,
     aqi_pm2p5                   SMALLINT UNSIGNED NULL,
     aqi_pm10                    SMALLINT UNSIGNED NULL,
+    caqi_pm2p5                  SMALLINT UNSIGNED NULL,
+    caqi_pm10                   SMALLINT UNSIGNED NULL,
 
     PRIMARY KEY (id),
     UNIQUE KEY uq_history_charting_window (window_start)
@@ -383,7 +391,9 @@ DO
         pm_10_24h_ugm3,
         pm_10_nowcast_ugm3,
         aqi_pm2p5,
-        aqi_pm10
+        aqi_pm10,
+        caqi_pm2p5,
+        caqi_pm10
     )
     SELECT
         window_start,
@@ -448,7 +458,9 @@ DO
         AVG(CASE WHEN station_type = 'airlink' THEN pm_10_24h_ugm3 END),
         AVG(CASE WHEN station_type = 'airlink' THEN pm_10_nowcast_ugm3 END),
         MAX(CASE WHEN station_type = 'airlink' THEN aqi_pm2p5 END),
-        MAX(CASE WHEN station_type = 'airlink' THEN aqi_pm10 END)
+        MAX(CASE WHEN station_type = 'airlink' THEN aqi_pm10 END),
+        MAX(CASE WHEN station_type = 'airlink' THEN caqi_pm2p5 END),
+        MAX(CASE WHEN station_type = 'airlink' THEN caqi_pm10 END)
     FROM (
         SELECT
             h.*,

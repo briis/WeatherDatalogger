@@ -112,7 +112,8 @@ Both `realtime` and `history` share the same observation columns:
 | `battery_volts` | Device battery voltage |
 | `pm_1_ugm3`, `pm_2p5_ugm3`, `pm_10_ugm3` | Particulate matter — current (AirLink) |
 | `pm_2p5_nowcast_ugm3`, `pm_10_nowcast_ugm3` | PM NowCast values (AirLink) |
-| `aqi_pm2p5`, `aqi_pm10` | US EPA AQI (AirLink) |
+| `aqi_pm2p5`, `aqi_pm10` | US EPA AQI, from PM NowCast (AirLink) |
+| `caqi_pm2p5`, `caqi_pm10` | EU CAQI (CITEAIR), from current PM concentration (AirLink) |
 
 ### `combined_realtime` (view)
 
@@ -128,7 +129,7 @@ A single-row view that merges the latest readings from all station types into on
 | Wind, temperature, humidity, dew point, feels like/heat index/wind chill, rain, vapor pressure | Davis |
 | `davis_battery_low` | Davis — low-battery flag (Davis reports low/ok, not voltage) |
 | Pressure, lightning, UV, solar, illuminance, wet bulb, delta T, air density, `battery_volts` | Tempest |
-| `pm_*`, `aqi_*` | AirLink |
+| `pm_*`, `aqi_*`, `caqi_*` | AirLink |
 
 ### `history_charting`
 
@@ -150,7 +151,8 @@ Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data in
 | Lightning fields | MAX / MIN | Rolling 3-hour counters from device (Tempest) |
 | `davis_battery_low` | MAX | True if a low-battery reading occurred anywhere in the window |
 | `pm_*` (instant) | AVG | AirLink |
-| `aqi_pm2p5`, `aqi_pm10` | MAX | Worst-case AQI in window (AirLink) |
+| `aqi_pm2p5`, `aqi_pm10` | MAX | Worst-case US AQI in window (AirLink) |
+| `caqi_pm2p5`, `caqi_pm10` | MAX | Worst-case EU CAQI in window (AirLink) |
 
 **Requires the MariaDB event scheduler** — see [server installation step 8](../../README.md#8-enable-the-mariadb-event-scheduler).
 

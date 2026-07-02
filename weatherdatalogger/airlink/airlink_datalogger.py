@@ -142,6 +142,56 @@ def _aqi_pm10(nowcast_ugm3: float | None) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# CAQI (Common Air Quality Index) — CITEAIR hourly breakpoints
+# ---------------------------------------------------------------------------
+# https://www.airqualitynow.eu (CITEAIR project). Computed from the current
+# (hourly-equivalent) concentration rather than NowCast — CAQI is designed
+# as a real-time hourly index, unlike the US AQI's 12h-smoothed NowCast
+# convention. Official bands only go up to 100 ("Very High", open-ended);
+# the last row here is an extrapolated continuation at the same
+# index-per-µg/m³ slope as the High→Very High transition, so a genuinely
+# smog-level reading still returns a number instead of None — real AirLink
+# installs should essentially never reach it.
+_CAQI_PM25_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
+    (0.0, 15.0, 0, 25),
+    (15.0, 30.0, 25, 50),
+    (30.0, 55.0, 50, 75),
+    (55.0, 110.0, 75, 100),
+    (110.0, 330.0, 100, 200),
+)
+
+_CAQI_PM10_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
+    (0.0, 25.0, 0, 25),
+    (25.0, 50.0, 25, 50),
+    (50.0, 90.0, 50, 75),
+    (90.0, 180.0, 75, 100),
+    (180.0, 540.0, 100, 200),
+)
+
+
+def _caqi_pm2p5(concentration_ugm3: float | None) -> int | None:
+    """Compute the CAQI PM2.5 sub-index from current concentration."""
+    if concentration_ugm3 is None:
+        return None
+    c = round(concentration_ugm3, 1)
+    for c_lo, c_hi, idx_lo, idx_hi in _CAQI_PM25_BREAKPOINTS:
+        if c_lo <= c <= c_hi:
+            return round((idx_hi - idx_lo) / (c_hi - c_lo) * (c - c_lo) + idx_lo)
+    return 200  # beyond even the extrapolated ceiling — cap rather than omit
+
+
+def _caqi_pm10(concentration_ugm3: float | None) -> int | None:
+    """Compute the CAQI PM10 sub-index from current concentration."""
+    if concentration_ugm3 is None:
+        return None
+    c = round(concentration_ugm3)
+    for c_lo, c_hi, idx_lo, idx_hi in _CAQI_PM10_BREAKPOINTS:
+        if c_lo <= c <= c_hi:
+            return round((idx_hi - idx_lo) / (c_hi - c_lo) * (c - c_lo) + idx_lo)
+    return 200
+
+
+# ---------------------------------------------------------------------------
 # Unit conversion
 # ---------------------------------------------------------------------------
 
@@ -189,6 +239,8 @@ def fetch_observation(
 
     now_pm25 = cond.get("pm_2p5_nowcast")
     now_pm10 = cond.get("pm_10_nowcast")
+    cur_pm25 = cond.get("pm_2p5")
+    cur_pm10 = cond.get("pm_10")
 
     return {
         "serial_number": did,
@@ -210,6 +262,9 @@ def fetch_observation(
         # AQI (US EPA, computed from NowCast concentration)
         "aqi_pm2p5": _aqi_pm2p5(now_pm25),
         "aqi_pm10": _aqi_pm10(now_pm10),
+        # CAQI (EU CITEAIR, computed from current concentration)
+        "caqi_pm2p5": _caqi_pm2p5(cur_pm25),
+        "caqi_pm10": _caqi_pm10(cur_pm10),
         # Temperature & humidity (converted from °F to °C)
         "air_temperature_c": _f_to_c(cond.get("temp")),
         "relative_humidity_pct": cond.get("hum"),
@@ -313,9 +368,12 @@ _AIRLINK_SENSORS: list[tuple[str, str, str | None, str | None, str | None]] = [
     ("pm_10_3h_ugm3", "PM10 (3-hour average)", "µg/m³", "pm10", "measurement"),
     ("pm_10_24h_ugm3", "PM10 (24-hour average)", "µg/m³", "pm10", "measurement"),
     ("pm_10_nowcast_ugm3", "PM10 NowCast", "µg/m³", "pm10", "measurement"),
-    # Air Quality Index
+    # Air Quality Index — US EPA
     ("aqi_pm2p5", "AQI (PM2.5)", None, "aqi", "measurement"),
     ("aqi_pm10", "AQI (PM10)", None, "aqi", "measurement"),
+    # Air Quality Index — EU CAQI
+    ("caqi_pm2p5", "CAQI (PM2.5)", None, "aqi", "measurement"),
+    ("caqi_pm10", "CAQI (PM10)", None, "aqi", "measurement"),
     # Temperature & humidity
     ("air_temperature_c", "Temperature", "°C", "temperature", "measurement"),
     ("relative_humidity_pct", "Humidity", "%", "humidity", "measurement"),

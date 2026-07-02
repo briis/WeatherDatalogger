@@ -92,6 +92,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - `airlink_datalogger.py` polls the API every 60 s (configurable) and publishes to MQTT
 - Temperature and humidity readings are included (device internal sensors, used for PM correction)
 - AQI (US EPA) is computed from NowCast concentration before publishing
+- CAQI (EU CITEAIR) is also computed, from *current* (not NowCast) concentration, added alongside the US AQI fields rather than replacing them (`caqi_pm2p5`/`caqi_pm10`)
 - **Status: active**
 
 ### Meteobridge Pro (optional)
