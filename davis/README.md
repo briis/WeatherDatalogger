@@ -65,9 +65,9 @@ A dedicated CC1101 breakout board with integrated antenna. The GERUI board label
 2. **Bit reversal** — bytes are LSB→MSB reversed to match Davis bit order
 3. **CRC validation** — CRC-16/CCITT checked with up to 3 bit-shift attempts to handle alignment
 4. **Station lock** — the first valid station ID seen is auto-locked; packets from other stations are silently ignored. Override by setting `known_unit_id` to a specific value (0 = Davis transmitter ID 1, 1 = ID 2, etc.)
-5. **Decoding** — packet type byte selects the measurement: wind (every packet), temperature (type 8), UV (type 3, no sensor fitted here), solar radiation (type 5, no sensor fitted — publishing disabled entirely since RF noise made the "no sensor" sentinel unreliable), humidity (type 10), rain (type 14). Packet type 9 (Davis' own gust broadcast) is decoded if it's ever observed, but this specific transmitter has never been seen sending it
+5. **Decoding** — packet type byte selects the measurement: wind (every packet), temperature (type 8), UV (type 3, no sensor fitted here), solar radiation (type 5, no sensor fitted — publishing disabled entirely since RF noise made the "no sensor" sentinel unreliable), humidity (type 10), rain (type 14, but see below). Packet type 9 (Davis' own gust broadcast) is decoded if it's ever observed, but this specific transmitter has never been seen sending it
 6. **Gust and lull** — derived locally every 60 s as the rolling max/min of the ordinary wind samples present in every packet (the same way the console's own display evidently does it), since dedicated gust packets don't arrive on this hardware
-7. **Rain rate** — computed per-tip from the actual time gap since the previous tip (mirroring the console's own algorithm), not a fixed time-bucket average; decays back to 0 after 5 minutes without a new tip
+7. **Rain** — the CC1101 tip-derived accumulation/rate calculation is present in the firmware but currently **disabled** (commented out, not deleted); it wasn't stable enough. `Daily Rain`/`Rain Rate` are instead published exclusively by the [Meteobridge corrector](#manual--automated-rain-corrections), a separate service polling a Meteobridge Pro wired to the same ISS
 8. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
 
 ---
@@ -120,8 +120,8 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `air_temperature_c` | °C | |
 | `relative_humidity_pct` | % | |
 | `dew_point_c`, `vapor_pressure_mb`, `heat_index_c`, `wind_chill_c`, `feels_like_c` | °C / hPa | Comfort metrics computed on-device from temperature/humidity/wind — same formulas as `tempest_datalogger.py` |
-| `rain_accumulation_mm` | mm | Today's accumulated rain; persisted across reboots, resets to 0 at local midnight; 0.2 mm per tip |
-| `rain_rate_mmh` | mm/h | Derived per-tip from the actual gap since the previous tip (like the console's own algorithm); decays to 0 after 5 minutes without a new tip, and explicitly reset to 0 on every boot (an instantaneous rate has no valid "restored" value across a reboot, unlike the daily total) |
+| `rain_accumulation_mm` | mm | Today's accumulated rain. Sourced exclusively from the Meteobridge corrector — the CC1101 tip-derived calculation is disabled (see [How it works](#how-it-works)) |
+| `rain_rate_mmh` | mm/h | Current rain rate. Also sourced exclusively from the Meteobridge corrector; falls back to `0` if Meteobridge itself goes quiet for 5+ minutes |
 | `uv_index` | UV Index | Packet type 3 decoded, but this ISS has no UV sensor fitted — will essentially never populate |
 | `solar_radiation_wm2` | W/m² | Not published — no solar sensor fitted, and RF noise made the "no sensor" sentinel unreliable enough that publishing was disabled entirely rather than risk showing a bogus value |
 | `battery_low` | boolean | True when transmitter battery is low |
@@ -130,9 +130,9 @@ All field names follow the project standard — descriptive snake_case with SI u
 
 ## Manual & Automated Rain Corrections
 
-The receiver accumulates its own daily rain total from the raw RF tip counter, persisted across reboots, and computes rain rate per-tip from the gap since the previous tip. Two known weak points: the daily total can drift from the console's own reading over time, and rain rate needs to see **two** tips after every reboot before it can compute a value (it briefly reads `0` after a reflash even if it's actively raining — see [`AGENT.md`](../AGENT.md#rain-accumulation--rate)).
+`Daily Rain` and `Rain Rate` are published **exclusively** by MQTT correction rather than computed locally on-device. The CC1101 can decode rain tip packets (type 14) and did originally derive both values from them, but that path proved unstable and is now disabled (commented out, not deleted, in `davis-vantage-receiver.yaml` — search for "Publishing from this locally-computed accumulation/rate is DISABLED").
 
-Both are correctable via fixed MQTT control topics — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
+Both entities are set via fixed MQTT control topics — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
 
 ```bash
 mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
@@ -145,9 +145,9 @@ Or on the server, for the daily total, using the shared config for broker/creden
 /opt/weatherdatalogger/scripts/set_daily_rain.sh 5.4
 ```
 
-By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. Both values are clamped to `< 500mm` (or mm/h) on-device — implausible values are logged and ignored, not applied. Correcting rain rate also re-anchors the on-device tip-interval baseline (`rain_last_tip_ms`/`rain_tip_seen`), so the existing 5-minute decay and the next real tip's rate calculation both continue to behave correctly from the corrected value.
+By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. Both values are clamped to `< 500mm` (or mm/h) on-device — implausible values are logged and ignored, not applied.
 
-**Automated correction:** if you have a Meteobridge Pro also wired to the same Vantage Vue ISS, [`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/) is a small service that polls it periodically and publishes both corrections automatically — closing the reboot warm-up gap within one poll interval instead of waiting for two real tips, and keeping the daily total continuously in sync. See its README for setup.
+**Primary source: [`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/)** — polls a Meteobridge Pro wired to the same Vantage Vue ISS every 60s (configurable) and publishes both corrections automatically. Without this service running, the rain entities will simply sit at whatever they were last manually set to (or "Unknown"), since nothing else publishes to them anymore. See its README for setup.
 
 ---
 

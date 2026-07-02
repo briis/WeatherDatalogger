@@ -24,24 +24,26 @@ weatherdatalogger/
   davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, active)
     observation            — flat JSON: wind (incl. locally-derived gust/lull),
                               temp, humidity (received directly over RF),
-                              rain (incl. tip-interval rate), derived comfort
-                              metrics, battery_low. UV/solar fields are
-                              defined but essentially never populate — no
-                              sensor is fitted on this ISS, and solar
-                              publishing is disabled outright (see Known Issues)
+                              rain_accumulation_mm/rain_rate_mmh (NOT locally
+                              computed — see below), derived comfort metrics,
+                              battery_low. UV/solar fields are defined but
+                              essentially never populate — no sensor is
+                              fitted on this ISS, and solar publishing is
+                              disabled outright (see Known Issues)
     rapid_wind
     device_status
   davis-vantage-receiver/  ← Static control topics (device name, not station
-    set_daily_rain             ID — not known at compile time): manual/
-    set_rain_rate               automated corrections for the Davis
-                                 receiver's own rain entities, e.g. after a
-                                 reflash loses sync with the tip counter, or
-                                 from the Meteobridge corrector below
+    set_daily_rain             ID — not known at compile time): the ONLY
+    set_rain_rate                writers of the rain fields above. The
+                                  CC1101's own tip-derived rain calculation
+                                  is disabled (unstable) — these topics,
+                                  driven by the Meteobridge corrector below,
+                                  are now the sole source
   airlink-<did>/           ← Davis AirLink air quality sensor (Python service)
     observation            — PM1/PM2.5/PM10, AQI, temperature, humidity
 ```
 
-The Meteobridge corrector (`meteobridge/meteobridge_datalogger.py`) is not a station — it has no observation topic of its own. It only publishes to the `davis-vantage-receiver/set_daily_rain` / `set_rain_rate` control topics above.
+The Meteobridge corrector (`meteobridge/meteobridge_datalogger.py`) is not a station — it has no observation topic of its own. It only publishes to the `davis-vantage-receiver/set_daily_rain` / `set_rain_rate` control topics above, which are now the sole source for the Davis receiver's rain fields.
 
 `<serial>` for Tempest comes from the hub's UDP broadcast (`ST-…` for the sensor, `HB-…` for the hub).
 `<id>` for Davis is the station ID locked by the CC1101 receiver.
@@ -75,10 +77,13 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   "ESPHome" integration UI, or entities would duplicate
 - Local web dashboard at `http://<device-ip>/` (`web_server: port: 80`), including a
   diagnostic **Restart** button also discovered into HA
-- **Status: active and field-tested — temperature/wind/rain(+rate)/humidity/gust/lull
-  all reliable (gust and lull are both locally derived, not received over RF — see
+- **Status: active and field-tested — temperature/wind/humidity/gust/lull all
+  reliable (gust and lull are both locally derived, not received over RF — see
   Known Issues). No UV or solar sensor is fitted; solar publishing is disabled
-  entirely (RF noise made every "no sensor" sentinel check tried unreliable)**
+  entirely (RF noise made every "no sensor" sentinel check tried unreliable).
+  Rain accumulation/rate: the CC1101 tip-derived calculation proved unstable
+  and is disabled — `Daily Rain`/`Rain Rate` are now sourced exclusively from
+  the Meteobridge corrector (see below)**
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter
@@ -92,9 +97,9 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 ### Meteobridge Pro (optional)
 - Third-party bridge device, separately owned/configured, also wired to the same Vantage Vue ISS — not part of this project's own hardware, just a data source it can optionally consume
 - Exposes a local REST template API (`cgi-bin/template.cgi?template=...`) where `[bracket]` macros are substituted server-side — see the [Meteobridge Add-On Services wiki](https://www.meteobridge.com/wiki/index.php?title=Add-On_Services)
-- Proven consistent with the physical console, unlike the CC1101 receiver's own rain rate (which needs two tips after every reboot before it can compute a value)
-- `meteobridge_datalogger.py` polls it every 60s (configurable) and republishes rain_today/rain_rate as corrections to the Davis receiver's MQTT control topics — not its own station, no observation topic or database rows
-- **Status: active, optional** — the service idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured
+- Proven consistent with the physical console — unlike the CC1101 receiver's own tip-derived rain calculation, which turned out unstable and has since been disabled entirely in the firmware
+- `meteobridge_datalogger.py` polls it every 60s (configurable) and publishes rain_today/rain_rate to the Davis receiver's MQTT control topics — not its own station, no observation topic or database rows. Now the **sole** source for those two Davis entities, not just a correction layer
+- **Status: active, optional** — the service idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured, but without it the Davis rain entities won't update at all
 
 ---
 

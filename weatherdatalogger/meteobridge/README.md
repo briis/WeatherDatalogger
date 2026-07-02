@@ -2,12 +2,9 @@
 
 Polls a Meteobridge Pro's local REST template API for the Davis Vantage Vue's rain readings — proven consistent with the physical console — and republishes them as corrections to the `davis-vantage-receiver` ESPHome device's own MQTT control topics.
 
-This is **not** a full station integration: it doesn't create its own MQTT observation topic or database rows. It exists purely to correct two known weak points of the CC1101 RF receiver's own rain data:
+This is **not** a full station integration: it doesn't create its own MQTT observation topic or database rows. It started out as a periodic correction layered on top of the CC1101 RF receiver's own tip-derived rain data (which had two known weak points — a two-tip warm-up gap after every reboot, and drift from the console's reading over time). That local calculation proved unstable and has since been **disabled entirely** in the firmware — this service is now the **sole source** for the Davis receiver's `Daily Rain` and `Rain Rate` entities. Without it running, those entities simply won't update.
 
-- **Rain rate needs two tips after every reboot** before it can compute a value (it can't derive a rate from a single data point), so it briefly reads `0` after every reflash/reboot even if it's actively raining.
-- **The daily total can drift** from the console's own reading over time.
-
-See [`davis/AGENT.md`](../../AGENT.md#rain-accumulation--rate) ("Rain accumulation & rate") for the full technical background.
+See [`AGENT.md`](../../AGENT.md#rain-accumulation--rate) ("Rain accumulation & rate") for the full technical background.
 
 ## What it publishes
 
