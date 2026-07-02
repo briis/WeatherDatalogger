@@ -510,13 +510,13 @@ interval:
 # ─────────────────────────────────────────────────────────────
 binary_sensor:
   - platform: template
-    name: "Davis Battery Low"
+    name: "Battery Low"
     id: davis_battery_low
     device_class: battery
 
 sensor:
   - platform: template
-    name: "Davis Temperature"
+    name: "Temperature"
     id: davis_temp
     unit_of_measurement: "°C"
     device_class: temperature
@@ -526,7 +526,7 @@ sensor:
   - platform: template
     # RF humidity (ptype 10) is received directly since widening
     # filter_bandwidth to 650kHz.
-    name: "Davis Humidity"
+    name: "Humidity"
     id: davis_hum
     unit_of_measurement: "%"
     device_class: humidity
@@ -536,7 +536,7 @@ sensor:
   - platform: template
     # No UV sensor attached to this ISS — will read "unknown" unless one
     # is fitted. Packet type 3 sends 0xFF as a "no sensor" sentinel.
-    name: "Davis UV Index"
+    name: "UV Index"
     id: davis_uv_index
     unit_of_measurement: "UV Index"
     icon: "mdi:sun-wireless"
@@ -546,7 +546,7 @@ sensor:
   - platform: template
     # No solar radiation sensor attached to this ISS — will read "unknown"
     # unless one is fitted. Packet type 5 sends 0x3FF as a "no sensor" sentinel.
-    name: "Davis Solar Radiation"
+    name: "Solar Radiation"
     id: davis_solar_radiation
     unit_of_measurement: "W/m²"
     device_class: irradiance
@@ -554,7 +554,7 @@ sensor:
     accuracy_decimals: 0
 
   - platform: template
-    name: "Davis Wind Speed"
+    name: "Wind Speed"
     id: davis_wind_speed
     unit_of_measurement: "m/s"
     device_class: wind_speed
@@ -570,7 +570,7 @@ sensor:
     # (see wind_gust_max_ms), since this transmitter has never been
     # observed sending Davis' own ptype==9 gust packet. Also updated
     # immediately from ptype==9 if that ever changes.
-    name: "Davis Wind Gust"
+    name: "Wind Gust"
     id: davis_windgust
     unit_of_measurement: "m/s"
     device_class: wind_speed
@@ -578,7 +578,7 @@ sensor:
     accuracy_decimals: 2
 
   - platform: template
-    name: "Davis Daily Rain"
+    name: "Daily Rain"
     id: davis_rain
     unit_of_measurement: "mm"
     device_class: precipitation
@@ -586,7 +586,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis Rain Rate"
+    name: "Rain Rate"
     id: davis_rain_rate
     unit_of_measurement: "mm/h"
     device_class: precipitation_intensity
@@ -594,7 +594,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis Wind Lull"
+    name: "Wind Lull"
     id: davis_wind_lull
     unit_of_measurement: "m/s"
     device_class: wind_speed
@@ -602,7 +602,7 @@ sensor:
     accuracy_decimals: 2
 
   - platform: template
-    name: "Davis Wind Direction"
+    name: "Wind Direction"
     id: davis_wind_dir
     unit_of_measurement: "°"
     device_class: wind_direction
@@ -610,7 +610,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis Dew Point"
+    name: "Dew Point"
     id: davis_dew_point
     unit_of_measurement: "°C"
     device_class: temperature
@@ -618,7 +618,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis Vapor Pressure"
+    name: "Vapor Pressure"
     id: davis_vapor_pressure
     unit_of_measurement: "hPa"
     device_class: atmospheric_pressure
@@ -626,7 +626,7 @@ sensor:
     accuracy_decimals: 2
 
   - platform: template
-    name: "Davis Heat Index"
+    name: "Heat Index"
     id: davis_heat_index
     unit_of_measurement: "°C"
     device_class: temperature
@@ -634,7 +634,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis Wind Chill"
+    name: "Wind Chill"
     id: davis_wind_chill
     unit_of_measurement: "°C"
     device_class: temperature
@@ -642,7 +642,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis Feels Like"
+    name: "Feels Like"
     id: davis_feels_like
     unit_of_measurement: "°C"
     device_class: temperature
@@ -650,7 +650,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis RSSI"
+    name: "RSSI"
     id: davis_rssi
     unit_of_measurement: "dBm"
     state_class: measurement
@@ -659,7 +659,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Davis LQI"
+    name: "LQI"
     id: davis_lqi
     icon: "mdi:signal"
     state_class: measurement
@@ -668,7 +668,7 @@ sensor:
 
 text_sensor:
   - platform: template
-    name: "Davis Wind Cardinal"
+    name: "Wind Cardinal"
     id: davis_wind_cardinal
     icon: "mdi:compass-outline"
     lambda: |-
