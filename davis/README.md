@@ -40,7 +40,7 @@ A dedicated CC1101 breakout board with integrated antenna. The GERUI board label
 
 - 868 MHz ISM band wireless sensor suite (EU frequency plan)
 - Protocol is community-reverse-engineered (not officially documented)
-- Transmits wind on every packet; temperature, humidity, gust, and rain each arrive in their own packet type (~every 20-30 s per measurement)
+- Transmits wind on every packet; temperature, humidity, UV, solar, and rain each arrive in their own packet type (~every 20-30 s per measurement). This particular ISS has no UV or solar sensor fitted, and — confirmed by a 40-minute on-device packet-type histogram — never sends its own dedicated gust broadcast (packet type 9) at all, so gust and lull are both derived locally instead (see [How it works](#how-it-works))
 
 ---
 
@@ -48,11 +48,11 @@ A dedicated CC1101 breakout board with integrated antenna. The GERUI board label
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Frequency | 868.35 MHz | Centre of the 5 EU hop channels (868.04–868.52 MHz) |
+| Frequency | 868.35 MHz | Empirically recentred; see comments in the YAML for the freq_offset data behind it |
 | Modulation | GFSK | |
 | Symbol rate | 19 200 baud | |
 | FSK deviation | 9.5 kHz | |
-| Filter BW | 325 kHz | Wide enough to capture all hop channels passively |
+| Filter BW | 650 kHz | Narrowed from an original 325 kHz — this transmitter doesn't hop, so a tighter filter cuts admitted noise without losing signal |
 | Packet length | 8 bytes | Fixed |
 | Sync word | `0xCB89` | 16/16 mode |
 | CRC | Off | CRC-16/CCITT verified in firmware with bit-shift fallback |
@@ -65,8 +65,10 @@ A dedicated CC1101 breakout board with integrated antenna. The GERUI board label
 2. **Bit reversal** — bytes are LSB→MSB reversed to match Davis bit order
 3. **CRC validation** — CRC-16/CCITT checked with up to 3 bit-shift attempts to handle alignment
 4. **Station lock** — the first valid station ID seen is auto-locked; packets from other stations are silently ignored. Override by setting `known_unit_id` to a specific value (0 = Davis transmitter ID 1, 1 = ID 2, etc.)
-5. **Decoding** — packet type byte selects the measurement: wind (every packet), temperature (type 8), gust (type 9), humidity (type 10), rain (type 14)
-6. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
+5. **Decoding** — packet type byte selects the measurement: wind (every packet), temperature (type 8), UV (type 3, no sensor fitted here), solar radiation (type 5, no sensor fitted — publishing disabled entirely since RF noise made the "no sensor" sentinel unreliable), humidity (type 10), rain (type 14). Packet type 9 (Davis' own gust broadcast) is decoded if it's ever observed, but this specific transmitter has never been seen sending it
+6. **Gust and lull** — derived locally every 60 s as the rolling max/min of the ordinary wind samples present in every packet (the same way the console's own display evidently does it), since dedicated gust packets don't arrive on this hardware
+7. **Rain rate** — computed per-tip from the actual time gap since the previous tip (mirroring the console's own algorithm), not a fixed time-bucket average; decays back to 0 after 5 minutes without a new tip
+8. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
 
 ---
 
@@ -80,6 +82,8 @@ All topics are under `weatherdatalogger/davis-<id>/` where `<id>` is the locked 
 | `.../rapid_wind` | Every packet | `wind_avg_ms`, `wind_direction_deg` |
 | `.../device_status` | Every packet | `rssi`, `lqi`, `battery_low` |
 
+The one exception is the daily rain correction control topic (`weatherdatalogger/davis-vantage-receiver/set_daily_rain`), which uses the device's static name instead of the dynamic `davis-<id>` prefix, since the transmitter ID auto-locks at runtime and isn't known ahead of time — see [Manual Daily Rain Correction](#manual-daily-rain-correction).
+
 ### Example `observation` payload
 
 ```json
@@ -91,11 +95,17 @@ All topics are under `weatherdatalogger/davis-<id>/` where `<id>` is the locked 
   "relative_humidity_pct": 72.0,
   "rain_accumulation_mm": 4.2,
   "rain_rate_mmh": 0.6,
+  "wind_lull_ms": 1.8,
+  "dew_point_c": 12.9,
+  "vapor_pressure_mb": 14.9,
+  "heat_index_c": 18.2,
+  "wind_chill_c": 18.2,
+  "feels_like_c": 18.2,
   "battery_low": false
 }
 ```
 
-Fields not yet received since last boot are omitted until the relevant packet type arrives. The DB writer treats missing fields as SQL NULL.
+`uv_index` and `solar_radiation_wm2` are defined in the payload builder but will essentially never appear on this receiver — no UV or solar sensor is fitted, and solar publishing is disabled entirely on top of that (see [Field conventions](#field-conventions)). Any field not yet received since last boot is omitted until the relevant packet type arrives. The DB writer treats missing fields as SQL NULL.
 
 ### Field conventions
 
@@ -104,12 +114,16 @@ All field names follow the project standard — descriptive snake_case with SI u
 | Field | Unit | Notes |
 |---|---|---|
 | `wind_avg_ms` | m/s | 5-packet moving average applied by ESPHome |
-| `wind_gust_ms` | m/s | Peak gust from packet type 9 |
+| `wind_gust_ms` | m/s | Locally-derived rolling max of `wind_avg_ms` over each 60s interval — packet type 9 (Davis' own gust broadcast) has never been observed on this hardware. Still updates immediately if a real ptype-9 packet ever arrives |
+| `wind_lull_ms` | m/s | Locally-derived rolling min of `wind_avg_ms` over each 60s interval |
 | `wind_direction_deg` | ° | 0–360 |
 | `air_temperature_c` | °C | |
 | `relative_humidity_pct` | % | |
-| `rain_accumulation_mm` | mm | Cumulative since last boot; 0.2 mm per tip |
-| `rain_rate_mmh` | mm/h | Derived every 60s from the accumulation delta |
+| `dew_point_c`, `vapor_pressure_mb`, `heat_index_c`, `wind_chill_c`, `feels_like_c` | °C / hPa | Comfort metrics computed on-device from temperature/humidity/wind — same formulas as `tempest_datalogger.py` |
+| `rain_accumulation_mm` | mm | Today's accumulated rain; persisted across reboots, resets to 0 at local midnight; 0.2 mm per tip |
+| `rain_rate_mmh` | mm/h | Derived per-tip from the actual gap since the previous tip (like the console's own algorithm); decays to 0 after 5 minutes without a new tip |
+| `uv_index` | UV Index | Packet type 3 decoded, but this ISS has no UV sensor fitted — will essentially never populate |
+| `solar_radiation_wm2` | W/m² | Not published — no solar sensor fitted, and RF noise made the "no sensor" sentinel unreliable enough that publishing was disabled entirely rather than risk showing a bogus value |
 | `battery_low` | boolean | True when transmitter battery is low |
 
 ---
@@ -186,20 +200,29 @@ mosquitto_sub -h <broker> -t "weatherdatalogger/davis-#" -v
 
 ## Home Assistant Integration
 
-The ESPHome firmware connects to HA via the **native API** (the `api:` block in the YAML), which auto-discovers these entities:
+The ESPHome firmware connects to HA via **MQTT discovery** (`mqtt: discovery: true`), grouping all entities under one "Davis Vantage Receiver" device — same as how the Tempest/AirLink Python services register their devices. The `api:` block in the YAML is commented out; it exists only for remote `esphome logs`/OTA over the native API if you choose to enable it. If you do, **do not** also add this node through Home Assistant's "ESPHome" integration UI, or entities would be duplicated (once via native API, once via MQTT discovery).
 
-| Entity | Type | Unit |
-|---|---|---|
-| Davis Temperature | Sensor | °C |
-| Davis Humidity | Sensor | % |
-| Davis Wind Speed | Sensor | m/s |
-| Davis Wind Gust | Sensor | m/s |
-| Davis Wind Direction | Sensor | ° |
-| Davis Wind Cardinal | Text sensor | e.g. `WSW` |
-| Davis Daily Rain | Sensor | mm |
-| Davis Rain Rate | Sensor | mm/h |
-| Davis Battery Low | Binary sensor | on/off |
-| Davis RSSI | Sensor (diagnostic) | dBm |
-| Davis LQI | Sensor (diagnostic) | — |
+Entity names no longer repeat "Davis" (the device name already provides that context) — HA shows the short name on the device's own page and the full "Davis Vantage Receiver <name>" combination in out-of-context views like the global entity picker:
 
-Wind speed is smoothed with a 5-sample sliding window average. Wind direction is exposed both as a numeric degrees sensor (`device_class: wind_direction`) and as a separate 16-point compass text sensor. Rain rate is derived every 60 s from the change in accumulated rainfall.
+| Entity | Type | Unit | Notes |
+|---|---|---|---|
+| Temperature | Sensor | °C | |
+| Humidity | Sensor | % | |
+| Wind Speed | Sensor | m/s | 5-sample sliding window average |
+| Wind Gust | Sensor | m/s | Locally-derived (see [How it works](#how-it-works)) |
+| Wind Lull | Sensor | m/s | Locally-derived |
+| Wind Direction | Sensor | ° | |
+| Wind Cardinal | Text sensor | e.g. `WSW` | 16-point compass, derived from Wind Direction |
+| Dew Point | Sensor | °C | |
+| Vapor Pressure | Sensor | hPa | |
+| Heat Index | Sensor | °C | |
+| Wind Chill | Sensor | °C | |
+| Feels Like | Sensor | °C | |
+| UV Index | Sensor | UV Index | No sensor fitted — will essentially never show a value |
+| Solar Radiation | Sensor | W/m² | No sensor fitted, publishing disabled — always "Unavailable" by design, not a fault |
+| Daily Rain | Sensor | mm | Persists across reboots; resets at local midnight |
+| Rain Rate | Sensor | mm/h | Decays to 0 after 5 min without a tip |
+| Battery Low | Binary sensor | on/off | |
+| RSSI | Sensor (diagnostic) | dBm | |
+| LQI | Sensor (diagnostic) | — | |
+| Restart | Button (diagnostic) | — | Also available on the local web UI (`http://<device-ip>/`, port 80) |

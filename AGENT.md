@@ -117,21 +117,46 @@ Unlike Tempest/AirLink, this is **not a Python service** — it's ESPHome YAML +
 ### Packet flow
 ```
 CC1101 on_packet (raw 8 bytes)
+  → ESP_LOGD raw-arrival diagnostic (silent at default INFO level)
   → bit-reversal (LSB→MSB)
   → CRC-16/CCITT with 3-position bit-shift fallback → drop if all fail
   → station-ID lock (first valid ID seen; ignore other transmitter IDs after)
-  → per-packet-type decode (wind every packet; temp=8, rain-rate=5, rain-tip=14 on this hardware)
-  → comfort metrics computed from davis_temp/davis_hum (same formulas as tempest_datalogger.py)
+  → per-packet-type decode: wind every packet; temp=8, UV=3 (no sensor fitted),
+    solar=5 (no sensor fitted, publishing disabled), humidity=10, rain-tip=14.
+    Type 9 (Davis' own gust broadcast) is decoded if ever observed, but has
+    never been seen on this hardware.
+  → gust/lull derived locally (60s interval, rolling max/min of every packet's
+    wind_avg_ms) — not from a dedicated packet type; see "Locally-derived
+    gust/lull" below
+  → rain rate derived per-tip from the actual gap since the previous tip; see
+    "Rain accumulation & rate" below
+  → comfort metrics computed from davis_temp/davis_hum (same formulas as
+    tempest_datalogger.py)
   → consolidated `observation` JSON published to weatherdatalogger/davis-<id>/observation
 ```
 
 ### RF humidity
 Packet type 10 (humidity) is decoded directly from RF (see `ptype == 10` in the packet-type decode) since `filter_bandwidth` was widened to 650 kHz. The earlier AirLink MQTT humidity fallback (`weatherdatalogger/airlink/humidity` → `davis_hum` via `mqtt: on_json_message`) has been removed now that RF humidity is reliable.
 
+### Locally-derived gust/lull
+Packet type 9 (gust) has never been observed on this hardware (confirmed by a 40-minute packet-type histogram — see CONTEXT.md "Known Issues"). `wind_gust_max_ms`/`wind_lull_min_ms` globals track the rolling max/min of `wind_avg_ms` (present in every packet) and publish on the 60s `interval:` tick, the same way the console's own display evidently computes it. The `ptype == 9` handler is left in place and still takes priority if a real gust packet is ever received on different hardware.
+
+### Rain accumulation & rate
+- `rain_total_mm` and `rain_count_prev` (the raw hardware tip-counter baseline) both use `restore_value: yes` so a reboot mid-day doesn't lose already-counted rain or misalign the tip delta. `rain_total_mm` resets to 0 once daily at local midnight via the `time: (sntp)` component's `on_time` trigger (`timezone: Europe/Copenhagen` — adjust if the receiver moves).
+- `esphome: on_boot:` immediately publishes the restored `rain_total_mm`, so the entity reads `0`/the actual value on boot instead of sitting at "Unknown" until the next tip.
+- Rate is computed per-tip as `0.2mm / (time since the previous tip)`, mirroring the console's own algorithm, rather than a fixed 60s bucket sum — updates immediately per tip and isn't quantized to arbitrary clock windows.
+- The 60s `interval:` block decays the rate to `0` after 5 minutes without a tip **and** clears the `rain_tip_seen` flag. The flag-clear matters: without it, the first tip of a new rain event after a dry spell would compute its rate against an hours/days-old timestamp and report ~0 despite real rain just starting; clearing it makes that first tip skip rate calc (same as the very-first-tip-ever case) so the rate resumes correctly from the second tip of the new event.
+- Manual correction: publish a plain-mm float to the static control topic `weatherdatalogger/davis-vantage-receiver/set_daily_rain` (see `mqtt: on_message:` in the YAML, or run `davis/scripts/set_daily_rain.sh <mm>` — installed by `deploy.sh` alongside `deploy.sh` itself at `/opt/weatherdatalogger/scripts/`). Clamped to `< 500mm`; a rejected value is logged, not applied. This topic is intentionally static (not the dynamic `davis-<id>` prefix) since the transmitter ID auto-locks at runtime and isn't known at compile time.
+
+### Solar radiation
+No sensor is fitted on this Vantage Vue ISS. The `raw == 0x3FF` "no sensor" sentinel (and later a `raw >= 1000` tolerance band) both proved unreliable against RF noise on this 10-bit field — occasional noise landed low enough to slip through as a bogus reading (e.g. raw≈1021 decoding as a fake ~1795 W/m²). Publishing is now disabled entirely in the `ptype == 5` handler; the entity correctly reads "Unavailable" in HA. Raw values are still logged at `ESP_LOGD` for reference if a real sensor is ever fitted (search for `davis_solar_radiation` to re-enable).
+
 ### Debugging this file
-- Diagnostic/calibration logging used to investigate the above is still present but **commented out** (search `CALIBRATION (disabled)`) — uncomment to re-run the same packet-type histogram test against different CC1101 hardware, rather than re-deriving the approach from scratch.
-- `esphome logs davis/davis-vantage-receiver.yaml` streams logs remotely over the native API (`api:` block) — kept in the config solely for this; do **not** also add this node via Home Assistant's "ESPHome" integration UI, since HA entities come from `mqtt: discovery: true` instead, and having both would duplicate every entity.
-- Repeating `[I][safe_mode:142]: Boot seems successful` lines in the log are the tell for a reboot loop, even when nothing else looks wrong — check `reboot_timeout` settings (`mqtt:`, `api:`, `wifi:`) if this shows up more than once per intentional flash.
+- Diagnostic/calibration logging used to investigate the packet-type histogram is still present but **commented out** (search `CALIBRATION (disabled)`) — uncomment to re-run the same test against different CC1101 hardware, rather than re-deriving the approach from scratch.
+- A raw-packet-arrival log (`ESP_LOGD("davis", "Raw packet received: ...")`, silent at the default `INFO` level) sits right before the CRC check. Set `logger: level: DEBUG` and reflash if packets ever stop being logged, to distinguish "CC1101 isn't receiving RF frames at all" (this line never appears — hardware/RF issue) from "frames arrive but fail CRC" (this line appears but no `Packet type: ...` ever follows — decode-side issue). Revert to `INFO` afterward — `DEBUG` logs a line per packet (~every 2.5s) indefinitely otherwise.
+- `esphome logs davis/davis-vantage-receiver.yaml` for remote logs requires the native API — the `api:` block in the YAML is commented out by default; uncomment it temporarily if you need this. Do **not** also add this node via Home Assistant's "ESPHome" integration UI if you do, since HA entities come from `mqtt: discovery: true` instead, and having both would duplicate every entity.
+- Repeating `[I][safe_mode:142]: Boot seems successful` lines in the log are the tell for a reboot loop, even when nothing else looks wrong — check `reboot_timeout` settings (`mqtt:`, `api:`, `wifi:`) if this shows up more than once per intentional flash. A single occurrence right after a flash/reboot is normal.
+- A local web dashboard is available at `http://<device-ip>/` (`web_server: port: 80`), including a diagnostic **Restart** button (`button: platform: restart`) — also discovered into HA as a diagnostic entity.
 
 ---
 
@@ -269,22 +294,27 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ### Davis Vantage Vue (ESPHome)
 - [x] ESPHome firmware (`davis/davis-vantage-receiver.yaml`) — CC1101 packet decode, CRC validation, station-ID lock
-- [x] Field-tested against real hardware — temperature/wind speed+direction/rain(+rate)/wind lull/battery-low all reliable
+- [x] Field-tested against real hardware — temperature/wind speed+direction/rain(+rate)/wind lull/gust/battery-low all reliable
 - [x] Derived comfort metrics computed on-device (dew point, vapor pressure, heat index, wind chill, feels like) — same formulas as `tempest_datalogger.py`
 - [x] `battery_low` DB column added (`database/migrations/20260701_add_battery_low.sql`)
 - [x] Promoted to primary weather source in `combined_realtime`/`history_charting`, now that it's field-tested — Tempest kept only for pressure/lightning/UV/solar/wet-bulb/delta-T/air-density/battery-volts, which Davis doesn't sense (`database/migrations/20260702_davis_primary_combined_view.sql`)
-- [x] HA integration via ESPHome's own `mqtt: discovery: true` (one grouped device), not the native API
-- [x] RF frequency/filter empirically recentred (868.3206MHz / 102kHz) based on measured `freq_offset`
+- [x] HA integration via ESPHome's own `mqtt: discovery: true` (one grouped device), not the native API — entity names no longer repeat "Davis" (device grouping already provides that context in HA)
+- [x] RF frequency/filter empirically recentred; currently `frequency: 868.35MHz` / `filter_bandwidth: 650kHz` — narrowed from an original 325kHz since this transmitter doesn't hop
 - [x] `reboot_timeout: 0s` — was 15s, which force-rebooted the device on routine MQTT hiccups
 - [x] RF humidity (ptype 10) now received directly since widening `filter_bandwidth` to 650 kHz — AirLink MQTT humidity fallback removed
-- [x] Wind gust — packet type 9 (Davis' own gust broadcast) is never sent by this ISS; the console derives gust the same way, so gust is now computed locally as the rolling max of the ordinary wind samples (present in every packet) over each 60s interval (`wind_gust_max_ms` global), published alongside wind lull. Confirmed working. If a real ptype-9 packet is ever observed, it still takes priority. See CONTEXT.md "Known Issues".
-- [x] Solar radiation "no sensor" sentinel widened from an exact `raw == 0x3FF` match to a `raw >= 1000` tolerance band — on a Vue with no solar cell fitted, RF noise on the 10-bit field occasionally landed 1-2 counts short of the sentinel, slipping past the old check as a bogus near-1800 W/m² reading. The wider band still stays far below any realistic reading from a real sensor on a Pro2.
+- [x] Wind gust and lull both locally-derived — packet type 9 (Davis' own gust broadcast) is never sent by this ISS; gust is computed as the rolling max (lull as rolling min) of the ordinary wind samples present in every packet, over each 60s interval. Confirmed working. If a real ptype-9 packet is ever observed, it still takes priority. See CONTEXT.md "Known Issues".
+- [x] Rain rate switched from a fixed 60s bucket-sum to per-tip tip-interval calculation (mirrors the console's own algorithm) — updates immediately per tip instead of quantizing to arbitrary clock windows; decays to 0 after 5 minutes without a tip (tunable, was 20 minutes initially).
+- [x] Daily rain total (`rain_total_mm`) persisted across reboots via `restore_value: yes` (paired with the `rain_count_prev` tip-counter baseline), published immediately on boot via `esphome: on_boot:` so it reads 0/actual instead of "Unknown", and reset to 0 once daily at local midnight via a `time: (sntp)` component.
+- [x] Manual daily-rain correction — publish to the static MQTT control topic `weatherdatalogger/davis-vantage-receiver/set_daily_rain`, or run `davis/scripts/set_daily_rain.sh <mm>` (installed by `deploy.sh` to `/opt/weatherdatalogger/scripts/`).
+- [x] Solar radiation publishing disabled entirely — no sensor is fitted on this Vue, and RF noise on the 10-bit field made every "no sensor" sentinel check tried (exact `raw == 0x3FF` match, then a `raw >= 1000` tolerance band) unreliable enough that occasional garbage still got published as a fake reading. Entity now correctly reads "Unavailable"; raw values still logged at DEBUG for reference.
+- [x] Diagnostic "Restart" button (`button: platform: restart`) — available on the local web UI (`web_server: port: 80`) and as a diagnostic entity in HA.
 
 ### Infrastructure
 - [x] Top-level deploy script (`scripts/deploy.sh`) — staging clone, installs all three services under `/opt/weatherdatalogger/`, applies DB migrations, updates all venvs, restarts enabled services
 - [x] `systemctl status` in deploy uses `--lines=20 || true` — avoids hanging and tolerates services still in "activating" state
 - [x] Single shared config at `/opt/weatherdatalogger/config.ini` — all services read from one file; auto-generates `db.cnf` for MySQL client
 - [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
+- [x] `deploy.sh` also installs `davis/scripts/set_daily_rain.sh` to `/opt/weatherdatalogger/scripts/` — `davis/` sits at the repo root as a sibling of `weatherdatalogger/`, not inside it, so this needed an explicit install step (`$STAGING/davis/...`, not `$STAGING_WDL/...`) even though the Davis ESPHome firmware itself is flashed independently and isn't otherwise part of the server deploy
 
 ## What's next / TODO
 

@@ -202,19 +202,22 @@ cc1101:
   id: my_cc1101
   cs_pin: GPIO5
   gdo0_pin: GPIO4
-  # Recentred from 868.35MHz using empirical freq_offset data captured at this
-  # bandwidth (avg ~-29.4kHz, two clusters 1.6kHz apart — normal crystal
-  # jitter, NOT separate hop channels; this transmitter does not hop).
+  # A brief recentring attempt was tried based on empirical freq_offset data
+  # captured at this frequency (avg ~-29.4kHz, two clusters 1.6kHz apart —
+  # normal crystal jitter, NOT separate hop channels; this transmitter does
+  # not hop) but was later reverted back to 868.35MHz.
   frequency: 868.35MHz
   modulation_type: GFSK
   symbol_rate: 19200
   fsk_deviation: 9.5kHz
-  # Narrowed from 325kHz (originally wide to passively cover 5 hop channels
-  # that, per the freq_offset data above, don't actually get used — this is
-  # a single fixed-frequency transmitter). 19.2kbaud GFSK at 9.5kHz deviation
-  # only needs ~38kHz (Carson's rule); 102kHz keeps margin for thermal drift
-  # while cutting admitted noise ~5x vs the old 325kHz, which should improve
-  # the ~1-in-5 packet capture rate and may surface types 9/10 (gust/humidity).
+  # History: started at 325kHz (originally wide to passively cover 5 hop
+  # channels that, per the freq_offset data above, don't actually get used —
+  # this is a single fixed-frequency transmitter) → narrowed to 102kHz to cut
+  # admitted noise (19.2kbaud GFSK at 9.5kHz deviation only needs ~38kHz per
+  # Carson's rule) → but 102kHz proved too narrow and packet type 10
+  # (humidity) stopped being received → widened to the current 650kHz, which
+  # restored humidity reception while still cutting noise well below the
+  # original 325kHz. See CONTEXT.md "Known Issues" for the humidity fix.
   filter_bandwidth: 650kHz
   magn_target: 33dB
   packet_mode: true

@@ -11,7 +11,7 @@ A unified weather data pipeline that collects data from multiple weather station
 | Directory | Hardware | Status |
 |---|---|---|
 | [`tempest/`](tempest/) | WeatherFlow Tempest (UDP → MQTT) | Active |
-| [`davis/`](davis/) | Davis Vantage Vue (ESP32-S3 + CC1101, ESPHome) | Active — hardware available |
+| [`davis/`](davis/) | Davis Vantage Vue (ESP32-WROOM-32 + CC1101, ESPHome) | Active — field-tested |
 | [`airlink/`](airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
 
 ### Infrastructure (MQTT → storage)
@@ -37,8 +37,12 @@ weatherdatalogger/
     current
     forecast_hourly
     forecast_daily
-  davis-<id>/               ← Davis Vantage Vue (planned)
-    <sensor topics>
+  davis-<id>/               ← Davis Vantage Vue (ESPHome, active)
+    observation
+    rapid_wind
+    device_status
+  davis-vantage-receiver/   ← Static control topic — manual daily-rain correction
+    set_daily_rain
   airlink-<did>/            ← Davis AirLink air quality sensor
     observation
 ```

@@ -22,12 +22,19 @@ weatherdatalogger/
     forecast_hourly        — hourly forecast JSON array (up to forecast_hours entries)
     forecast_daily         — 10-day daily forecast JSON array
   davis-<id>/              ← Davis Vantage Vue (ESPHome firmware, active)
-    observation            — flat JSON: wind, temp, rain(+rate), derived
-                              comfort metrics; relative_humidity_pct is
-                              relayed from the AirLink over MQTT, NOT from
-                              this station's own RF link (see Known Issues)
+    observation            — flat JSON: wind (incl. locally-derived gust/lull),
+                              temp, humidity (received directly over RF),
+                              rain (incl. tip-interval rate), derived comfort
+                              metrics, battery_low. UV/solar fields are
+                              defined but essentially never populate — no
+                              sensor is fitted on this ISS, and solar
+                              publishing is disabled outright (see Known Issues)
     rapid_wind
     device_status
+  davis-vantage-receiver/  ← Static control topic (device name, not station
+    set_daily_rain            ID — not known at compile time): manual daily
+                               rain correction, e.g. after a reflash loses
+                               sync with the tip counter
   airlink-<did>/           ← Davis AirLink air quality sensor (Python service)
     observation            — PM1/PM2.5/PM10, AQI, temperature, humidity
 ```
@@ -50,16 +57,24 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 ### Davis Vantage Vue
 - 868 MHz ISM band wireless sensor suite (EU frequency plan)
 - Protocol is community-reverse-engineered (not officially documented)
-- Receiver: **ESP32-WROOM-32** (30-pin devkit) + **GERUI CC1101** — recentred to
-  868.3206MHz / 102kHz filter (empirically derived; see Known Issues), CRC-16/CCITT
+- Receiver: **ESP32-WROOM-32** (30-pin devkit) + **GERUI CC1101** — currently
+  `frequency: 868.35MHz`, `filter_bandwidth: 650kHz` (narrowed from an original
+  325kHz; this transmitter doesn't hop, so a tighter filter cuts noise without
+  losing signal), CRC-16/CCITT with a 3-position bit-shift fallback
 - Runs **ESPHome** firmware (`davis/davis-vantage-receiver.yaml`) which handles RF decoding and MQTT publishing
 - HA entities come from ESPHome's own MQTT discovery (`mqtt: discovery: true`), grouped
   under one "Davis Vantage Receiver" device — same visual result as Tempest/AirLink's
-  hand-rolled discovery, just via ESPHome's built-in mechanism instead
-- `api:` is kept solely for remote `esphome logs`/OTA — this node must NOT also be
-  added via Home Assistant's "ESPHome" integration UI, or entities would duplicate
-- **Status: active and field-tested — temperature/wind/rain/humidity/gust all reliable
-  (gust is locally derived, not received over RF — see Known Issues)**
+  hand-rolled discovery, just via ESPHome's built-in mechanism instead. Entity names
+  no longer repeat "Davis" (the device grouping already provides that context)
+- `api:` is commented out by default — only needed for remote `esphome logs`/OTA over
+  the native API; if enabled, this node must NOT also be added via Home Assistant's
+  "ESPHome" integration UI, or entities would duplicate
+- Local web dashboard at `http://<device-ip>/` (`web_server: port: 80`), including a
+  diagnostic **Restart** button also discovered into HA
+- **Status: active and field-tested — temperature/wind/rain(+rate)/humidity/gust/lull
+  all reliable (gust and lull are both locally derived, not received over RF — see
+  Known Issues). No UV or solar sensor is fitted; solar publishing is disabled
+  entirely (RF noise made every "no sensor" sentinel check tried unreliable)**
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter
@@ -154,8 +169,13 @@ WeatherDatalogger/                   ← repo root
 │   ├── scripts/
 │   │   └── deploy.sh               ← Pull from GitHub, install all services, run migrations
 │   └── config.example.ini          ← Shared config template for all three services
-├── davis/                           ← Davis Vantage Vue (ESPHome receiver — not deployed to LXC)
-│   ├── davis-vantage-receiver.yaml ← ESPHome firmware (CC1101 RF → MQTT)
+├── davis/                           ← Davis Vantage Vue (ESPHome receiver)
+│   ├── davis-vantage-receiver.yaml ← ESPHome firmware (CC1101 RF → MQTT); flashed
+│   │                                  independently, not part of the LXC deploy
+│   ├── scripts/
+│   │   └── set_daily_rain.sh       ← Manual daily-rain correction helper; this one
+│   │                                  IS deployed — installed by deploy.sh to
+│   │                                  /opt/weatherdatalogger/scripts/
 │   └── README.md
 ├── scripts/
 │   └── lint                        ← ruff format + ruff check --fix (dev only)
