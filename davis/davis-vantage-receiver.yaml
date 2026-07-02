@@ -560,8 +560,17 @@ interval:
           // 20 min comfortably covers the tip gap for light-but-real rain
           // (e.g. ~0.6 mm/h implies one tip every 20 min) while still
           // clearing a stale reading reasonably promptly once it stops.
+          // Also clears rain_tip_seen: without this, the *first* tip of a
+          // new rain event after a long dry spell would compute its rate
+          // against a stale rain_last_tip_ms from hours/days earlier,
+          // dividing 0.2mm by that huge gap and reporting ~0 despite real
+          // rain just starting. Clearing it makes that first tip get
+          // treated like the very first tip ever (rate calc skipped, same
+          // as the rain_tip_seen==false case below) — rate then resumes
+          // correctly from the second tip of the new event onward.
           if (id(rain_tip_seen) && (millis() - id(rain_last_tip_ms) > 1200000UL)) {
             id(davis_rain_rate).publish_state(0.0f);
+            id(rain_tip_seen) = false;
           }
 
           if (id(wind_lull_min_ms) < 900.0f) {
