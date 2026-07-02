@@ -86,6 +86,13 @@ cp -a "$STAGING_WDL/database/migrations/." "$WRITER_DIR/migrations/"
 install -m 644 "$STAGING_WDL/config.example.ini"       "$INSTALL_ROOT/config.example.ini"
 install -m 755 "$STAGING_WDL/scripts/deploy.sh"        "$INSTALL_ROOT/scripts/deploy.sh"
 
+# Davis receiver — ESPHome firmware is flashed independently (not a systemd
+# service here), but its server-side helper scripts live in the repo under
+# davis/ (a sibling of weatherdatalogger/, not inside it). Installed
+# alongside deploy.sh rather than in its own directory since it's the only
+# davis-side file that runs on the server.
+install -m 755 "$STAGING/davis/scripts/set_daily_rain.sh" "$INSTALL_ROOT/scripts/set_daily_rain.sh"
+
 # ---------------------------------------------------------------------------
 # Systemd units — reload only when a file actually changed
 # ---------------------------------------------------------------------------

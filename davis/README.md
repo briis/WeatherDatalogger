@@ -122,10 +122,10 @@ The receiver accumulates its own daily rain total from the raw RF tip counter, p
 mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
 ```
 
-Or from the server, using the shared config for broker/credentials:
+Or on the server, using the shared config for broker/credentials (installed by `deploy.sh` alongside its own script):
 
 ```bash
-davis/scripts/set_daily_rain.sh 5.4
+/opt/weatherdatalogger/scripts/set_daily_rain.sh 5.4
 ```
 
 By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. The value is clamped to `< 500mm` on-device (implausible values are logged and ignored, not applied).
