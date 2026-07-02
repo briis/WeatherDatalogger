@@ -30,7 +30,6 @@ Usage:
 import argparse
 import base64
 import configparser
-import json
 import logging
 import sys
 import time
@@ -73,10 +72,13 @@ DEFAULT_CONFIG = {
 }
 
 # Meteobridge template — square-bracket macros are substituted server-side
-# before the response is sent. Double-quoted keys and unquoted numeric
-# placeholders produce a response that's already valid JSON, so no custom
-# parsing is needed on our end.
-MM_TEMPLATE = '{"rain_today":[rain0total-act],"rain_rate":[rain0rate-act]}'
+# before the response is sent. Deliberately quote-free: an earlier
+# JSON-shaped template (with "-quoted keys) came back from real hardware
+# with every quote backslash-escaped (some Meteobridge firmware applies
+# PHP/CGI-style addslashes() to template output), which broke json.loads.
+# A plain comma-separated pair sidesteps that entirely — nothing for
+# Meteobridge to escape, and no JSON parser needed on our end either.
+MM_TEMPLATE = "[rain0total-act],[rain0rate-act]"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -141,27 +143,20 @@ def fetch_rain(
     try:
         req = urllib.request.Request(url, headers=_auth_headers(mb))  # noqa: S310
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            body = resp.read()
+            body = resp.read().decode().strip()
     except Exception:  # noqa: BLE001
         log.warning("Meteobridge request failed (%s)", url)
         return None
 
-    try:
-        data = json.loads(body)
-    except json.JSONDecodeError:
-        log.warning("Meteobridge response was not valid JSON: %r", body[:200])
-        return None
-
-    rain_today = data.get("rain_today")
-    rain_rate = data.get("rain_rate")
-    if rain_today is None or rain_rate is None:
-        log.warning("Meteobridge response missing expected fields: %s", data)
+    parts = body.split(",")
+    if len(parts) != 2:
+        log.warning("Meteobridge response has unexpected shape: %r", body)
         return None
 
     try:
-        return float(rain_today), float(rain_rate)
-    except (TypeError, ValueError):
-        log.warning("Meteobridge returned non-numeric values: %s", data)
+        return float(parts[0]), float(parts[1])
+    except ValueError:
+        log.warning("Meteobridge returned non-numeric values: %r", body)
         return None
 
 

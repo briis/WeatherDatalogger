@@ -97,7 +97,7 @@ file  =
 Meteobridge's `template.cgi` endpoint substitutes square-bracket macros in a query string before returning the result. This service requests:
 
 ```
-{"rain_today":[rain0total-act],"rain_rate":[rain0rate-act]}
+[rain0total-act],[rain0rate-act]
 ```
 
-With double-quoted keys and unquoted numeric placeholders, Meteobridge's substituted response is already valid JSON — no custom text parsing needed. See the [Meteobridge Add-On Services wiki](https://www.meteobridge.com/wiki/index.php?title=Add-On_Services) for the full macro reference if you want to pull additional fields.
+...and parses the comma-separated response as two floats. An earlier version used a JSON-shaped template (`{"rain_today":[...],"rain_rate":[...]}`) which looked cleaner, but real hardware came back with every quote backslash-escaped (`{\"rain_today\":...}`) — some Meteobridge firmware applies PHP/CGI-style `addslashes()` to template output. The quote-free CSV format sidesteps that: there's nothing left for Meteobridge to escape. See the [Meteobridge Add-On Services wiki](https://www.meteobridge.com/wiki/index.php?title=Add-On_Services) for the full macro reference if you want to pull additional fields.
