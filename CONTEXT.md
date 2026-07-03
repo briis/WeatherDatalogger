@@ -116,8 +116,16 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   `davis_sea_level_pressure_trend_mb`/`davis_sea_level_pressure_trend` —
   kept separate from Tempest's own `pressure` role fields (`pr.*` in the
   view), which remain the richer source if both a Tempest and a Davis
-  receiver are present (adds wet bulb/delta T/air density, computed
-  server-side with persisted history across restarts)
+  receiver are present (Tempest's sea-level/trend is computed server-side
+  with persisted history across restarts, vs. Davis' on-device/volatile
+  version above)
+- **Wet bulb, delta T, air density** are also computed on-device (same
+  formulas as `tempest_datalogger.py`'s `_wet_bulb_c()`/`_air_density()` —
+  wet bulb via a 50-iteration bisection solver), piggybacking on the
+  existing comfort-metrics block since they need the same temp/humidity
+  plus the BME280's station pressure. Exposed in `combined_realtime` as
+  `davis_wet_bulb_c`/`davis_delta_t_c`/`davis_air_density_kgm3`, again kept
+  separate from Tempest's `pr.wet_bulb_c`/`pr.delta_t_c`/`pr.air_density_kgm3`
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter

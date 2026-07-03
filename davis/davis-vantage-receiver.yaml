@@ -373,7 +373,7 @@ cc1101:
           char topic[80];
           // Sized for the worst case of the largest message built into it —
           // the `observation` payload below, which at max field width
-          // (all optional fields present, extreme values) runs to ~610
+          // (all optional fields present, extreme values) runs to ~670
           // bytes; kept well clear of that so a future field addition
           // doesn't silently truncate the JSON.
           char buf[1024];
@@ -572,6 +572,25 @@ cc1101:
             } else {
               id(davis_feels_like).publish_state(t_c);
             }
+
+            // Wet bulb (iterative bisection) / delta T / air density — same
+            // formulas as tempest_datalogger.py's _wet_bulb_c()/_air_density(),
+            // just also need station pressure, hence the separate isnan guard.
+            if (!std::isnan(id(davis_baro).state)) {
+              float p_mb = id(davis_baro).state;
+              float pv = (rh / 100.0f) * 6.112f * std::exp(17.67f * t_c / (t_c + 243.5f));
+              float lo = -50.0f, hi = t_c;
+              for (int i = 0; i < 50; i++) {
+                float mid = (lo + hi) / 2.0f;
+                float pv_wb = 6.112f * std::exp(17.67f * mid / (mid + 243.5f));
+                float residual = pv_wb - p_mb * (t_c - mid) * 0.00066f * (1.0f + 0.00115f * mid) - pv;
+                if (residual < 0.0f) lo = mid; else hi = mid;
+              }
+              float wet_bulb_c = (lo + hi) / 2.0f;
+              id(davis_wet_bulb).publish_state(wet_bulb_c);
+              id(davis_delta_t).publish_state(t_c - wet_bulb_c);
+              id(davis_air_density).publish_state(p_mb * 100.0f / (287.058f * (t_c + 273.15f)));
+            }
           }
 
           // ── 8. Consolidated observation ─────────────────────────────
@@ -649,6 +668,18 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"indoor_humidity_pct\":%.0f", id(baro_hum).state);
 
+          if (!std::isnan(id(davis_wet_bulb).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wet_bulb_c\":%.1f", id(davis_wet_bulb).state);
+
+          if (!std::isnan(id(davis_delta_t).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"delta_t_c\":%.1f", id(davis_delta_t).state);
+
+          if (!std::isnan(id(davis_air_density).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"air_density_kgm3\":%.3f", id(davis_air_density).state);
+
           // Sea-level pressure + 3h trend — computed every 15 min by the
           // `interval:` block below, not here (RF packet cadence has
           // nothing to do with the barometer).
@@ -701,7 +732,14 @@ interval:
 
             const float p0 = 1013.25f, Rd = 287.05f, gamma_s = 0.0065f,
                         g = 9.80665f, T0 = 288.15f;
-            const float h = ${elevation_m}f + ${height_above_ground_m}f;
+            // No `f` suffix on the substituted values below — appending it
+            // directly breaks when the substitution has no decimal point
+            // (e.g. "0" -> `0f`, which C++ parses as an integer literal
+            // with an undefined user-defined suffix, not a float literal).
+            // Plain literals work fine here since they're just operands in
+            // float arithmetic; no suffix needed regardless of whether the
+            // substitution is "0", "125", or "125.5".
+            const float h = ${elevation_m} + ${height_above_ground_m};
             float inner = std::pow(p0 / p_sta, Rd * gamma_s / g) * gamma_s * h / T0;
             float p_slp = p_sta * std::pow(1.0f + inner, g / (Rd * gamma_s));
             id(davis_slp).publish_state(p_slp);
@@ -791,6 +829,12 @@ sensor:
       device_class: pressure
       state_class: measurement
       accuracy_decimals: 1
+    humidity:
+      name: "Indoor Humidity"
+      id: baro_hum
+      device_class: humidity
+      state_class: measurement
+      accuracy_decimals: 0
 
   - platform: template
     # Barometric formula from station_pressure_mb — see the 15-min
@@ -819,10 +863,6 @@ sensor:
     icon: "mdi:arrow-collapse"
     state_class: measurement
     accuracy_decimals: 1
-    humidity:
-      name: "Indoor Humidity"
-      id: baro_hum
-      accuracy_decimals: 0
 
   - platform: template
     name: "Temperature"
@@ -958,6 +998,32 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+
+  - platform: template
+    # Iterative bisection solver, needs station pressure — see the
+    # comfort-metrics section of the packet lambda above.
+    name: "Wet Bulb Temperature"
+    id: davis_wet_bulb
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Delta T"
+    id: davis_delta_t
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Air Density"
+    id: davis_air_density
+    unit_of_measurement: "kg/m³"
+    icon: "mdi:weight-kilogram"
+    state_class: measurement
+    accuracy_decimals: 3
 
   - platform: template
     name: "RSSI"

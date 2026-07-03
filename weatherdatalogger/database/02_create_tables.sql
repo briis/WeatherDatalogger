@@ -260,6 +260,12 @@ SELECT
     th.pressure_trend               AS davis_pressure_trend,
     th.sea_level_pressure_trend_mb  AS davis_sea_level_pressure_trend_mb,
     th.sea_level_pressure_trend     AS davis_sea_level_pressure_trend,
+    -- Also computed on-device from the BME280 reading (wet bulb needs both
+    -- temp/humidity and station pressure) — distinct from pr.wet_bulb_c/
+    -- pr.delta_t_c/pr.air_density_kgm3 above (the `pressure` role)
+    th.wet_bulb_c                   AS davis_wet_bulb_c,
+    th.delta_t_c                    AS davis_delta_t_c,
+    th.air_density_kgm3             AS davis_air_density_kgm3,
     -- Air quality — PM1/PM2.5/PM10/AQI/CAQI
     aq.pm_1_ugm3,
     aq.pm_2p5_ugm3,
@@ -405,6 +411,9 @@ CREATE TABLE IF NOT EXISTS history_charting (
     davis_pressure_trend              VARCHAR(16)       NULL,
     davis_sea_level_pressure_trend_mb FLOAT             NULL,
     davis_sea_level_pressure_trend    VARCHAR(16)       NULL,
+    davis_wet_bulb_c                  FLOAT             NULL,
+    davis_delta_t_c                   FLOAT             NULL,
+    davis_air_density_kgm3            FLOAT             NULL,
 
     -- Air quality (AirLink) — instant PM=AVG, pre-averaged PM=AVG, AQI=MAX
     pm_1_ugm3                   FLOAT             NULL,
@@ -491,6 +500,9 @@ DO
         davis_pressure_trend,
         davis_sea_level_pressure_trend_mb,
         davis_sea_level_pressure_trend,
+        davis_wet_bulb_c,
+        davis_delta_t_c,
+        davis_air_density_kgm3,
         pm_1_ugm3,
         pm_2p5_ugm3,
         pm_2p5_1h_ugm3,
@@ -576,6 +588,9 @@ DO
             CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_trend END
             ORDER BY recorded_at DESC SEPARATOR '\x1F'
         ), '\x1F', 1),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN wet_bulb_c END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN delta_t_c END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN air_density_kgm3 END),
         -- Air quality
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_1_ugm3 END),
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_ugm3 END),

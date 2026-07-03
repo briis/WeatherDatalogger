@@ -86,7 +86,8 @@ A BME280 breakout soldered directly to the ESP32, co-located with the receiver i
 7. **Rain** — the CC1101 tip-derived accumulation/rate calculation is present in the firmware but currently **disabled** (commented out, not deleted); it wasn't stable enough. `Daily Rain`/`Rain Rate` are instead published exclusively by the [Meteobridge corrector](#manual--automated-rain-corrections), a separate service polling a Meteobridge Pro wired to the same ISS
 8. **Indoor sensor** — the BME280 is polled locally every 60s over I2C (not part of RF decoding at all) and published alongside everything else in `observation`
 9. **Sea-level pressure & trend** — computed on-device every 15 min from the BME280's station pressure, using the same barometric formula and ±1 mb Rising/Falling threshold as `tempest_datalogger.py`. The `elevation_m`/`height_above_ground_m` substitutions at the top of the yaml feed the sea-level conversion — adjust them for your install. Trend needs 3h of on-device history (12 samples, 15 min apart, tracked with no wall-clock dependency — see the `pressure_hist_*` globals), so it's unavailable for ~3h15m after every boot/reflash, not persisted across reboots
-10. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
+10. **Wet bulb, delta T, air density** — computed on-device alongside the other comfort metrics (step 7 above), same formulas as `tempest_datalogger.py`. Wet bulb uses a 50-iteration bisection solver and, like sea-level pressure, needs the BME280's station pressure — so it's only computed once a barometer reading is available
+11. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
 
 ---
 
@@ -127,6 +128,9 @@ The one exception is the daily rain correction control topic (`weatherdatalogger
   "pressure_trend": "Falling",
   "sea_level_pressure_trend_mb": -1.4,
   "sea_level_pressure_trend": "Falling",
+  "wet_bulb_c": 14.1,
+  "delta_t_c": 4.1,
+  "air_density_kgm3": 1.223,
   "battery_low": false
 }
 ```
@@ -154,6 +158,7 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `indoor_temperature_c` | °C | BME280, co-located with the receiver — indoor/enclosure temperature, not outdoor air temperature |
 | `indoor_humidity_pct` | % | BME280, co-located with the receiver |
 | `sea_level_pressure_mb`, `pressure_trend_mb`, `pressure_trend`, `sea_level_pressure_trend_mb`, `sea_level_pressure_trend` | hPa/mb | Computed on-device from `station_pressure_mb` every 15 min — same formula/thresholds as `tempest_datalogger.py`, see [How it works](#how-it-works). Omitted from the payload for ~3h15m after boot until enough on-device history accumulates |
+| `wet_bulb_c`, `delta_t_c`, `air_density_kgm3` | °C / kg/m³ | Computed on-device alongside the other comfort metrics — same formulas as `tempest_datalogger.py`. Needs both temp/humidity and `station_pressure_mb`, so it's omitted until a barometer reading is available |
 | `battery_low` | boolean | True when transmitter battery is low |
 
 ---
@@ -257,6 +262,9 @@ Entity names no longer repeat "Davis" (the device name already provides that con
 | Heat Index | Sensor | °C | |
 | Wind Chill | Sensor | °C | |
 | Feels Like | Sensor | °C | |
+| Wet Bulb Temperature | Sensor | °C | 50-iteration bisection solver; needs a barometer reading, unavailable until one arrives |
+| Delta T | Sensor | °C | Air temperature minus Wet Bulb Temperature |
+| Air Density | Sensor | kg/m³ | |
 | UV Index | Sensor | UV Index | No sensor fitted — will essentially never show a value |
 | Solar Radiation | Sensor | W/m² | No sensor fitted, publishing disabled — always "Unavailable" by design, not a fault |
 | Daily Rain | Sensor | mm | Persists across reboots; resets at local midnight |
