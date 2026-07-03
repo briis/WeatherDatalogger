@@ -162,6 +162,23 @@ spi:
   miso_pin: GPIO19
 
 # ─────────────────────────────────────────────────────────────
+# I2C bus for GY-BME280 barometer/indoor temp/humidity sensor
+#
+# GY-BME280  →  ESP32 GPIO  →  Board label
+#   VCC      →  3.3V        →  3V3
+#   GND      →  GND         →  GND
+#   SCL      →  GPIO22      →  22
+#   SDA      →  GPIO21      →  21
+#   CSB      →  not connected (internal pull-up selects I2C mode)
+#   SDO      →  GND (selects I2C address 0x76 — connect to 3.3V
+#              instead for 0x77 if you change the address below)
+# ─────────────────────────────────────────────────────────────
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+# ─────────────────────────────────────────────────────────────
 # Global state variables
 # ─────────────────────────────────────────────────────────────
 globals:
@@ -591,6 +608,10 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"solar_radiation_wm2\":%.0f", id(davis_solar_radiation).state);
 
+          if (!std::isnan(id(davis_baro).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"station_pressure_hpa\":%.1f", id(davis_baro).state);
+
           snprintf(buf + pos, sizeof(buf) - pos,
             ",\"battery_low\":%s}", battery_low ? "true" : "false");
 
@@ -656,6 +677,25 @@ binary_sensor:
     device_class: battery
 
 sensor:
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: 60s
+    temperature:
+      name: "Indoor Temperature"
+      id: baro_temp
+      accuracy_decimals: 1
+    pressure:
+      name: "Barometer"
+      id: davis_baro
+      unit_of_measurement: "hPa"
+      device_class: pressure
+      state_class: measurement
+      accuracy_decimals: 1
+    humidity:
+      name: "Indoor Humidity"
+      id: baro_hum
+      accuracy_decimals: 0
+
   - platform: template
     name: "Temperature"
     id: davis_temp
