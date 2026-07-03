@@ -131,6 +131,19 @@ A single-row view that merges the latest readings from all station types into on
 | Pressure, lightning, UV, solar, illuminance, wet bulb, delta T, air density, `battery_volts` | Tempest |
 | `pm_*`, `aqi_*`, `caqi_*` | AirLink |
 
+### `combined_realtime_stats` (view)
+
+A single-row view of derived/calculated stats, computed on demand from raw `history` (not `history_charting`, which lags up to ~20 min and is too coarse for a rolling 10-minute window). `wind` and `rain` are sourced via `station_roles`, same as `combined_realtime`.
+
+| Column | Meaning |
+|---|---|
+| `wind_gust_high_today` | Highest wind gust since local (Europe/Copenhagen) midnight |
+| `wind_bearing_avg_day` | Circular-mean wind bearing since local midnight |
+| `wind_bearing_avg_10min` | Circular-mean wind bearing over the trailing 10 minutes (rolling, not clock-aligned) |
+| `rain_total_yesterday` | Total rainfall for the full previous local calendar day — `MAX(rain_accumulation_mm)`, not `SUM`, since that column is a running cumulative "so far today" counter (resets at local midnight), not a per-observation delta |
+
+"Today"/"yesterday" boundaries use `CONVERT_TZ(..., 'UTC', 'Europe/Copenhagen')` since `recorded_at` is stored as naive UTC. This requires the MariaDB named-timezone tables to be loaded (`mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql`) — if they're missing, `CONVERT_TZ` silently returns `NULL` and the day-boundary columns will all be `NULL` (the 10-min rolling column is unaffected, since it doesn't need a day boundary).
+
 ### `history_charting`
 
 Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data into a single row per window, using the same per-field source split as `combined_realtime`. Intended for charting where raw per-observation granularity is unnecessary. Populated automatically by the `evt_aggregate_history_charting` MariaDB event.
@@ -145,7 +158,7 @@ Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data in
 | `wind_direction_deg` | Circular AVG | Uses `ATAN2(AVG(SIN), AVG(COS))` — handles 0°/360° boundary correctly (Davis) |
 | Temperature, humidity, dew point, feels like/heat index/wind chill, vapor pressure | AVG | Davis |
 | Pressure, illuminance, UV, solar, wet bulb, delta T, air density, `battery_volts` | AVG | Tempest |
-| `rain_accumulation_mm` | SUM | Per-minute delta from Davis — summed for 10-min total |
+| `rain_accumulation_mm` | MAX | Davis reports a cumulative "rain so far today" counter (resets at local midnight), not a per-observation delta — MAX gives the running total as of the window's end, not a per-window delta |
 | `rain_rate_mmh` | MAX | Peak rain rate in window (Davis) |
 | `pressure_trend`, `sea_level_pressure_trend` | Last value | Most recent text label in window (Tempest) |
 | Lightning fields | MAX / MIN | Rolling 3-hour counters from device (Tempest) |
@@ -169,3 +182,35 @@ To add a migration:
 3. Run `sudo bash /opt/weatherdatalogger/scripts/deploy.sh`
 
 The migration is recorded by filename so it is applied exactly once.
+
+---
+
+## Resetting From Scratch
+
+To wipe all data and rebuild the database from the current schema + migrations (e.g. clearing out test data before going into production) — **this is destructive and irreversible**, take a backup first:
+
+```bash
+# 1. Stop the writer so nothing writes mid-rebuild
+sudo systemctl stop weatherdb-writer
+
+# 2. Backup, even if you don't intend to keep the data
+mysqldump --defaults-extra-file=/opt/weatherdatalogger/db.cnf weatherdatalogger \
+    > ~/weatherdatalogger_backup_$(date +%Y%m%d).sql
+
+# 3. Drop and recreate the database + base schema from scratch, as root
+mysql -u root -p -e "DROP DATABASE weatherdatalogger;"
+mysql -u root -p < weatherdatalogger/database/01_create_database.sql
+mysql -u weatherlogger -p weatherdatalogger < weatherdatalogger/database/02_create_tables.sql
+
+# 4. Re-run the deploy script — schema_migrations is now empty, so it will
+#    apply every migration file in order and restart weatherdb-writer
+#    since it's already enabled
+sudo bash /opt/weatherdatalogger/scripts/deploy.sh
+```
+
+Important: `deploy.sh` clones from GitHub `main`, not the local working tree — **commit and push any pending schema/migration changes before running step 4**, or the rebuild will silently skip them.
+
+Notes:
+- Step 3's `01_create_database.sql` uses `CREATE USER IF NOT EXISTS`, so it won't touch the existing `weatherlogger` password if that user already exists — `db.cnf` stays valid, no need to regenerate it.
+- `stations` repopulates automatically as MQTT observations arrive; `station_roles` reseeds to its defaults (`wind`/`temp_humidity`/`rain` → `davis`, `pressure`/`solar_uv`/`lightning` → `tempest`, `air_quality` → `airlink`) — worth checking those still match your actual hardware afterward if you'd previously reassigned any role.
+- If named-timezone support (`CONVERT_TZ` with zone names, used by `combined_realtime_stats`) was set up on this host before, it survives the DB rebuild — it's stored in the separate `mysql` system database, not `weatherdatalogger`.

@@ -349,7 +349,8 @@ CREATE TABLE IF NOT EXISTS history_charting (
     uv_index                    FLOAT             NULL,
     solar_radiation_wm2         FLOAT             NULL,
 
-    -- Rain (Davis) — accumulation=SUM (per-minute delta), rate=MAX
+    -- Rain (Davis) — accumulation=MAX (cumulative "so far today" counter,
+    -- not a per-observation delta — see migrations/20260703_fix_charting_rain_cumulative.sql), rate=MAX
     rain_accumulation_mm        FLOAT             NULL,
     rain_rate_mmh               FLOAT             NULL,
 
@@ -496,8 +497,11 @@ DO
         ROUND(AVG(CASE WHEN station_type = roles.solar_uv_type THEN illuminance_lux END)),
         AVG(CASE WHEN station_type = roles.solar_uv_type THEN uv_index END),
         AVG(CASE WHEN station_type = roles.solar_uv_type THEN solar_radiation_wm2 END),
-        -- Rain
-        SUM(CASE WHEN station_type = roles.rain_type THEN rain_accumulation_mm END),
+        -- Rain — MAX, not SUM: rain_accumulation_mm is a cumulative
+        -- "so far today" counter (resets at local midnight), not a
+        -- per-observation delta, so the max value in the window is the
+        -- running total as of the window's end
+        MAX(CASE WHEN station_type = roles.rain_type THEN rain_accumulation_mm END),
         MAX(CASE WHEN station_type = roles.rain_type THEN rain_rate_mmh END),
         -- Lightning
         MAX(CASE WHEN station_type = roles.lightning_type THEN lightning_last_detected END),
