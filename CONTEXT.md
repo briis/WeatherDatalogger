@@ -33,7 +33,14 @@ weatherdatalogger/
                               includes station_pressure_mb/indoor_temperature_c/
                               indoor_humidity_pct from a BME280 soldered to the
                               receiver's ESP32 — local I2C readings, not
-                              RF-decoded, and not part of the outdoor ISS
+                              RF-decoded, and not part of the outdoor ISS.
+                              sea_level_pressure_mb/pressure_trend_mb/
+                              pressure_trend/sea_level_pressure_trend_mb/
+                              sea_level_pressure_trend are computed on-device
+                              from that same barometer every 15 min (see
+                              Hardware Overview below) — omitted from the
+                              payload for ~3h15m after every boot until
+                              enough on-device history accumulates
     rapid_wind
     device_status
   davis-vantage-receiver/  ← Static control topics (device name, not station
@@ -95,9 +102,22 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   `indoor_humidity_pct`, and persisted to the `realtime`/`history`/
   `history_charting` tables via the existing `temp_humidity`(davis) role —
   see `combined_realtime`'s `davis_station_pressure_mb`/`indoor_temperature_c`/
-  `indoor_humidity_pct` columns. `station_pressure_mb` is a separate, richer
-  reading from Tempest's own `pressure` role (which also has trend/sea-level
-  data this on-board BME280 doesn't compute) — the two are not merged
+  `indoor_humidity_pct` columns
+- The receiver also computes its own **sea-level pressure + 3h trend**
+  on-device every 15 min from that same BME280 reading (same formula/±1mb
+  thresholds as `tempest_datalogger.py`'s server-side version, just run in
+  the ESPHome yaml instead) — `elevation_m`/`height_above_ground_m`
+  substitutions at the top of the yaml feed the conversion. Tracked with a
+  12-slot shift-and-append buffer (15 min x 12 = exactly 3h) that needs no
+  wall-clock/timestamp bookkeeping and isn't persisted across reboots, so
+  trend is simply omitted from the payload for ~3h15m after every boot or
+  reflash. Exposed in `combined_realtime` as `davis_sea_level_pressure_mb`/
+  `davis_pressure_trend_mb`/`davis_pressure_trend`/
+  `davis_sea_level_pressure_trend_mb`/`davis_sea_level_pressure_trend` —
+  kept separate from Tempest's own `pressure` role fields (`pr.*` in the
+  view), which remain the richer source if both a Tempest and a Davis
+  receiver are present (adds wet bulb/delta T/air density, computed
+  server-side with persisted history across restarts)
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter

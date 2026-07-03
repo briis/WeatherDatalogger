@@ -1,6 +1,11 @@
 substitutions:
   name: davis-vantage-receiver
   friendly_name: Davis Vantage Receiver
+  # Used only for the sea-level pressure conversion below — adjust to the
+  # receiver's actual install (barometer height above ground can normally
+  # be left at 0 if unsure; elevation matters far more).
+  elevation_m: "0"
+  height_above_ground_m: "0"
 
 esphome:
   name: ${name}
@@ -232,6 +237,23 @@ globals:
     # If your Vue is set to Transmitter ID 2, write initial_value: '1'
     # (Davis ID 1 = 0, ID 2 = 1, ID 3 = 2, etc.)
     initial_value: '-1'
+  # 3-hour barometric pressure trend (station + sea-level), sampled every
+  # 15 min by the interval below — 12 slots x 15 min = exactly 3h, so
+  # slot [0] is always the 3h-old reference once the buffer is full; no
+  # wall-clock/timestamp bookkeeping needed, just a shift-and-append. Not
+  # persisted across reboots (unlike rain_total_mm) — trend is simply
+  # omitted from the payload for the first ~3h15m after a reboot/reflash
+  # rather than risk a bogus reading computed against stale flash data.
+  - id: pressure_hist_stn
+    type: float[12]
+    initial_value: '{0,0,0,0,0,0,0,0,0,0,0,0}'
+  - id: pressure_hist_slp
+    type: float[12]
+    initial_value: '{0,0,0,0,0,0,0,0,0,0,0,0}'
+  - id: pressure_hist_count
+    type: int
+    # Caps at 12 (buffer full); trend is only computed once it reaches 12.
+    initial_value: '0'
   # CALIBRATION (disabled — uncomment along with the matching lambda code
   # below if testing new CC1101 hardware to check whether types 9/10 ever
   # appear). Tally of every packet type seen (index = ptype 0-15).
@@ -349,7 +371,12 @@ cc1101:
           id(davis_lqi).publish_state(lqi);
 
           char topic[80];
-          char buf[512];
+          // Sized for the worst case of the largest message built into it —
+          // the `observation` payload below, which at max field width
+          // (all optional fields present, extreme values) runs to ~610
+          // bytes; kept well clear of that so a future field addition
+          // doesn't silently truncate the JSON.
+          char buf[1024];
           snprintf(topic, sizeof(topic), "%s/device_status", base_topic);
           snprintf(buf, sizeof(buf),
             "{\"rssi\":%.1f,\"lqi\":%d,\"battery_low\":%s}",
@@ -622,6 +649,29 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"indoor_humidity_pct\":%.0f", id(baro_hum).state);
 
+          // Sea-level pressure + 3h trend — computed every 15 min by the
+          // `interval:` block below, not here (RF packet cadence has
+          // nothing to do with the barometer).
+          if (!std::isnan(id(davis_slp).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"sea_level_pressure_mb\":%.1f", id(davis_slp).state);
+
+          if (!std::isnan(id(davis_pressure_trend_mb).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"pressure_trend_mb\":%.1f", id(davis_pressure_trend_mb).state);
+
+          if (id(davis_pressure_trend_desc).has_state())
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"pressure_trend\":\"%s\"", id(davis_pressure_trend_desc).state.c_str());
+
+          if (!std::isnan(id(davis_slp_trend_mb).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"sea_level_pressure_trend_mb\":%.1f", id(davis_slp_trend_mb).state);
+
+          if (id(davis_slp_trend_desc).has_state())
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"sea_level_pressure_trend\":\"%s\"", id(davis_slp_trend_desc).state.c_str());
+
           snprintf(buf + pos, sizeof(buf) - pos,
             ",\"battery_low\":%s}", battery_low ? "true" : "false");
 
@@ -636,6 +686,46 @@ cc1101:
 # stale reading doesn't sit there indefinitely once rain actually stops.
 # ─────────────────────────────────────────────────────────────
 interval:
+  - interval: 15min
+    then:
+      - lambda: |-
+          // Sea-level pressure (barometric formula) + 3-hour trend for both
+          // station and sea-level pressure. Same constants/formula as
+          // tempest_datalogger.py's _sea_level_pressure_mb() and the same
+          // ±1.0 mb Rising/Falling threshold as its _pressure_trend(), just
+          // computed on-device instead of server-side — see the
+          // pressure_hist_* globals' comment for how the 3h-old reference
+          // is tracked without needing wall-clock time.
+          if (!std::isnan(id(davis_baro).state)) {
+            float p_sta = id(davis_baro).state;
+
+            const float p0 = 1013.25f, Rd = 287.05f, gamma_s = 0.0065f,
+                        g = 9.80665f, T0 = 288.15f;
+            const float h = ${elevation_m}f + ${height_above_ground_m}f;
+            float inner = std::pow(p0 / p_sta, Rd * gamma_s / g) * gamma_s * h / T0;
+            float p_slp = p_sta * std::pow(1.0f + inner, g / (Rd * gamma_s));
+            id(davis_slp).publish_state(p_slp);
+
+            if (id(pressure_hist_count) >= 12) {
+              float stn_delta = p_sta - id(pressure_hist_stn)[0];
+              float slp_delta = p_slp - id(pressure_hist_slp)[0];
+              id(davis_pressure_trend_mb).publish_state(stn_delta);
+              id(davis_slp_trend_mb).publish_state(slp_delta);
+              id(davis_pressure_trend_desc).publish_state(
+                stn_delta <= -1.0f ? "Falling" : (stn_delta >= 1.0f ? "Rising" : "Steady"));
+              id(davis_slp_trend_desc).publish_state(
+                slp_delta <= -1.0f ? "Falling" : (slp_delta >= 1.0f ? "Rising" : "Steady"));
+            }
+
+            for (int i = 0; i < 11; i++) {
+              id(pressure_hist_stn)[i] = id(pressure_hist_stn)[i + 1];
+              id(pressure_hist_slp)[i] = id(pressure_hist_slp)[i + 1];
+            }
+            id(pressure_hist_stn)[11] = p_sta;
+            id(pressure_hist_slp)[11] = p_slp;
+            if (id(pressure_hist_count) < 12) id(pressure_hist_count) += 1;
+          }
+
   - interval: 60s
     then:
       - lambda: |-
@@ -701,6 +791,34 @@ sensor:
       device_class: pressure
       state_class: measurement
       accuracy_decimals: 1
+
+  - platform: template
+    # Barometric formula from station_pressure_mb — see the 15-min
+    # `interval:` block for the computation.
+    name: "Sea Level Pressure"
+    id: davis_slp
+    unit_of_measurement: "hPa"
+    device_class: pressure
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    # 3h delta — see pressure_hist_* globals for how the reference point
+    # is tracked. Unavailable for the first ~3h15m after a reboot.
+    name: "Pressure Trend"
+    id: davis_pressure_trend_mb
+    unit_of_measurement: "hPa"
+    icon: "mdi:arrow-collapse"
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Sea Level Pressure Trend"
+    id: davis_slp_trend_mb
+    unit_of_measurement: "hPa"
+    icon: "mdi:arrow-collapse"
+    state_class: measurement
+    accuracy_decimals: 1
     humidity:
       name: "Indoor Humidity"
       id: baro_hum
@@ -859,6 +977,19 @@ sensor:
     accuracy_decimals: 0
 
 text_sensor:
+  - platform: template
+    # Externally driven via publish_state() from the 15-min `interval:`
+    # block — no lambda: here, same pattern as the numeric comfort-metric
+    # sensors above (e.g. davis_dew_point).
+    name: "Pressure Trend Description"
+    id: davis_pressure_trend_desc
+    icon: "mdi:trending-up"
+
+  - platform: template
+    name: "Sea Level Pressure Trend Description"
+    id: davis_slp_trend_desc
+    icon: "mdi:trending-up"
+
   - platform: template
     name: "Wind Cardinal"
     id: davis_wind_cardinal

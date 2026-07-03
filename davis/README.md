@@ -85,7 +85,8 @@ A BME280 breakout soldered directly to the ESP32, co-located with the receiver i
 6. **Gust and lull** — derived locally every 60 s as the rolling max/min of the ordinary wind samples present in every packet (the same way the console's own display evidently does it), since dedicated gust packets don't arrive on this hardware
 7. **Rain** — the CC1101 tip-derived accumulation/rate calculation is present in the firmware but currently **disabled** (commented out, not deleted); it wasn't stable enough. `Daily Rain`/`Rain Rate` are instead published exclusively by the [Meteobridge corrector](#manual--automated-rain-corrections), a separate service polling a Meteobridge Pro wired to the same ISS
 8. **Indoor sensor** — the BME280 is polled locally every 60s over I2C (not part of RF decoding at all) and published alongside everything else in `observation`
-9. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
+9. **Sea-level pressure & trend** — computed on-device every 15 min from the BME280's station pressure, using the same barometric formula and ±1 mb Rising/Falling threshold as `tempest_datalogger.py`. The `elevation_m`/`height_above_ground_m` substitutions at the top of the yaml feed the sea-level conversion — adjust them for your install. Trend needs 3h of on-device history (12 samples, 15 min apart, tracked with no wall-clock dependency — see the `pressure_hist_*` globals), so it's unavailable for ~3h15m after every boot/reflash, not persisted across reboots
+10. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
 
 ---
 
@@ -121,6 +122,11 @@ The one exception is the daily rain correction control topic (`weatherdatalogger
   "station_pressure_mb": 1013.2,
   "indoor_temperature_c": 21.4,
   "indoor_humidity_pct": 45.0,
+  "sea_level_pressure_mb": 1023.6,
+  "pressure_trend_mb": -1.4,
+  "pressure_trend": "Falling",
+  "sea_level_pressure_trend_mb": -1.4,
+  "sea_level_pressure_trend": "Falling",
   "battery_low": false
 }
 ```
@@ -147,6 +153,7 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `station_pressure_mb` | hPa/mb | From the BME280, polled locally over I2C — not RF-decoded. Named `_mb` (not `_hpa`) to match the DB writer's/Tempest's convention; hPa and mb are numerically identical |
 | `indoor_temperature_c` | °C | BME280, co-located with the receiver — indoor/enclosure temperature, not outdoor air temperature |
 | `indoor_humidity_pct` | % | BME280, co-located with the receiver |
+| `sea_level_pressure_mb`, `pressure_trend_mb`, `pressure_trend`, `sea_level_pressure_trend_mb`, `sea_level_pressure_trend` | hPa/mb | Computed on-device from `station_pressure_mb` every 15 min — same formula/thresholds as `tempest_datalogger.py`, see [How it works](#how-it-works). Omitted from the payload for ~3h15m after boot until enough on-device history accumulates |
 | `battery_low` | boolean | True when transmitter battery is low |
 
 ---
@@ -175,6 +182,10 @@ By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_I
 ---
 
 ## Setup
+
+### 0. Set elevation (optional)
+
+The `substitutions:` block at the top of `davis-vantage-receiver.yaml` has `elevation_m`/`height_above_ground_m`, used only for the Sea Level Pressure conversion. Defaults to `0`/`0` (station pressure = sea level pressure) if left unset — fine for testing, but adjust to your actual install for a meaningful reading.
 
 ### 1. Create `secrets.yaml`
 
@@ -251,6 +262,11 @@ Entity names no longer repeat "Davis" (the device name already provides that con
 | Daily Rain | Sensor | mm | Persists across reboots; resets at local midnight |
 | Rain Rate | Sensor | mm/h | Decays to 0 after 5 min without a tip |
 | Barometer | Sensor | hPa | BME280, local to the receiver — not RF-decoded |
+| Sea Level Pressure | Sensor | hPa | Computed on-device from Barometer + `elevation_m`/`height_above_ground_m` |
+| Pressure Trend | Sensor | hPa | 3h delta of Barometer; unavailable for ~3h15m after boot |
+| Sea Level Pressure Trend | Sensor | hPa | 3h delta of Sea Level Pressure |
+| Pressure Trend Description | Text sensor | e.g. `Falling` | ±1 hPa Rising/Falling threshold, else `Steady` |
+| Sea Level Pressure Trend Description | Text sensor | e.g. `Falling` | Same thresholding, for Sea Level Pressure |
 | Indoor Temperature | Sensor | °C | BME280, local to the receiver |
 | Indoor Humidity | Sensor | % | BME280, local to the receiver |
 | Battery Low | Binary sensor | on/off | |
