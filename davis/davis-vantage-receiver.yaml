@@ -680,7 +680,7 @@ sensor:
     name: "UV Index"
     id: davis_uv_index
     unit_of_measurement: "UV Index"
-    icon: "mdi:sun-wireless"
+    icon: "mdi:emoticon-cool-outline"
     state_class: measurement
     accuracy_decimals: 1
 
