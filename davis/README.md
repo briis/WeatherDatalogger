@@ -16,6 +16,7 @@ Receives 868 MHz ISM band transmissions from a **Davis Vantage Vue** weather sta
 | Flash | 4 MB |
 | PSRAM | None |
 | RF module | CC1101 (868 MHz ISM, EU) |
+| Indoor sensor | BME280 (I2C, barometer/temp/humidity) |
 
 ### RF module — GERUI CC1101 868 MHz
 
@@ -35,6 +36,21 @@ A dedicated CC1101 breakout board with integrated antenna. The GERUI board label
 | GDO2 | — | not connected |
 
 > **Important:** GPIO 6–11 are reserved for internal flash on the WROOM-32 and must not be used.
+
+### Indoor sensor — GY-BME280 (barometer / indoor temperature / indoor humidity)
+
+A BME280 breakout soldered directly to the ESP32, co-located with the receiver itself — not part of the outdoor ISS. Provides a barometer reading plus indoor temperature/humidity for wherever the receiver is installed.
+
+### Wiring — GY-BME280 → ESP32-WROOM-32
+
+| GY-BME280 pin | ESP32 GPIO | Board label |
+|---|---|---|
+| VCC | 3.3 V | 3V3 |
+| GND | GND | GND |
+| SCL | GPIO 22 | 22 |
+| SDA | GPIO 21 | 21 |
+| CSB | not connected | internal pull-up selects I2C mode |
+| SDO | GND | selects I2C address `0x76` (tie to 3.3V instead for `0x77`, and update the `address:` key in the yaml if changed) |
 
 ### Davis Vantage Vue
 
@@ -68,7 +84,8 @@ A dedicated CC1101 breakout board with integrated antenna. The GERUI board label
 5. **Decoding** — packet type byte selects the measurement: wind (every packet), temperature (type 8), UV (type 3, no sensor fitted here), solar radiation (type 5, no sensor fitted — publishing disabled entirely since RF noise made the "no sensor" sentinel unreliable), humidity (type 10), rain (type 14, but see below). Packet type 9 (Davis' own gust broadcast) is decoded if it's ever observed, but this specific transmitter has never been seen sending it
 6. **Gust and lull** — derived locally every 60 s as the rolling max/min of the ordinary wind samples present in every packet (the same way the console's own display evidently does it), since dedicated gust packets don't arrive on this hardware
 7. **Rain** — the CC1101 tip-derived accumulation/rate calculation is present in the firmware but currently **disabled** (commented out, not deleted); it wasn't stable enough. `Daily Rain`/`Rain Rate` are instead published exclusively by the [Meteobridge corrector](#manual--automated-rain-corrections), a separate service polling a Meteobridge Pro wired to the same ISS
-8. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
+8. **Indoor sensor** — the BME280 is polled locally every 60s over I2C (not part of RF decoding at all) and published alongside everything else in `observation`
+9. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
 
 ---
 
@@ -101,6 +118,9 @@ The one exception is the daily rain correction control topic (`weatherdatalogger
   "heat_index_c": 18.2,
   "wind_chill_c": 18.2,
   "feels_like_c": 18.2,
+  "station_pressure_mb": 1013.2,
+  "indoor_temperature_c": 21.4,
+  "indoor_humidity_pct": 45.0,
   "battery_low": false
 }
 ```
@@ -124,6 +144,9 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `rain_rate_mmh` | mm/h | Current rain rate. Also sourced exclusively from the Meteobridge corrector; falls back to `0` if Meteobridge itself goes quiet for 5+ minutes |
 | `uv_index` | UV Index | Packet type 3 decoded, but this ISS has no UV sensor fitted — will essentially never populate |
 | `solar_radiation_wm2` | W/m² | Not published — no solar sensor fitted, and RF noise made the "no sensor" sentinel unreliable enough that publishing was disabled entirely rather than risk showing a bogus value |
+| `station_pressure_mb` | hPa/mb | From the BME280, polled locally over I2C — not RF-decoded. Named `_mb` (not `_hpa`) to match the DB writer's/Tempest's convention; hPa and mb are numerically identical |
+| `indoor_temperature_c` | °C | BME280, co-located with the receiver — indoor/enclosure temperature, not outdoor air temperature |
+| `indoor_humidity_pct` | % | BME280, co-located with the receiver |
 | `battery_low` | boolean | True when transmitter battery is low |
 
 ---
@@ -227,6 +250,9 @@ Entity names no longer repeat "Davis" (the device name already provides that con
 | Solar Radiation | Sensor | W/m² | No sensor fitted, publishing disabled — always "Unavailable" by design, not a fault |
 | Daily Rain | Sensor | mm | Persists across reboots; resets at local midnight |
 | Rain Rate | Sensor | mm/h | Decays to 0 after 5 min without a tip |
+| Barometer | Sensor | hPa | BME280, local to the receiver — not RF-decoded |
+| Indoor Temperature | Sensor | °C | BME280, local to the receiver |
+| Indoor Humidity | Sensor | % | BME280, local to the receiver |
 | Battery Low | Binary sensor | on/off | |
 | RSSI | Sensor (diagnostic) | dBm | |
 | LQI | Sensor (diagnostic) | — | |

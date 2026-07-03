@@ -608,9 +608,19 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"solar_radiation_wm2\":%.0f", id(davis_solar_radiation).state);
 
+          // Named _mb (not _hpa) to match the DB writer's/Tempest's
+          // convention — hPa and mb are numerically identical.
           if (!std::isnan(id(davis_baro).state))
             pos += snprintf(buf + pos, sizeof(buf) - pos,
-              ",\"station_pressure_hpa\":%.1f", id(davis_baro).state);
+              ",\"station_pressure_mb\":%.1f", id(davis_baro).state);
+
+          if (!std::isnan(id(baro_temp).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"indoor_temperature_c\":%.1f", id(baro_temp).state);
+
+          if (!std::isnan(id(baro_hum).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"indoor_humidity_pct\":%.0f", id(baro_hum).state);
 
           snprintf(buf + pos, sizeof(buf) - pos,
             ",\"battery_low\":%s}", battery_low ? "true" : "false");

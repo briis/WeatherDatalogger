@@ -29,7 +29,11 @@ weatherdatalogger/
                               battery_low. UV/solar fields are defined but
                               essentially never populate — no sensor is
                               fitted on this ISS, and solar publishing is
-                              disabled outright (see Known Issues)
+                              disabled outright (see Known Issues). Also
+                              includes station_pressure_mb/indoor_temperature_c/
+                              indoor_humidity_pct from a BME280 soldered to the
+                              receiver's ESP32 — local I2C readings, not
+                              RF-decoded, and not part of the outdoor ISS
     rapid_wind
     device_status
   davis-vantage-receiver/  ← Static control topics (device name, not station
@@ -84,6 +88,16 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   Rain accumulation/rate: the CC1101 tip-derived calculation proved unstable
   and is disabled — `Daily Rain`/`Rain Rate` are now sourced exclusively from
   the Meteobridge corrector (see below)**
+- A **BME280** is soldered directly to the receiver's ESP32 (I2C, `0x76`) —
+  provides `Barometer`/`Indoor Temperature`/`Indoor Humidity`, polled locally
+  every 60s, not RF-decoded and not part of the outdoor ISS. Published in the
+  `observation` payload as `station_pressure_mb`/`indoor_temperature_c`/
+  `indoor_humidity_pct`, and persisted to the `realtime`/`history`/
+  `history_charting` tables via the existing `temp_humidity`(davis) role —
+  see `combined_realtime`'s `davis_station_pressure_mb`/`indoor_temperature_c`/
+  `indoor_humidity_pct` columns. `station_pressure_mb` is a separate, richer
+  reading from Tempest's own `pressure` role (which also has trend/sea-level
+  data this on-board BME280 doesn't compute) — the two are not merged
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter

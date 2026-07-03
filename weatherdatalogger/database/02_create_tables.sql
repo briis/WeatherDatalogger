@@ -88,6 +88,11 @@ CREATE TABLE IF NOT EXISTS realtime (
     -- device
     battery_volts               FLOAT         NULL,
     battery_low                 BOOLEAN       NULL COMMENT 'Low battery flag (Davis)',
+    -- indoor — Davis receiver's own BME280, co-located with the ESP32/CC1101
+    -- (indoor temp/humidity; its pressure reading lives in station_pressure_mb
+    -- above, alongside Tempest's, since both are the same column)
+    indoor_temperature_c        FLOAT         NULL COMMENT 'Davis receiver BME280',
+    indoor_humidity_pct         FLOAT         NULL COMMENT 'Davis receiver BME280',
     -- air quality — Davis AirLink (NULL for other station types)
     pm_1_ugm3                   FLOAT         NULL COMMENT 'PM1.0 2-min avg µg/m³',
     pm_2p5_ugm3                 FLOAT         NULL COMMENT 'PM2.5 2-min avg µg/m³',
@@ -155,6 +160,9 @@ CREATE TABLE IF NOT EXISTS history (
     -- device
     battery_volts               FLOAT         NULL,
     battery_low                 BOOLEAN       NULL,
+    -- indoor — Davis receiver's own BME280, co-located with the ESP32/CC1101
+    indoor_temperature_c        FLOAT         NULL,
+    indoor_humidity_pct         FLOAT         NULL,
     -- air quality — Davis AirLink (NULL for other station types)
     pm_1_ugm3                   FLOAT         NULL,
     pm_2p5_ugm3                 FLOAT         NULL,
@@ -237,6 +245,16 @@ SELECT
     -- Device
     pr.battery_volts,
     th.battery_low                  AS davis_battery_low,
+    -- Indoor (Davis receiver's own BME280 — co-located with the receiver,
+    -- not the outdoor ISS; sourced from the same temp_humidity(davis) join
+    -- as davis_battery_low above, since it's the same MQTT observation row).
+    -- davis_station_pressure_mb is that same row's station_pressure_mb — the
+    -- receiver's own barometer reading, distinct from pr.station_pressure_mb
+    -- (the `pressure` role, e.g. Tempest, which also has trend/sea-level data
+    -- this on-board BME280 does not compute).
+    th.indoor_temperature_c,
+    th.indoor_humidity_pct,
+    th.station_pressure_mb          AS davis_station_pressure_mb,
     -- Air quality — PM1/PM2.5/PM10/AQI/CAQI
     aq.pm_1_ugm3,
     aq.pm_2p5_ugm3,
@@ -326,7 +344,9 @@ CREATE TABLE IF NOT EXISTS history_charting (
     wind_gust_ms                FLOAT             NULL,
     wind_direction_deg          SMALLINT UNSIGNED NULL,
 
-    -- Pressure (Tempest — Davis has no barometer) — AVG; trend text = last value in window
+    -- Pressure (`pressure` role, e.g. Tempest — has trend/sea-level data the
+    -- Davis receiver's on-board BME280 doesn't compute) — AVG; trend text =
+    -- last value in window
     station_pressure_mb         FLOAT             NULL,
     sea_level_pressure_mb       FLOAT             NULL,
     pressure_trend_mb           FLOAT             NULL,
@@ -367,6 +387,13 @@ CREATE TABLE IF NOT EXISTS history_charting (
     -- Device
     battery_volts               FLOAT             NULL,
     davis_battery_low           BOOLEAN           NULL,
+
+    -- Indoor (Davis receiver's own BME280) — AVG. davis_station_pressure_mb
+    -- is the receiver's own barometer, distinct from station_pressure_mb
+    -- above (the `pressure` role)
+    indoor_temperature_c        FLOAT             NULL,
+    indoor_humidity_pct         FLOAT             NULL,
+    davis_station_pressure_mb   FLOAT             NULL,
 
     -- Air quality (AirLink) — instant PM=AVG, pre-averaged PM=AVG, AQI=MAX
     pm_1_ugm3                   FLOAT             NULL,
@@ -445,6 +472,9 @@ DO
         air_density_kgm3,
         battery_volts,
         davis_battery_low,
+        indoor_temperature_c,
+        indoor_humidity_pct,
+        davis_station_pressure_mb,
         pm_1_ugm3,
         pm_2p5_ugm3,
         pm_2p5_1h_ugm3,
@@ -514,6 +544,10 @@ DO
         -- Device
         AVG(CASE WHEN station_type = roles.pressure_type THEN battery_volts END),
         MAX(CASE WHEN station_type = roles.temp_humidity_type THEN battery_low END),
+        -- Indoor (Davis receiver's own BME280)
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_temperature_c END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_humidity_pct END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN station_pressure_mb END),
         -- Air quality
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_1_ugm3 END),
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_ugm3 END),

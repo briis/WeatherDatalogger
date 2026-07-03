@@ -93,6 +93,10 @@ _OBS_FIELDS: tuple[str, ...] = (
     "air_density_kgm3",
     "battery_volts",
     "battery_low",
+    # Indoor — Davis receiver's own BME280, co-located with the ESP32/CC1101,
+    # not the outdoor ISS (NULL for other station types)
+    "indoor_temperature_c",
+    "indoor_humidity_pct",
     # Air quality — Davis AirLink (NULL for other station types)
     "pm_1_ugm3",
     "pm_2p5_ugm3",
