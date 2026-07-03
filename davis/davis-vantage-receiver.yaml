@@ -680,9 +680,10 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"air_density_kgm3\":%.3f", id(davis_air_density).state);
 
-          // Sea-level pressure + 3h trend — computed every 15 min by the
-          // `interval:` block below, not here (RF packet cadence has
-          // nothing to do with the barometer).
+          // Sea-level pressure — recomputed on every barometer update (see
+          // the bme280 pressure sensor's on_value above), not here (RF
+          // packet cadence has nothing to do with the barometer). Trend
+          // fields are computed every 15 min by the `interval:` block below.
           if (!std::isnan(id(davis_slp).state))
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"sea_level_pressure_mb\":%.1f", id(davis_slp).state);
@@ -720,29 +721,17 @@ interval:
   - interval: 15min
     then:
       - lambda: |-
-          // Sea-level pressure (barometric formula) + 3-hour trend for both
-          // station and sea-level pressure. Same constants/formula as
-          // tempest_datalogger.py's _sea_level_pressure_mb() and the same
-          // ±1.0 mb Rising/Falling threshold as its _pressure_trend(), just
-          // computed on-device instead of server-side — see the
-          // pressure_hist_* globals' comment for how the 3h-old reference
-          // is tracked without needing wall-clock time.
-          if (!std::isnan(id(davis_baro).state)) {
+          // 3-hour pressure trend for both station and sea-level pressure.
+          // Same ±1.0 mb Rising/Falling threshold as tempest_datalogger.py's
+          // _pressure_trend(), just computed on-device instead of
+          // server-side — see the pressure_hist_* globals' comment for how
+          // the 3h-old reference is tracked without needing wall-clock time.
+          // Station/sea-level pressure themselves are recomputed on every
+          // barometer update (see the `pressure:` sensor's on_value above)
+          // — this just samples their latest values every 15 min.
+          if (!std::isnan(id(davis_baro).state) && !std::isnan(id(davis_slp).state)) {
             float p_sta = id(davis_baro).state;
-
-            const float p0 = 1013.25f, Rd = 287.05f, gamma_s = 0.0065f,
-                        g = 9.80665f, T0 = 288.15f;
-            // No `f` suffix on the substituted values below — appending it
-            // directly breaks when the substitution has no decimal point
-            // (e.g. "0" -> `0f`, which C++ parses as an integer literal
-            // with an undefined user-defined suffix, not a float literal).
-            // Plain literals work fine here since they're just operands in
-            // float arithmetic; no suffix needed regardless of whether the
-            // substitution is "0", "125", or "125.5".
-            const float h = ${elevation_m} + ${height_above_ground_m};
-            float inner = std::pow(p0 / p_sta, Rd * gamma_s / g) * gamma_s * h / T0;
-            float p_slp = p_sta * std::pow(1.0f + inner, g / (Rd * gamma_s));
-            id(davis_slp).publish_state(p_slp);
+            float p_slp = id(davis_slp).state;
 
             if (id(pressure_hist_count) >= 12) {
               float stn_delta = p_sta - id(pressure_hist_stn)[0];
@@ -829,6 +818,27 @@ sensor:
       device_class: pressure
       state_class: measurement
       accuracy_decimals: 1
+      on_value:
+        then:
+          - lambda: |-
+              // Sea-level pressure (barometric formula) — recomputed on
+              // every station-pressure update so it never lags behind it.
+              // Same formula as tempest_datalogger.py's
+              // _sea_level_pressure_mb(). Trend tracking (3h-old reference)
+              // stays on its own 15-min cadence — see the `interval:` block.
+              if (!std::isnan(x)) {
+                const float p0 = 1013.25f, Rd = 287.05f, gamma_s = 0.0065f,
+                            g = 9.80665f, T0 = 288.15f;
+                // No `f` suffix on the substituted values below — appending
+                // it directly breaks when the substitution has no decimal
+                // point (e.g. "0" -> `0f`, which C++ parses as an integer
+                // literal with an undefined user-defined suffix, not a
+                // float literal).
+                const float h = ${elevation_m} + ${height_above_ground_m};
+                float inner = std::pow(p0 / x, Rd * gamma_s / g) * gamma_s * h / T0;
+                float p_slp = x * std::pow(1.0f + inner, g / (Rd * gamma_s));
+                id(davis_slp).publish_state(p_slp);
+              }
     humidity:
       name: "Indoor Humidity"
       id: baro_hum
@@ -837,8 +847,8 @@ sensor:
       accuracy_decimals: 0
 
   - platform: template
-    # Barometric formula from station_pressure_mb — see the 15-min
-    # `interval:` block for the computation.
+    # Barometric formula from station_pressure_mb — see the bme280 pressure
+    # sensor's `on_value:` above for the computation.
     name: "Sea Level Pressure"
     id: davis_slp
     unit_of_measurement: "hPa"

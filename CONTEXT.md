@@ -34,13 +34,15 @@ weatherdatalogger/
                               indoor_humidity_pct from a BME280 soldered to the
                               receiver's ESP32 — local I2C readings, not
                               RF-decoded, and not part of the outdoor ISS.
-                              sea_level_pressure_mb/pressure_trend_mb/
-                              pressure_trend/sea_level_pressure_trend_mb/
-                              sea_level_pressure_trend are computed on-device
-                              from that same barometer every 15 min (see
-                              Hardware Overview below) — omitted from the
-                              payload for ~3h15m after every boot until
-                              enough on-device history accumulates
+                              sea_level_pressure_mb is computed on-device from
+                              that same barometer on every reading (every
+                              60s, no lag behind station_pressure_mb).
+                              pressure_trend_mb/pressure_trend/
+                              sea_level_pressure_trend_mb/
+                              sea_level_pressure_trend are sampled separately
+                              every 15 min (see Hardware Overview below) —
+                              omitted from the payload for ~3h15m after every
+                              boot until enough on-device history accumulates
     rapid_wind
     device_status
   davis-vantage-receiver/  ← Static control topics (device name, not station
@@ -104,14 +106,17 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   see `combined_realtime`'s `davis_station_pressure_mb`/`indoor_temperature_c`/
   `indoor_humidity_pct` columns
 - The receiver also computes its own **sea-level pressure + 3h trend**
-  on-device every 15 min from that same BME280 reading (same formula/±1mb
-  thresholds as `tempest_datalogger.py`'s server-side version, just run in
-  the ESPHome yaml instead) — `elevation_m`/`height_above_ground_m`
-  substitutions at the top of the yaml feed the conversion. Tracked with a
-  12-slot shift-and-append buffer (15 min x 12 = exactly 3h) that needs no
-  wall-clock/timestamp bookkeeping and isn't persisted across reboots, so
-  trend is simply omitted from the payload for ~3h15m after every boot or
-  reflash. Exposed in `combined_realtime` as `davis_sea_level_pressure_mb`/
+  on-device from that same BME280 reading (same formula/±1mb thresholds as
+  `tempest_datalogger.py`'s server-side version, just run in the ESPHome
+  yaml instead) — `elevation_m`/`height_above_ground_m` substitutions at the
+  top of the yaml feed the conversion. Sea-level pressure itself is
+  recomputed via an `on_value:` trigger on the barometer sensor, so it
+  tracks `station_pressure_mb` every 60s with no lag; the trend is sampled
+  separately every 15 min with a 12-slot shift-and-append buffer (15 min x
+  12 = exactly 3h) that needs no wall-clock/timestamp bookkeeping and isn't
+  persisted across reboots, so trend is simply omitted from the payload for
+  ~3h15m after every boot or reflash. Exposed in `combined_realtime` as
+  `davis_sea_level_pressure_mb`/
   `davis_pressure_trend_mb`/`davis_pressure_trend`/
   `davis_sea_level_pressure_trend_mb`/`davis_sea_level_pressure_trend` —
   kept separate from Tempest's own `pressure` role fields (`pr.*` in the
