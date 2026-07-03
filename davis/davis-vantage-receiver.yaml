@@ -240,18 +240,23 @@ globals:
   # 3-hour barometric pressure trend (station + sea-level), sampled every
   # 15 min by the interval below — 12 slots x 15 min = exactly 3h, so
   # slot [0] is always the 3h-old reference once the buffer is full; no
-  # wall-clock/timestamp bookkeeping needed, just a shift-and-append. Not
-  # persisted across reboots (unlike rain_total_mm) — trend is simply
-  # omitted from the payload for the first ~3h15m after a reboot/reflash
-  # rather than risk a bogus reading computed against stale flash data.
+  # wall-clock/timestamp bookkeeping needed, just a shift-and-append.
+  # Persisted across reboots (like rain_total_mm) — pressure changes slowly
+  # and continuously, so trusting the flash-restored buffer after a reboot
+  # is more useful than resetting it and going silent for another 3h15m,
+  # which is what an unpersisted buffer did before (every WiFi drop/OTA
+  # reflash wiped it, so trend could go long stretches without updating).
   - id: pressure_hist_stn
     type: float[12]
+    restore_value: yes
     initial_value: '{0,0,0,0,0,0,0,0,0,0,0,0}'
   - id: pressure_hist_slp
     type: float[12]
+    restore_value: yes
     initial_value: '{0,0,0,0,0,0,0,0,0,0,0,0}'
   - id: pressure_hist_count
     type: int
+    restore_value: yes
     # Caps at 12 (buffer full); trend is only computed once it reaches 12.
     initial_value: '0'
   # CALIBRATION (disabled — uncomment along with the matching lambda code
@@ -858,7 +863,9 @@ sensor:
 
   - platform: template
     # 3h delta — see pressure_hist_* globals for how the reference point
-    # is tracked. Unavailable for the first ~3h15m after a reboot.
+    # is tracked. The history buffer is flash-persisted, so this is only
+    # unavailable for the first ~3h15m after first boot / a factory-reset
+    # reflash, not after every routine reboot.
     name: "Pressure Trend"
     id: davis_pressure_trend_mb
     unit_of_measurement: "hPa"
