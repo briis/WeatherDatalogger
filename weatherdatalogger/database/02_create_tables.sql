@@ -23,6 +23,27 @@ CREATE TABLE IF NOT EXISTS stations (
     UNIQUE KEY uq_stations_station_id (station_id)
 ) ENGINE=InnoDB;
 
+-- Maps each functional "role" (wind, pressure, ...) to the station_type that
+-- currently supplies it. combined_realtime and evt_aggregate_history_charting
+-- look this up at query time instead of hardcoding a literal station_type, so
+-- installs without a Davis/Tempest/AirLink of a particular type can redirect
+-- a role to whatever hardware they do have. See migrations/20260703_add_station_roles.sql
+-- for the full role -> column mapping and how to reassign a role.
+CREATE TABLE IF NOT EXISTS station_roles (
+    role         VARCHAR(32) NOT NULL COMMENT 'wind | temp_humidity | rain | pressure | solar_uv | lightning | air_quality',
+    station_type VARCHAR(32) NOT NULL COMMENT 'tempest | airlink | davis | ... — must match stations.station_type',
+    PRIMARY KEY (role)
+) ENGINE=InnoDB;
+
+INSERT IGNORE INTO station_roles (role, station_type) VALUES
+    ('wind',          'davis'),
+    ('temp_humidity', 'davis'),
+    ('rain',          'davis'),
+    ('pressure',      'tempest'),
+    ('solar_uv',      'tempest'),
+    ('lightning',     'tempest'),
+    ('air_quality',   'airlink');
+
 -- Latest observation per station — one row per station_id, replaced on every
 -- incoming MQTT message (~every 10-15 s). Use INSERT … ON DUPLICATE KEY UPDATE.
 CREATE TABLE IF NOT EXISTS realtime (
@@ -159,97 +180,135 @@ CREATE TABLE IF NOT EXISTS history (
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- View: combined_realtime
--- Merges the latest Davis (weather), Tempest (pressure/lightning/UV/solar —
--- sensors the Davis ISS doesn't have), and AirLink (air quality) readings into
--- a single row. Uses LEFT JOIN so the view returns a row as long as a Davis
--- station is registered, with Tempest-only and air quality columns NULL until
--- those stations are present.
+-- Merges one row per configured role (wind, pressure, temp_humidity, solar_uv,
+-- rain, lightning, air_quality) into a single row, sourcing each role from
+-- whatever station_type station_roles currently maps it to (see that table's
+-- comment, and migrations/20260703_add_station_roles.sql for the full
+-- role -> column mapping and how to reassign a role). Column names are
+-- historical and no longer strictly literal: "tempest_recorded_at" reflects
+-- the `pressure` role, not literally a Tempest station once reassigned; kept
+-- as-is to avoid breaking existing dashboards built against this view.
+-- `wind` is the mandatory anchor (INNER JOIN) — a setup with no station that
+-- reports wind (e.g. AirLink-only) gets zero rows back regardless of role
+-- config, same limitation as the original Davis-only anchor had.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW combined_realtime AS
 SELECT
     -- Timestamps
-    d.recorded_at                   AS recorded_at,
-    t.recorded_at                   AS tempest_recorded_at,
-    a.recorded_at                   AS airlink_recorded_at,
-    -- Wind (Davis)
-    d.wind_lull_ms,
-    d.wind_avg_ms,
-    d.wind_gust_ms,
-    d.wind_direction_deg,
-    -- Pressure (Tempest — Davis ISS has no barometer)
-    t.station_pressure_mb,
-    t.sea_level_pressure_mb,
-    t.pressure_trend_mb,
-    t.pressure_trend,
-    t.sea_level_pressure_trend_mb,
-    t.sea_level_pressure_trend,
-    -- Temperature & humidity (Davis)
-    d.air_temperature_c,
-    d.relative_humidity_pct,
-    d.dew_point_c,
-    t.wet_bulb_c,
-    t.delta_t_c,
-    d.feels_like_c,
-    d.heat_index_c,
-    d.wind_chill_c,
-    -- Solar & UV (Tempest — no sensor fitted on the Davis ISS)
-    t.illuminance_lux,
-    t.uv_index,
-    t.solar_radiation_wm2,
-    -- Rain (Davis)
-    d.rain_accumulation_mm,
-    d.rain_rate_mmh,
-    -- Lightning (Tempest — Davis has no lightning detector)
-    t.lightning_last_detected,
-    t.lightning_count_3h,
-    t.lightning_min_dist_3h_km,
-    t.lightning_max_dist_3h_km,
+    w.recorded_at                   AS recorded_at,
+    pr.recorded_at                  AS tempest_recorded_at,
+    aq.recorded_at                  AS airlink_recorded_at,
+    -- Wind
+    w.wind_lull_ms,
+    w.wind_avg_ms,
+    w.wind_gust_ms,
+    w.wind_direction_deg,
+    -- Pressure (+ wet bulb/delta T/air density/battery — bundled, see station_roles)
+    pr.station_pressure_mb,
+    pr.sea_level_pressure_mb,
+    pr.pressure_trend_mb,
+    pr.pressure_trend,
+    pr.sea_level_pressure_trend_mb,
+    pr.sea_level_pressure_trend,
+    -- Temperature & humidity
+    th.air_temperature_c,
+    th.relative_humidity_pct,
+    th.dew_point_c,
+    pr.wet_bulb_c,
+    pr.delta_t_c,
+    th.feels_like_c,
+    th.heat_index_c,
+    th.wind_chill_c,
+    -- Solar & UV
+    su.illuminance_lux,
+    su.uv_index,
+    su.solar_radiation_wm2,
+    -- Rain
+    rn.rain_accumulation_mm,
+    rn.rain_rate_mmh,
+    -- Lightning
+    lt.lightning_last_detected,
+    lt.lightning_count_3h,
+    lt.lightning_min_dist_3h_km,
+    lt.lightning_max_dist_3h_km,
     -- Air properties
-    d.vapor_pressure_mb,
-    t.air_density_kgm3,
+    th.vapor_pressure_mb,
+    pr.air_density_kgm3,
     -- Device
-    t.battery_volts,
-    d.battery_low                   AS davis_battery_low,
-    -- Air quality — PM1/PM2.5/PM10 (AirLink)
-    a.pm_1_ugm3,
-    a.pm_2p5_ugm3,
-    a.pm_2p5_1h_ugm3,
-    a.pm_2p5_3h_ugm3,
-    a.pm_2p5_24h_ugm3,
-    a.pm_2p5_nowcast_ugm3,
-    a.pm_10_ugm3,
-    a.pm_10_1h_ugm3,
-    a.pm_10_3h_ugm3,
-    a.pm_10_24h_ugm3,
-    a.pm_10_nowcast_ugm3,
-    a.aqi_pm2p5,
-    a.aqi_pm10,
-    a.caqi_pm2p5,
-    a.caqi_pm10
+    pr.battery_volts,
+    th.battery_low                  AS davis_battery_low,
+    -- Air quality — PM1/PM2.5/PM10/AQI/CAQI
+    aq.pm_1_ugm3,
+    aq.pm_2p5_ugm3,
+    aq.pm_2p5_1h_ugm3,
+    aq.pm_2p5_3h_ugm3,
+    aq.pm_2p5_24h_ugm3,
+    aq.pm_2p5_nowcast_ugm3,
+    aq.pm_10_ugm3,
+    aq.pm_10_1h_ugm3,
+    aq.pm_10_3h_ugm3,
+    aq.pm_10_24h_ugm3,
+    aq.pm_10_nowcast_ugm3,
+    aq.aqi_pm2p5,
+    aq.aqi_pm10,
+    aq.caqi_pm2p5,
+    aq.caqi_pm10
 FROM
     (
         SELECT r.*
         FROM   realtime r
         JOIN   stations s ON r.station_id = s.station_id
-        WHERE  s.station_type = 'davis'
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'wind')
         LIMIT  1
-    ) d
+    ) w
 LEFT JOIN
     (
         SELECT r.*
         FROM   realtime r
         JOIN   stations s ON r.station_id = s.station_id
-        WHERE  s.station_type = 'tempest'
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'pressure')
         LIMIT  1
-    ) t ON TRUE
+    ) pr ON TRUE
 LEFT JOIN
     (
         SELECT r.*
         FROM   realtime r
         JOIN   stations s ON r.station_id = s.station_id
-        WHERE  s.station_type = 'airlink'
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'temp_humidity')
         LIMIT  1
-    ) a ON TRUE;
+    ) th ON TRUE
+LEFT JOIN
+    (
+        SELECT r.*
+        FROM   realtime r
+        JOIN   stations s ON r.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'solar_uv')
+        LIMIT  1
+    ) su ON TRUE
+LEFT JOIN
+    (
+        SELECT r.*
+        FROM   realtime r
+        JOIN   stations s ON r.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'rain')
+        LIMIT  1
+    ) rn ON TRUE
+LEFT JOIN
+    (
+        SELECT r.*
+        FROM   realtime r
+        JOIN   stations s ON r.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'lightning')
+        LIMIT  1
+    ) lt ON TRUE
+LEFT JOIN
+    (
+        SELECT r.*
+        FROM   realtime r
+        JOIN   stations s ON r.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'air_quality')
+        LIMIT  1
+    ) aq ON TRUE;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table: history_charting
@@ -339,6 +398,12 @@ CREATE TABLE IF NOT EXISTS history_charting (
 -- are used throughout to avoid mismatch when the server runs in a non-UTC
 -- timezone. FROM_UNIXTIME/UNIX_TIMESTAMP are intentionally avoided.
 --
+-- Role -> station_type is resolved once per run via a CROSS JOIN against a
+-- single pivoted row (roles) from station_roles, rather than hardcoding a
+-- literal station_type in every CASE WHEN. See station_roles' comment and
+-- migrations/20260703_add_station_roles.sql for the full role -> column
+-- mapping and how to reassign a role.
+--
 -- Requires the event scheduler (enable once as MySQL root, or in my.cnf):
 --   SET GLOBAL event_scheduler = ON;
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -397,70 +462,70 @@ DO
     )
     SELECT
         window_start,
-        -- Wind (Davis)
-        MIN(CASE WHEN station_type = 'davis' THEN wind_lull_ms END),
-        AVG(CASE WHEN station_type = 'davis' THEN wind_avg_ms END),
-        MAX(CASE WHEN station_type = 'davis' THEN wind_gust_ms END),
+        -- Wind
+        MIN(CASE WHEN station_type = roles.wind_type THEN wind_lull_ms END),
+        AVG(CASE WHEN station_type = roles.wind_type THEN wind_avg_ms END),
+        MAX(CASE WHEN station_type = roles.wind_type THEN wind_gust_ms END),
         MOD(ROUND(DEGREES(ATAN2(
-            AVG(CASE WHEN station_type = 'davis' THEN SIN(RADIANS(wind_direction_deg)) END),
-            AVG(CASE WHEN station_type = 'davis' THEN COS(RADIANS(wind_direction_deg)) END)
+            AVG(CASE WHEN station_type = roles.wind_type THEN SIN(RADIANS(wind_direction_deg)) END),
+            AVG(CASE WHEN station_type = roles.wind_type THEN COS(RADIANS(wind_direction_deg)) END)
         ))) + 360, 360),
-        -- Pressure (Tempest)
-        AVG(CASE WHEN station_type = 'tempest' THEN station_pressure_mb END),
-        AVG(CASE WHEN station_type = 'tempest' THEN sea_level_pressure_mb END),
-        AVG(CASE WHEN station_type = 'tempest' THEN pressure_trend_mb END),
+        -- Pressure (+ wet bulb/delta T/air density/battery — bundled)
+        AVG(CASE WHEN station_type = roles.pressure_type THEN station_pressure_mb END),
+        AVG(CASE WHEN station_type = roles.pressure_type THEN sea_level_pressure_mb END),
+        AVG(CASE WHEN station_type = roles.pressure_type THEN pressure_trend_mb END),
         SUBSTRING_INDEX(GROUP_CONCAT(
-            CASE WHEN station_type = 'tempest' THEN pressure_trend END
+            CASE WHEN station_type = roles.pressure_type THEN pressure_trend END
             ORDER BY recorded_at DESC SEPARATOR '\x1F'
         ), '\x1F', 1),
-        AVG(CASE WHEN station_type = 'tempest' THEN sea_level_pressure_trend_mb END),
+        AVG(CASE WHEN station_type = roles.pressure_type THEN sea_level_pressure_trend_mb END),
         SUBSTRING_INDEX(GROUP_CONCAT(
-            CASE WHEN station_type = 'tempest' THEN sea_level_pressure_trend END
+            CASE WHEN station_type = roles.pressure_type THEN sea_level_pressure_trend END
             ORDER BY recorded_at DESC SEPARATOR '\x1F'
         ), '\x1F', 1),
-        -- Temperature & humidity (Davis, except wet bulb / delta T)
-        AVG(CASE WHEN station_type = 'davis' THEN air_temperature_c END),
-        AVG(CASE WHEN station_type = 'davis' THEN relative_humidity_pct END),
-        AVG(CASE WHEN station_type = 'davis' THEN dew_point_c END),
-        AVG(CASE WHEN station_type = 'tempest' THEN wet_bulb_c END),
-        AVG(CASE WHEN station_type = 'tempest' THEN delta_t_c END),
-        AVG(CASE WHEN station_type = 'davis' THEN feels_like_c END),
-        AVG(CASE WHEN station_type = 'davis' THEN heat_index_c END),
-        AVG(CASE WHEN station_type = 'davis' THEN wind_chill_c END),
-        -- Solar & UV (Tempest)
-        ROUND(AVG(CASE WHEN station_type = 'tempest' THEN illuminance_lux END)),
-        AVG(CASE WHEN station_type = 'tempest' THEN uv_index END),
-        AVG(CASE WHEN station_type = 'tempest' THEN solar_radiation_wm2 END),
-        -- Rain (Davis)
-        SUM(CASE WHEN station_type = 'davis' THEN rain_accumulation_mm END),
-        MAX(CASE WHEN station_type = 'davis' THEN rain_rate_mmh END),
-        -- Lightning (Tempest)
-        MAX(CASE WHEN station_type = 'tempest' THEN lightning_last_detected END),
-        MAX(CASE WHEN station_type = 'tempest' THEN lightning_count_3h END),
-        MIN(CASE WHEN station_type = 'tempest' THEN lightning_min_dist_3h_km END),
-        MAX(CASE WHEN station_type = 'tempest' THEN lightning_max_dist_3h_km END),
+        -- Temperature & humidity
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN air_temperature_c END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN relative_humidity_pct END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN dew_point_c END),
+        AVG(CASE WHEN station_type = roles.pressure_type THEN wet_bulb_c END),
+        AVG(CASE WHEN station_type = roles.pressure_type THEN delta_t_c END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN feels_like_c END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN heat_index_c END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN wind_chill_c END),
+        -- Solar & UV
+        ROUND(AVG(CASE WHEN station_type = roles.solar_uv_type THEN illuminance_lux END)),
+        AVG(CASE WHEN station_type = roles.solar_uv_type THEN uv_index END),
+        AVG(CASE WHEN station_type = roles.solar_uv_type THEN solar_radiation_wm2 END),
+        -- Rain
+        SUM(CASE WHEN station_type = roles.rain_type THEN rain_accumulation_mm END),
+        MAX(CASE WHEN station_type = roles.rain_type THEN rain_rate_mmh END),
+        -- Lightning
+        MAX(CASE WHEN station_type = roles.lightning_type THEN lightning_last_detected END),
+        MAX(CASE WHEN station_type = roles.lightning_type THEN lightning_count_3h END),
+        MIN(CASE WHEN station_type = roles.lightning_type THEN lightning_min_dist_3h_km END),
+        MAX(CASE WHEN station_type = roles.lightning_type THEN lightning_max_dist_3h_km END),
         -- Air properties
-        AVG(CASE WHEN station_type = 'davis' THEN vapor_pressure_mb END),
-        AVG(CASE WHEN station_type = 'tempest' THEN air_density_kgm3 END),
+        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN vapor_pressure_mb END),
+        AVG(CASE WHEN station_type = roles.pressure_type THEN air_density_kgm3 END),
         -- Device
-        AVG(CASE WHEN station_type = 'tempest' THEN battery_volts END),
-        MAX(CASE WHEN station_type = 'davis' THEN battery_low END),
-        -- Air quality (AirLink)
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_1_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_2p5_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_2p5_1h_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_2p5_3h_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_2p5_24h_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_2p5_nowcast_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_10_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_10_1h_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_10_3h_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_10_24h_ugm3 END),
-        AVG(CASE WHEN station_type = 'airlink' THEN pm_10_nowcast_ugm3 END),
-        MAX(CASE WHEN station_type = 'airlink' THEN aqi_pm2p5 END),
-        MAX(CASE WHEN station_type = 'airlink' THEN aqi_pm10 END),
-        MAX(CASE WHEN station_type = 'airlink' THEN caqi_pm2p5 END),
-        MAX(CASE WHEN station_type = 'airlink' THEN caqi_pm10 END)
+        AVG(CASE WHEN station_type = roles.pressure_type THEN battery_volts END),
+        MAX(CASE WHEN station_type = roles.temp_humidity_type THEN battery_low END),
+        -- Air quality
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_1_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_1h_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_3h_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_24h_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_nowcast_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_10_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_10_1h_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_10_3h_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_10_24h_ugm3 END),
+        AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_10_nowcast_ugm3 END),
+        MAX(CASE WHEN station_type = roles.air_quality_type THEN aqi_pm2p5 END),
+        MAX(CASE WHEN station_type = roles.air_quality_type THEN aqi_pm10 END),
+        MAX(CASE WHEN station_type = roles.air_quality_type THEN caqi_pm2p5 END),
+        MAX(CASE WHEN station_type = roles.air_quality_type THEN caqi_pm10 END)
     FROM (
         SELECT
             h.*,
@@ -480,6 +545,17 @@ DO
                   - INTERVAL (MINUTE(UTC_TIMESTAMP()) % 10) MINUTE
                   - INTERVAL SECOND(UTC_TIMESTAMP()) SECOND
               )
-          AND s.station_type IN ('tempest', 'airlink', 'davis')
+          AND s.station_type IN (SELECT DISTINCT station_type FROM station_roles)
     ) windowed
+    CROSS JOIN (
+        SELECT
+            MAX(CASE WHEN role = 'wind'          THEN station_type END) AS wind_type,
+            MAX(CASE WHEN role = 'pressure'      THEN station_type END) AS pressure_type,
+            MAX(CASE WHEN role = 'temp_humidity' THEN station_type END) AS temp_humidity_type,
+            MAX(CASE WHEN role = 'solar_uv'      THEN station_type END) AS solar_uv_type,
+            MAX(CASE WHEN role = 'rain'          THEN station_type END) AS rain_type,
+            MAX(CASE WHEN role = 'lightning'     THEN station_type END) AS lightning_type,
+            MAX(CASE WHEN role = 'air_quality'   THEN station_type END) AS air_quality_type
+        FROM station_roles
+    ) roles
     GROUP BY window_start;
