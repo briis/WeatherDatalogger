@@ -279,8 +279,12 @@ def _on_connect(
         return
     base = cfg["mqtt"]["base_topic"].rstrip("/")
     client.subscribe(f"{base}/+/observation", qos=0)
-    client.subscribe(f"{base}/+/rain_raw", qos=0)
-    log.info("MQTT connected — subscribed to %s/+/{observation,rain_raw}", base)
+    # rain_raw capture is disabled for now — the Davis firmware no longer
+    # publishes that topic either, now that davis_rain/davis_rain_rate are
+    # computed standalone from the RF tip counter. To resume a future
+    # comparison exercise, subscribe to f"{base}/+/rain_raw" here and route
+    # it to DbWriter.write_rain_raw() in _on_message below.
+    log.info("MQTT connected — subscribed to %s/+/observation", base)
 
 
 def _on_disconnect(
@@ -305,23 +309,17 @@ def _on_message(
         log.warning("Non-JSON message on %s — ignored", msg.topic)
         return
 
-    # Derive station segment/message type from the topic:
-    # "weatherdatalogger/tempest-ST-XXXXX/observation" → "tempest-ST-XXXXX", "observation"
+    # Derive station segment from the topic:
+    # "weatherdatalogger/tempest-ST-XXXXX/observation" → "tempest-ST-XXXXX"
     topic_parts = msg.topic.split("/")
     try:
         station_segment = topic_parts[1]
-        message_type = topic_parts[2]
         station_type = station_segment.split("-")[0]
     except IndexError:
         station_segment = "unknown"
-        message_type = "unknown"
         station_type = "unknown"
 
     log.debug("Message on %s", msg.topic)
-
-    if message_type == "rain_raw":
-        writer.write_rain_raw(station_segment, payload)
-        return
 
     # Davis (ESPHome) has no hardware serial or clock sync, unlike the
     # Tempest/AirLink Python dataloggers — fall back to the topic segment

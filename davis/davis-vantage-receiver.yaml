@@ -8,23 +8,16 @@ esphome:
   on_boot:
     then:
       - lambda: |-
-          // Rain entities (davis_rain / davis_rain_rate) are, for now,
-          // published *only* from the Meteobridge correction handlers
-          // (mqtt: on_message: set_daily_rain / set_rain_rate below) — the
-          // CC1101 tip-derived rain accumulation/rate wasn't stable enough,
-          // and Meteobridge has proven consistent with the console. Entities
-          // simply sit "Unknown" for up to one Meteobridge poll interval
-          // after boot (default 60s) rather than showing a
-          // restored-but-now-untrusted local value.
-          //
-          // davis_rain_raw is a separate, parallel entity (see ptype==14
-          // below) that DOES publish the raw RF tip-counter accumulation
-          // directly, untouched by Meteobridge corrections. It exists
-          // purely to log what the sensor itself reports over time,
-          // alongside the console-corrected figure, so the two can be
-          // compared for accuracy work. It's expected to drift from
-          // davis_rain (missed/duplicate tips, no correction applied) —
-          // that drift is the point.
+          // Rain entities (davis_rain / davis_rain_rate) are computed
+          // entirely from the ISS's own RF tip counter (see ptype==14
+          // below) — standalone, no external station required. This
+          // mirrors how the Davis console itself derives rain: it just
+          // counts bucket tips. set_daily_rain / set_rain_rate (mqtt:
+          // on_message: below) remain available as an OPTIONAL manual
+          // correction — e.g. to punch in the console's displayed value
+          // after a reflash/reboot that landed between tips, or as a
+          // periodic cross-check if you happen to have a Meteobridge — but
+          // nothing here depends on them.
 
 esp32:
   board: esp32dev
@@ -56,19 +49,10 @@ time:
         hours: 0
         then:
           - lambda: |-
-              // davis_rain/rain_total_mm: disabled along with the rest of
-              // the local rain publishing — see the on_boot comment above.
-              // Meteobridge/the console do their own midnight reset, so the
-              // next correction poll already reflects the new day; no local
-              // action needed. Uncomment both lines below to re-enable.
-              // id(rain_total_mm) = 0.0f;
-              // id(davis_rain).publish_state(0.0f);
-
-              // davis_rain_raw/rain_raw_total_mm: this one IS live (see
-              // ptype==14 below), so it needs its own real midnight reset
-              // to stay a fair daily-total comparison against the console.
-              id(rain_raw_total_mm) = 0.0f;
-              id(davis_rain_raw).publish_state(0.0f);
+              // Daily rain reset at local midnight, mirroring the console's
+              // own reset behavior.
+              id(rain_total_mm) = 0.0f;
+              id(davis_rain).publish_state(0.0f);
 
 captive_portal:
 
@@ -112,13 +96,16 @@ mqtt:
   # ever reach the 5-minute mark. Disabled so the device stays up through
   # routine network blips; MQTT itself already auto-reconnects on its own.
   reboot_timeout: 0s
-  # Manual/automated corrections for the daily rain total and rain rate —
+  # OPTIONAL manual correction for the daily rain total and rain rate — NOT
+  # required for normal operation, since davis_rain/davis_rain_rate are
+  # computed standalone from the RF tip counter (ptype==14 below). Useful
   # e.g. after a reflash/reboot that landed between tips and lost sync with
-  # the physical tip counter, or a periodic correction source like the
-  # Meteobridge poller (weatherdatalogger/meteobridge/), which has proven
-  # consistent with the console. Both use fixed control topics (not the
-  # dynamic weatherdatalogger/davis-<id> observation prefix, since the
-  # transmitter ID auto-locks at runtime and isn't known at compile time).
+  # the physical tip counter, or if you happen to have an independent
+  # source (like a Meteobridge polling the console,
+  # weatherdatalogger/meteobridge/) you want to occasionally cross-check
+  # against. Both use fixed control topics (not the dynamic
+  # weatherdatalogger/davis-<id> observation prefix, since the transmitter
+  # ID auto-locks at runtime and isn't known at compile time).
   # Publish a plain mm / mm-per-hour value, e.g.:
   #   mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
   #   mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_rain_rate -m "2.3"
@@ -193,16 +180,6 @@ globals:
     # rain_count_prev above) so a mid-day restart doesn't lose rain already
     # counted; reset to 0 once daily at local midnight by the `time:`
     # component's on_time trigger.
-    initial_value: '0.0'
-  - id: rain_raw_total_mm
-    type: float
-    restore_value: yes
-    # Today's rain, accumulated purely from local RF tip-counting — kept
-    # deliberately separate from rain_total_mm above, which is owned by the
-    # Meteobridge correction handlers (mqtt: on_message: set_daily_rain).
-    # This one is never touched by those handlers, so it stays a clean,
-    # uncorrected record of what the sensor itself reports (see ptype==14
-    # below), for comparison against the console/Meteobridge-derived value.
     initial_value: '0.0'
   - id: rain_last_tip_ms
     type: uint32_t
@@ -454,42 +431,56 @@ cc1101:
           } else if (ptype == 14) {
             // Rainfall (tip counter, 0.2 mm per tip)
             //
-            // davis_rain/davis_rain_rate (rain_total_mm, rain_last_tip_ms,
-            // rain_tip_seen) stay DISABLED here and are sourced exclusively
-            // from the Meteobridge correction handlers (mqtt: on_message:
-            // above), which have proven consistent with the console.
-            //
-            // davis_rain_raw (rain_raw_total_mm) IS re-enabled below — a
-            // second, independent accumulation fed straight from this
-            // tip-delta math, published purely so the raw sensor output can
-            // be logged and compared against the console/Meteobridge value
-            // over time. It never feeds back into davis_rain/rain_total_mm
-            // or the rain_last_tip_ms/rain_tip_seen rate-decay state above,
-            // so it can't disturb the existing Meteobridge-driven path.
+            // Primary, standalone rain source — computed entirely from the
+            // ISS's own RF tip counter, matching how the Davis console
+            // itself derives rain (it just counts bucket tips; see
+            // CONTEXT.md rain-accuracy notes). set_daily_rain/set_rain_rate
+            // (mqtt: on_message: above) remain available as an OPTIONAL
+            // manual/Meteobridge correction, but nothing here depends on
+            // them.
             int tips = ((int)d[3] + (((int)d[4] >> 7) << 8)) & 0x7F;
 
             if (id(rain_count_prev) >= 0) {
               int delta = tips - id(rain_count_prev);
               if (delta < 0) delta += 128;
-              if (delta > 0 && delta < 10) {
-                id(rain_raw_total_mm) += delta * 0.2f;
-                id(davis_rain_raw).publish_state(id(rain_raw_total_mm));
+
+              // Upper bound guards against a corrupted-but-CRC-passing
+              // decode, not against genuine heavy rain — raised from an
+              // earlier, much stricter cutoff that would have silently
+              // discarded a real downpour combined with a couple of missed
+              // RF packets. Anything unusually large is logged either way,
+              // so a corrupt decode can still be told apart from real rain.
+              if (delta > 0 && delta < 60) {
+                if (delta >= 20) {
+                  ESP_LOGW("davis", "Large rain tip delta accepted: %d tips (%.1f mm)",
+                    delta, delta * 0.2f);
+                }
+                id(rain_total_mm) += delta * 0.2f;
+                id(davis_rain).publish_state(id(rain_total_mm));
+
+                // Rate from the actual gap since the last tip (matches the
+                // console's own algorithm), not a fixed 60s bucket sum —
+                // updates immediately per tip and reflects real burstiness
+                // instead of quantizing to whichever 60s window a tip fell
+                // into. If more than one tip arrived since the last packet
+                // (delta > 1), spread them evenly across the elapsed gap.
+                uint32_t now_ms = millis();
+                if (id(rain_tip_seen)) {
+                  uint32_t elapsed_ms = now_ms - id(rain_last_tip_ms);
+                  if (elapsed_ms > 0) {
+                    float rate_mmh = (delta * 0.2f / (float)elapsed_ms) * 3600000.0f;
+                    if (rate_mmh >= 0.0f && rate_mmh < 500.0f) {
+                      id(davis_rain_rate).publish_state(rate_mmh);
+                    }
+                  }
+                }
+                id(rain_last_tip_ms) = now_ms;
+                id(rain_tip_seen) = true;
+              } else if (delta >= 60) {
+                ESP_LOGW("davis", "Ignored implausible rain tip delta: %d tips since last packet", delta);
               }
             }
             id(rain_count_prev) = tips;
-
-            // Published on EVERY ptype==14 packet, unconditionally — tips is
-            // the raw 0-127 counter exactly as decoded, untouched by the
-            // delta/wraparound/filtering logic above. rain_raw_mm alongside
-            // it is that logic's current output. Logging both, together,
-            // lets the delta math be checked after the fact (e.g. did a
-            // gap >= 10 tips get silently dropped by the guard above?)
-            // instead of just trusting it.
-            snprintf(topic, sizeof(topic), "%s/rain_raw", base_topic);
-            snprintf(buf, sizeof(buf),
-              "{\"raw_tip_count\":%d,\"rain_raw_mm\":%.1f}",
-              tips, id(rain_raw_total_mm));
-            id(mqtt_client).publish(topic, buf);
 
           }
 
@@ -609,23 +600,18 @@ cc1101:
 # Wind lull and rain-rate staleness safety net — derived every 60s.
 # Wind lull: minimum wind sample seen during the interval
 # (mirrors how gust is the transmitter's own rolling max).
-# Rain rate is now published exclusively by the Meteobridge correction
-# handlers (mqtt: on_message: above) — the local tip-interval calculation
-# (ptype==14 above) is disabled but left in place. This block no longer
-# drives normal decay; it only forces the rate back to 0 if Meteobridge
-# itself goes quiet for 5+ minutes, per its comment below.
+# Rain rate is driven per-tip by the ptype==14 handler above; this just
+# forces it back to 0 once no tip has been seen for 5+ minutes, so a
+# stale reading doesn't sit there indefinitely once rain actually stops.
 # ─────────────────────────────────────────────────────────────
 interval:
   - interval: 60s
     then:
       - lambda: |-
-          // Safety net, not the primary rain-rate path anymore: with local
-          // tip processing disabled (see ptype==14 above), rain_tip_seen/
-          // rain_last_tip_ms are now only touched by the Meteobridge
-          // set_rain_rate correction handler, which re-touches them on
-          // every poll (default every 60s). So in normal operation this
-          // never fires — it only kicks in if Meteobridge itself goes
-          // quiet for 5+ minutes, forcing the rate back to 0 rather than
+          // rain_tip_seen/rain_last_tip_ms are updated per-tip by the
+          // ptype==14 handler above (and optionally by the set_rain_rate
+          // MQTT correction). If neither has touched them in 5+ minutes,
+          // rain has stopped — force the rate back to 0 rather than
           // leaving a stale reading displayed indefinitely.
           if (id(rain_tip_seen) && (millis() - id(rain_last_tip_ms) > 300000UL)) {
             id(davis_rain_rate).publish_state(0.0f);
@@ -747,18 +733,6 @@ sensor:
     unit_of_measurement: "mm/h"
     device_class: precipitation_intensity
     state_class: measurement
-    accuracy_decimals: 1
-
-  - platform: template
-    # Raw RF tip-counter daily total, independent of the Meteobridge/console
-    # correction applied to "Daily Rain" above — see the ptype==14 comment.
-    # Temporary: for comparing the sensor's own output against the console
-    # over time, not meant as a long-term accuracy source.
-    name: "Daily Rain (Raw RF)"
-    id: davis_rain_raw
-    unit_of_measurement: "mm"
-    device_class: precipitation
-    state_class: total_increasing
     accuracy_decimals: 1
 
   - platform: template
