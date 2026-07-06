@@ -65,12 +65,15 @@ Local at-a-glance display, co-located with the receiver. Shares the I2C bus with
 
 > Address: the board silkscreen's `ADD_SELECT` 0x78/0x7A are 8-bit write addresses, i.e. 0x3C/0x3D in ESPHome's 7-bit notation. The yaml defaults to `0x3C`; if the display doesn't come up, check the boot log's I2C scan result (`i2c: scan: true`) and switch to `0x3D`.
 
-Auto-cycles between two pages every 5.5 s (no touch controller on this board, so switching is time-based, not interactive):
+Auto-cycles through 5 pages every 7 s each (no touch controller on this board, so switching is time-based, not interactive). Every page shares the same header — its title inverted into the panel's yellow top strip (filled bar in `COLOR_ON`, text in `COLOR_OFF`):
 
-1. **Weather** — temperature/humidity, wind speed/cardinal, gust, rain total and barometer
-2. **Time, IP** — a "Davis Weather" header inverted into the panel's yellow top strip (filled bar in `COLOR_ON`, text in `COLOR_OFF`), synced clock below it, and the device's IP address at the bottom
+1. **Davis Receiver** — synced clock, date, and the device's IP address
+2. **Temp / Humidity** — temperature/humidity, feels-like, dew point
+3. **Rain** — daily rain total and rain rate
+4. **Pressure** — sea-level pressure, its trend, and station pressure
+5. **Wind** — wind speed/cardinal, gust, lull
 
-> The current page layout is a placeholder to confirm the panel works end-to-end — it will be rearranged later. See the `display: platform: ssd1306_i2c` lambda in `davis-vantage-receiver.yaml` to change what's shown.
+> See the `display: platform: ssd1306_i2c` lambda in `davis-vantage-receiver.yaml` to change what's shown.
 
 ### Davis Vantage Vue
 
@@ -108,7 +111,7 @@ Auto-cycles between two pages every 5.5 s (no touch controller on this board, so
 9. **Sea-level pressure & trend** — sea-level pressure is recomputed on-device every time the BME280 reports a new station pressure (every 60s), using the same barometric formula as `tempest_datalogger.py`, so it tracks station pressure without lag. The `elevation_m`/`height_above_ground_m` substitutions at the top of the yaml feed the conversion — adjust them for your install. The trend (±1 mb Rising/Falling threshold, also matching `tempest_datalogger.py`) is sampled separately every 15 min and needs 3h of on-device history (12 samples, 15 min apart, tracked with no wall-clock dependency — see the `pressure_hist_*` globals), so it's unavailable for ~3h15m after every boot/reflash, not persisted across reboots
 10. **Wet bulb, delta T, air density** — computed on-device alongside the other comfort metrics (step 7 above), same formulas as `tempest_datalogger.py`. Wet bulb uses a 50-iteration bisection solver and, like sea-level pressure, needs the BME280's station pressure — so it's only computed once a barometer reading is available
 11. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
-12. **Local display** — the OLED (see [Hardware](#display--098-oled-ssd1306-driver-128x64)) redraws every 1s and auto-cycles between a weather page and a time/IP page every 5.5s, independent of MQTT/RF timing. Current layout is a placeholder, not final
+12. **Local display** — the OLED (see [Hardware](#display--098-oled-ssd1306-driver-128x64)) redraws every 1s and auto-cycles through 5 pages (Davis Receiver, Temp/Humidity, Rain, Pressure, Wind) every 7s each, independent of MQTT/RF timing
 
 ---
 
