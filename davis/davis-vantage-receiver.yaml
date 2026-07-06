@@ -54,17 +54,19 @@ time:
   - platform: sntp
     id: sntp_time
     timezone: Europe/Copenhagen  # adjust if the receiver isn't in Denmark
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
     on_time:
       - seconds: 0
         minutes: 0
         hours: 0
         then:
-          - lambda: |-
+          - lambda: |
               // Daily rain reset at local midnight, mirroring the console's
               // own reset behavior.
               id(rain_total_mm) = 0.0f;
               id(davis_rain).publish_state(0.0f);
-
 captive_portal:
 
 # Web UI for diagnostics (optional — can be removed)
@@ -237,7 +239,7 @@ display:
           id(davis_wind_speed).state, id(davis_wind_cardinal).state.c_str());
         it.printf(0, 38, id(font_small), "Gust: %.1f m/s",
           id(davis_windgust).state);
-        it.printf(0, 52, id(font_small), "Rain: %.1f mm  %.0f hPa",
+        it.printf(0, 52, id(font_small), "Rain: %.1fmm  %.0f hPa",
           id(davis_rain).state, id(davis_baro).state);
       } else {
         // ── Page 2: date, time, IP ───────────────────────────────
