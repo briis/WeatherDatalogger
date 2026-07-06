@@ -222,37 +222,69 @@ display:
     id: oled_display
     update_interval: 1s
     lambda: |-
-      // Auto-cycles between two pages every 5.5s. No touch controller
+      // Auto-cycles through 5 pages every 7s each. No touch controller
       // present on this board (I2C scan only ever finds one device),
       // so this is a simple time-based page switch instead — feel
       // free to rework the page content below independently.
-      int page = (millis() / 5500) % 2;
+      // Every page starts with the same 16px inverted header bar
+      // (filled rect in COLOR_ON, text in COLOR_OFF on top of it).
+      int page = (millis() / 7000) % 5;
 
       if (page == 0) {
-        // ── Page 1: weather ──────────────────────────────────────
-        // Inverted header line: filled bar in COLOR_ON, text in COLOR_OFF
-        // on top of it. Height covers font_large (20px) plus a little
-        // padding before the next line at y=24.
-        it.printf(0, 0, id(font_large), "%.1f°C  %.0f%%",
-          id(davis_temp).state, id(davis_hum).state);
-        it.printf(0, 24, id(font_small), "Wind: %.1f m/s %s",
-          id(davis_wind_speed).state, id(davis_wind_cardinal).state.c_str());
-        it.printf(0, 38, id(font_small), "Gust: %.1f m/s",
-          id(davis_windgust).state);
-        it.printf(0, 52, id(font_small), "Rain: %.1fmm  %.0f hPa",
-          id(davis_rain).state, id(davis_baro).state);
-      } else {
-        // ── Page 2: date, time, IP ───────────────────────────────
+        // ── Page 1: Davis Receiver — IP, date & time ─────────────
         auto t = id(sntp_time).now();
         it.filled_rectangle(0, 0, it.get_width(), 16, COLOR_ON);
-        it.print(64,0,id(font_small), COLOR_OFF, TextAlign::TOP_CENTER, "Davis Weather");
+        it.print(64,0,id(font_small), COLOR_OFF, TextAlign::TOP_CENTER, "Davis Receiver");
         if (t.is_valid()) {
           it.strftime(0, 20, id(font_large), "%H:%M", t);
+          it.strftime(0, 40, id(font_small), "%d-%m-%Y", t);
         } else {
           it.print(0, 20, id(font_small), "Time not synced yet");
         }
-        it.printf(0, 48, id(font_small), "%s",
+        it.printf(0, 52, id(font_small), "%s",
           id(davis_ip_address).state.c_str());
+
+      } else if (page == 1) {
+        // ── Page 2: Temperature & Humidity ───────────────────────
+        it.filled_rectangle(0, 0, it.get_width(), 16, COLOR_ON);
+        it.print(64,0,id(font_small), COLOR_OFF, TextAlign::TOP_CENTER, "Temp / Humidity");
+        it.printf(0, 18, id(font_large), "%.1f°C  %.0f%%",
+          id(davis_temp).state, id(davis_hum).state);
+        it.printf(0, 40, id(font_small), "Feels: %.1f°C",
+          id(davis_feels_like).state);
+        it.printf(0, 52, id(font_small), "Dew: %.1f°C",
+          id(davis_dew_point).state);
+
+      } else if (page == 2) {
+        // ── Page 3: Rain ──────────────────────────────────────────
+        it.filled_rectangle(0, 0, it.get_width(), 16, COLOR_ON);
+        it.print(64,0,id(font_small), COLOR_OFF, TextAlign::TOP_CENTER, "Rain");
+        it.printf(0, 18, id(font_large), "%.1f mm",
+          id(davis_rain).state);
+        it.printf(0, 40, id(font_small), "Rate: %.1f mm/h",
+          id(davis_rain_rate).state);
+
+      } else if (page == 3) {
+        // ── Page 4: Pressure ──────────────────────────────────────
+        it.filled_rectangle(0, 0, it.get_width(), 16, COLOR_ON);
+        it.print(64,0,id(font_small), COLOR_OFF, TextAlign::TOP_CENTER, "Pressure");
+        it.printf(0, 18, id(font_large), "%.0f hPa",
+          id(davis_slp).state);
+        it.printf(0, 40, id(font_small), "Trend: %.1f hPa %s",
+          id(davis_slp_trend_mb).state, id(davis_slp_trend_desc).state.c_str());
+        it.printf(0, 52, id(font_small), "Station: %.0f hPa",
+          id(davis_baro).state);
+
+      } else {
+        // ── Page 5: Wind ──────────────────────────────────────────
+        it.filled_rectangle(0, 0, it.get_width(), 16, COLOR_ON);
+        it.print(64,0,id(font_small), COLOR_OFF, TextAlign::TOP_CENTER, "Wind");
+        it.printf(0, 18, id(font_large), "%.1f m/s %s",
+          id(davis_wind_speed).state, id(davis_wind_cardinal).state.c_str());
+        it.printf(0, 40, id(font_small), "Gust: %.1f m/s",
+          id(davis_windgust).state);
+        it.printf(0, 52, id(font_small), "Lull: %.1f m/s",
+          id(davis_wind_lull).state);
       }
 
 # ─────────────────────────────────────────────────────────────
