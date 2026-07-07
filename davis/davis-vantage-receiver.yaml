@@ -1,7 +1,7 @@
 substitutions:
   name: davis-vantage-receiver
   friendly_name: Davis Vantage Receiver
-  version: "1.0.0"
+  version: "1.0.1"
   created_by: "Bjarne Riis"
   project_prefix: "briis"
 
