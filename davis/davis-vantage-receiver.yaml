@@ -3,18 +3,19 @@ substitutions:
   friendly_name: Davis Vantage Receiver
   version: "1.0.0"
   created_by: "Bjarne Riis"
+  project_prefix: "briis"
 
   # Used only for the sea-level pressure conversion below — adjust to the
   # receiver's actual install (barometer height above ground can normally
   # be left at 0 if unsure; elevation matters far more).
   elevation_m: "12"
-  height_above_ground_m: "1"
+  height_above_ground_m: "3"
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   project:
-    name: "briis.${name}"
+    name: "${project_prefix}.${name}"
     version: "${version}"
   on_boot:
     then:
