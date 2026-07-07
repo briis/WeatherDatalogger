@@ -17,7 +17,9 @@ persists the latest Visual Crossing fetch (not an append-only history) to:
 
 Subscribes to:
     {base_topic}/+/observation
-    {base_topic}/forecast-+/+
+    {base_topic}/+/current
+    {base_topic}/+/forecast_hourly
+    {base_topic}/+/forecast_daily
 
 Stations are auto-registered in the stations table on first observation.
 
@@ -456,12 +458,25 @@ def _on_connect(
     # computed standalone from the RF tip counter. To resume a future
     # comparison exercise, subscribe to f"{base}/+/rain_raw" here and route
     # it to DbWriter.write_rain_raw() in _on_message below.
-    # Forecast — tempest_datalogger.py's forecast thread publishes to
-    # forecast-<location>/{current,forecast_hourly,forecast_daily}, a
-    # separate segment prefix from station observation topics above.
-    client.subscribe(f"{base}/forecast-+/+", qos=0)
+    # Forecast — visualcrossing_datalogger.py publishes to
+    # forecast-<location>/{current,forecast_hourly,forecast_daily}. Can't
+    # combine into one f"{base}/forecast-+/+" filter — MQTT's single-level
+    # wildcard must occupy an *entire* topic level on its own (the spec
+    # forbids combining it with a literal prefix like "forecast-" in the
+    # same level; paho-mqtt raises ValueError for this at subscribe time).
+    # Three literal-suffix filters instead: no station ever publishes a
+    # subtopic literally named "current"/"forecast_hourly"/"forecast_daily",
+    # so these only ever match forecast topics in practice.
+    client.subscribe(
+        [
+            (f"{base}/+/current", 0),
+            (f"{base}/+/forecast_hourly", 0),
+            (f"{base}/+/forecast_daily", 0),
+        ]
+    )
     log.info(
-        "MQTT connected — subscribed to %s/+/observation and %s/forecast-+/+",
+        "MQTT connected — subscribed to %s/+/observation and "
+        "%s/+/{current,forecast_hourly,forecast_daily}",
         base,
         base,
     )
