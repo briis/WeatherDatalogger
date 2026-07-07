@@ -12,7 +12,7 @@
 #   4. Generates /opt/weatherdatalogger/db.cnf from config.ini (DB credentials)
 #   5. Applies any pending SQL migration scripts to the database
 #   6. Updates Python dependencies in each virtual environment
-#   7. Restores ownership to the 'tempest' service user
+#   7. Restores ownership to the 'weatherdatalogger' service user
 #   8. Restarts each service (only if it was already enabled)
 #
 # Files never touched:
@@ -235,8 +235,8 @@ done
 # ---------------------------------------------------------------------------
 # Ownership — everything under the install root belongs to the service user
 # ---------------------------------------------------------------------------
-echo "==> Setting ownership (tempest:tempest)…"
-chown -R tempest:tempest "$INSTALL_ROOT"
+echo "==> Setting ownership (weatherdatalogger:weatherdatalogger)…"
+chown -R weatherdatalogger:weatherdatalogger "$INSTALL_ROOT"
 
 # ---------------------------------------------------------------------------
 # Restart services — only if already enabled

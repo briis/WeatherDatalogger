@@ -5,7 +5,7 @@ Wants=mariadb.service
 
 [Service]
 Type=simple
-User=tempest
+User=weatherdatalogger
 WorkingDirectory=/opt/weatherdatalogger/database
 ExecStart=/opt/weatherdatalogger/database/venv/bin/python3 db_writer.py --config /opt/weatherdatalogger/config.ini
 Restart=on-failure

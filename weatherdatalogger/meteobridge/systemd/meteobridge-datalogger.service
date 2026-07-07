@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=tempest
-Group=tempest
+User=weatherdatalogger
+Group=weatherdatalogger
 WorkingDirectory=/opt/weatherdatalogger/meteobridge
 ExecStart=/opt/weatherdatalogger/meteobridge/venv/bin/python3 meteobridge_datalogger.py --config /opt/weatherdatalogger/config.ini
 Restart=on-failure

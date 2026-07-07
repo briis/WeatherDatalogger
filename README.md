@@ -67,7 +67,7 @@ On Debian, MariaDB is already secured by default — root access requires no pas
 ### 2. Create a dedicated service user
 
 ```bash
-useradd -r -s /usr/sbin/nologin tempest
+useradd -r -s /usr/sbin/nologin weatherdatalogger
 ```
 
 ### 3. Bootstrap the deploy script

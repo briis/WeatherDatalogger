@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=tempest
-Group=tempest
+User=weatherdatalogger
+Group=weatherdatalogger
 WorkingDirectory=/opt/weatherdatalogger/airlink
 ExecStart=/opt/weatherdatalogger/airlink/venv/bin/python3 airlink_datalogger.py --config /opt/weatherdatalogger/config.ini
 Restart=on-failure
