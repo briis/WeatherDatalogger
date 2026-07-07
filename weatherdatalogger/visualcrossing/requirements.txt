@@ -1,0 +1,7 @@
+paho-mqtt
+pyVisualCrossing
+# aiohttp is imported unconditionally by pyVisualCrossing's api.py (for its
+# async fetch path, which this service doesn't use) but isn't declared in
+# its own packaging metadata — listed explicitly here so `pip install -r`
+# doesn't leave the import broken.
+aiohttp

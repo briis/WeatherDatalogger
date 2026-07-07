@@ -30,21 +30,25 @@ TEMPEST_DIR="$INSTALL_ROOT/tempest"
 AIRLINK_DIR="$INSTALL_ROOT/airlink"
 WRITER_DIR="$INSTALL_ROOT/database"
 METEOBRIDGE_DIR="$INSTALL_ROOT/meteobridge"
+VISUALCROSSING_DIR="$INSTALL_ROOT/visualcrossing"
 
 TEMPEST_VENV="$TEMPEST_DIR/venv"
 AIRLINK_VENV="$AIRLINK_DIR/venv"
 WRITER_VENV="$WRITER_DIR/venv"
 METEOBRIDGE_VENV="$METEOBRIDGE_DIR/venv"
+VISUALCROSSING_VENV="$VISUALCROSSING_DIR/venv"
 
 TEMPEST_SERVICE="tempest-datalogger"
 AIRLINK_SERVICE="airlink-datalogger"
 WRITER_SERVICE="weatherdb-writer"
 METEOBRIDGE_SERVICE="meteobridge-datalogger"
+VISUALCROSSING_SERVICE="visualcrossing-datalogger"
 
 TEMPEST_UNIT="/etc/systemd/system/tempest-datalogger.service"
 AIRLINK_UNIT="/etc/systemd/system/airlink-datalogger.service"
 WRITER_UNIT="/etc/systemd/system/weatherdb-writer.service"
 METEOBRIDGE_UNIT="/etc/systemd/system/meteobridge-datalogger.service"
+VISUALCROSSING_UNIT="/etc/systemd/system/visualcrossing-datalogger.service"
 
 # ---------------------------------------------------------------------------
 # Staging — always cleaned up on exit, even if the script fails
@@ -65,6 +69,7 @@ mkdir -p \
     "$AIRLINK_DIR" \
     "$WRITER_DIR/migrations" \
     "$METEOBRIDGE_DIR" \
+    "$VISUALCROSSING_DIR" \
     "$INSTALL_ROOT/scripts"
 
 # ---------------------------------------------------------------------------
@@ -85,6 +90,10 @@ install -m 644 "$STAGING_WDL/database/requirements.txt"      "$WRITER_DIR/requir
 echo "==> Installing meteobridge-datalogger…"
 install -m 755 "$STAGING_WDL/meteobridge/meteobridge_datalogger.py" "$METEOBRIDGE_DIR/meteobridge_datalogger.py"
 install -m 644 "$STAGING_WDL/meteobridge/requirements.txt"          "$METEOBRIDGE_DIR/requirements.txt"
+
+echo "==> Installing visualcrossing-datalogger…"
+install -m 755 "$STAGING_WDL/visualcrossing/visualcrossing_datalogger.py" "$VISUALCROSSING_DIR/visualcrossing_datalogger.py"
+install -m 644 "$STAGING_WDL/visualcrossing/requirements.txt"             "$VISUALCROSSING_DIR/requirements.txt"
 
 # Database SQL scripts — kept on disk for manual re-runs and reference
 install -m 644 "$STAGING_WDL/database/01_create_database.sql" "$WRITER_DIR/01_create_database.sql"
@@ -120,6 +129,7 @@ _sync_unit "$STAGING_WDL/tempest/systemd/tempest-datalogger.service"  "$TEMPEST_
 _sync_unit "$STAGING_WDL/airlink/systemd/airlink-datalogger.service"  "$AIRLINK_UNIT"
 _sync_unit "$STAGING_WDL/database/systemd/weatherdb-writer.service"   "$WRITER_UNIT"
 _sync_unit "$STAGING_WDL/meteobridge/systemd/meteobridge-datalogger.service" "$METEOBRIDGE_UNIT"
+_sync_unit "$STAGING_WDL/visualcrossing/systemd/visualcrossing-datalogger.service" "$VISUALCROSSING_UNIT"
 
 # ---------------------------------------------------------------------------
 # Shared config — print instructions on first deploy, never overwrite
@@ -207,7 +217,8 @@ for dir_venv_req in \
     "$TEMPEST_DIR:$TEMPEST_VENV:$TEMPEST_DIR/requirements.txt" \
     "$AIRLINK_DIR:$AIRLINK_VENV:$AIRLINK_DIR/requirements.txt" \
     "$WRITER_DIR:$WRITER_VENV:$WRITER_DIR/requirements.txt" \
-    "$METEOBRIDGE_DIR:$METEOBRIDGE_VENV:$METEOBRIDGE_DIR/requirements.txt"; do
+    "$METEOBRIDGE_DIR:$METEOBRIDGE_VENV:$METEOBRIDGE_DIR/requirements.txt" \
+    "$VISUALCROSSING_DIR:$VISUALCROSSING_VENV:$VISUALCROSSING_DIR/requirements.txt"; do
 
     IFS=: read -r svc_dir venv req <<< "$dir_venv_req"
     svc_name=$(basename "$svc_dir")
@@ -230,7 +241,7 @@ chown -R tempest:tempest "$INSTALL_ROOT"
 # ---------------------------------------------------------------------------
 # Restart services — only if already enabled
 # ---------------------------------------------------------------------------
-for service in "$TEMPEST_SERVICE" "$WRITER_SERVICE" "$AIRLINK_SERVICE" "$METEOBRIDGE_SERVICE"; do
+for service in "$TEMPEST_SERVICE" "$WRITER_SERVICE" "$AIRLINK_SERVICE" "$METEOBRIDGE_SERVICE" "$VISUALCROSSING_SERVICE"; do
     if systemctl is-enabled --quiet "$service" 2>/dev/null; then
         echo "==> Restarting $service…"
         systemctl restart "$service"

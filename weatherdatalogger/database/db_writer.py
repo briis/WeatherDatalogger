@@ -8,8 +8,16 @@ datalogger(s) and persists every reading to MariaDB:
   - realtime  — one row per station, upserted on every message
   - history   — full append-only time-series log for charting
 
+Also subscribes to visualcrossing_datalogger.py's forecast topics and
+persists the latest Visual Crossing fetch (not an append-only history) to:
+
+  - forecast_current — one row per location, upserted on every fetch
+  - forecast_hourly  — one row per (location, forecast_time)
+  - forecast_daily   — one row per (location, forecast_time)
+
 Subscribes to:
     {base_topic}/+/observation
+    {base_topic}/forecast-+/+
 
 Stations are auto-registered in the stations table on first observation.
 
@@ -25,6 +33,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 import paho.mqtt.client as mqtt
 import pymysql
@@ -137,6 +146,116 @@ _SQL_ENSURE_STATION = (
     "INSERT IGNORE INTO stations (station_id, station_type) VALUES (%s, %s)"
 )
 
+# ---------------------------------------------------------------------------
+# Forecast field mapping
+# ---------------------------------------------------------------------------
+# visualcrossing_datalogger.py's forecast payloads use Home Assistant's own
+# weather attribute names (condition/temperature/humidity/...) rather than
+# this project's usual descriptive-snake_case-with-unit-suffix convention
+# (see db/README.md), so each JSON key is mapped explicitly to its DB column
+# rather than reusing it outright, unlike _OBS_FIELDS above.
+_FORECAST_CURRENT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("condition", "condition"),
+    ("temperature", "temperature_c"),
+    ("feels_like", "feels_like_c"),
+    ("humidity", "humidity_pct"),
+    ("dew_point", "dew_point_c"),
+    ("wind_speed", "wind_speed_ms"),
+    ("wind_gust_speed", "wind_gust_ms"),
+    ("wind_bearing", "wind_bearing_deg"),
+    ("pressure", "pressure_mb"),
+    ("cloud_cover", "cloud_cover_pct"),
+    ("uv_index", "uv_index"),
+    ("visibility", "visibility_km"),
+    ("solar_radiation", "solar_radiation_wm2"),
+)
+_FORECAST_HOURLY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("condition", "condition"),
+    ("temperature", "temperature_c"),
+    ("feels_like", "feels_like_c"),
+    ("humidity", "humidity_pct"),
+    ("dew_point", "dew_point_c"),
+    ("wind_speed", "wind_speed_ms"),
+    ("wind_gust_speed", "wind_gust_ms"),
+    ("wind_bearing", "wind_bearing_deg"),
+    ("pressure", "pressure_mb"),
+    ("cloud_cover", "cloud_cover_pct"),
+    ("uv_index", "uv_index"),
+    ("precipitation", "precipitation_mm"),
+    ("precipitation_probability", "precipitation_probability_pct"),
+)
+_FORECAST_DAILY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("condition", "condition"),
+    ("temperature", "temperature_high_c"),
+    ("templow", "temperature_low_c"),
+    ("feels_like", "feels_like_c"),
+    ("humidity", "humidity_pct"),
+    ("dew_point", "dew_point_c"),
+    ("wind_speed", "wind_speed_ms"),
+    ("wind_gust_speed", "wind_gust_ms"),
+    ("wind_bearing", "wind_bearing_deg"),
+    ("pressure", "pressure_mb"),
+    ("cloud_cover", "cloud_cover_pct"),
+    ("uv_index", "uv_index"),
+    ("precipitation", "precipitation_mm"),
+    ("precipitation_probability", "precipitation_probability_pct"),
+)
+
+_FC_CURRENT_COLS = ", ".join(c for _, c in _FORECAST_CURRENT_FIELDS)
+_SQL_UPSERT_FORECAST_CURRENT = (
+    f"INSERT INTO forecast_current (location, fetched_at, {_FC_CURRENT_COLS}) "
+    f"VALUES (%s, %s, {', '.join(['%s'] * len(_FORECAST_CURRENT_FIELDS))}) "
+    "ON DUPLICATE KEY UPDATE fetched_at = VALUES(fetched_at), "
+    + ", ".join(f"{c} = VALUES({c})" for _, c in _FORECAST_CURRENT_FIELDS)
+)
+
+_FC_HOURLY_COLS = ", ".join(c for _, c in _FORECAST_HOURLY_FIELDS)
+_SQL_UPSERT_FORECAST_HOURLY = (
+    "INSERT INTO forecast_hourly "
+    f"(location, forecast_time, fetched_at, {_FC_HOURLY_COLS}) "
+    f"VALUES (%s, %s, %s, {', '.join(['%s'] * len(_FORECAST_HOURLY_FIELDS))}) "
+    "ON DUPLICATE KEY UPDATE fetched_at = VALUES(fetched_at), "
+    + ", ".join(f"{c} = VALUES({c})" for _, c in _FORECAST_HOURLY_FIELDS)
+)
+_SQL_DELETE_STALE_FORECAST_HOURLY = (
+    "DELETE FROM forecast_hourly WHERE location = %s AND forecast_time NOT IN %s"
+)
+
+_FC_DAILY_COLS = ", ".join(c for _, c in _FORECAST_DAILY_FIELDS)
+_SQL_UPSERT_FORECAST_DAILY = (
+    "INSERT INTO forecast_daily "
+    f"(location, forecast_time, fetched_at, {_FC_DAILY_COLS}) "
+    f"VALUES (%s, %s, %s, {', '.join(['%s'] * len(_FORECAST_DAILY_FIELDS))}) "
+    "ON DUPLICATE KEY UPDATE fetched_at = VALUES(fetched_at), "
+    + ", ".join(f"{c} = VALUES({c})" for _, c in _FORECAST_DAILY_FIELDS)
+)
+_SQL_DELETE_STALE_FORECAST_DAILY = (
+    "DELETE FROM forecast_daily WHERE location = %s AND forecast_time NOT IN %s"
+)
+
+
+class _ForecastSeriesSpec(NamedTuple):
+    """Per-table bits _write_forecast_series needs, bundled into one argument."""
+
+    table: str
+    upsert_sql: str
+    delete_stale_sql: str
+    fields: tuple[tuple[str, str], ...]
+
+
+_HOURLY_SPEC = _ForecastSeriesSpec(
+    "forecast_hourly",
+    _SQL_UPSERT_FORECAST_HOURLY,
+    _SQL_DELETE_STALE_FORECAST_HOURLY,
+    _FORECAST_HOURLY_FIELDS,
+)
+_DAILY_SPEC = _ForecastSeriesSpec(
+    "forecast_daily",
+    _SQL_UPSERT_FORECAST_DAILY,
+    _SQL_DELETE_STALE_FORECAST_DAILY,
+    _FORECAST_DAILY_FIELDS,
+)
+
 # rain_raw_log — temporary table for the raw RF tip-counter rain value
 # (davis_rain_raw), logged alongside the Meteobridge-corrected figure in
 # history.rain_accumulation_mm for accuracy comparison. No FK to `stations`:
@@ -155,7 +274,7 @@ _SQL_INSERT_RAIN_RAW = (
 # ---------------------------------------------------------------------------
 
 
-def _parse_lightning_ts(value: str | None) -> datetime | None:
+def _parse_iso_utc(value: str | None) -> datetime | None:
     if value is None:
         return None
     try:
@@ -172,7 +291,7 @@ def _payload_to_row(payload: dict) -> tuple[str, datetime, tuple]:
         tzinfo=None
     )
     field_values = tuple(payload.get(f) for f in _OBS_FIELDS)
-    lightning_ts = _parse_lightning_ts(payload.get("lightning_last_detected"))
+    lightning_ts = _parse_iso_utc(payload.get("lightning_last_detected"))
     return station_id, recorded_at, (*field_values, lightning_ts)
 
 
@@ -266,6 +385,53 @@ class DbWriter:
         except pymysql.Error as exc:
             self._log.error("DB write error for rain_raw %s: %s", station_id, exc)
 
+    def write_forecast_current(self, location: str, payload: dict) -> None:
+        fetched_at = datetime.now(UTC).replace(tzinfo=None)
+        values = tuple(payload.get(f) for f, _ in _FORECAST_CURRENT_FIELDS)
+        row = (location, fetched_at, *values)
+        try:
+            self._execute(_SQL_UPSERT_FORECAST_CURRENT, row)
+            self._log.debug("Wrote forecast_current for %s @ %s", location, fetched_at)
+        except pymysql.Error as exc:
+            self._log.error("DB write error for forecast_current %s: %s", location, exc)
+
+    def _write_forecast_series(
+        self, spec: _ForecastSeriesSpec, location: str, payload: list[dict]
+    ) -> None:
+        if not isinstance(payload, list) or not payload:
+            self._log.warning(
+                "Skipping empty/malformed %s payload for %s", spec.table, location
+            )
+            return
+
+        fetched_at = datetime.now(UTC).replace(tzinfo=None)
+        forecast_times: list[datetime] = []
+        try:
+            for entry in payload:
+                ts = _parse_iso_utc(entry.get("datetime"))
+                if ts is None:
+                    continue
+                forecast_times.append(ts)
+                values = tuple(entry.get(f) for f, _ in spec.fields)
+                self._execute(spec.upsert_sql, (location, ts, fetched_at, *values))
+            if forecast_times:
+                self._execute(spec.delete_stale_sql, (location, tuple(forecast_times)))
+            self._log.debug(
+                "Wrote %s for %s @ %s (%d entries)",
+                spec.table,
+                location,
+                fetched_at,
+                len(forecast_times),
+            )
+        except pymysql.Error as exc:
+            self._log.error("DB write error for %s %s: %s", spec.table, location, exc)
+
+    def write_forecast_hourly(self, location: str, payload: list[dict]) -> None:
+        self._write_forecast_series(_HOURLY_SPEC, location, payload)
+
+    def write_forecast_daily(self, location: str, payload: list[dict]) -> None:
+        self._write_forecast_series(_DAILY_SPEC, location, payload)
+
 
 # ---------------------------------------------------------------------------
 # MQTT
@@ -290,7 +456,15 @@ def _on_connect(
     # computed standalone from the RF tip counter. To resume a future
     # comparison exercise, subscribe to f"{base}/+/rain_raw" here and route
     # it to DbWriter.write_rain_raw() in _on_message below.
-    log.info("MQTT connected — subscribed to %s/+/observation", base)
+    # Forecast — tempest_datalogger.py's forecast thread publishes to
+    # forecast-<location>/{current,forecast_hourly,forecast_daily}, a
+    # separate segment prefix from station observation topics above.
+    client.subscribe(f"{base}/forecast-+/+", qos=0)
+    log.info(
+        "MQTT connected — subscribed to %s/+/observation and %s/forecast-+/+",
+        base,
+        base,
+    )
 
 
 def _on_disconnect(
@@ -320,12 +494,30 @@ def _on_message(
     topic_parts = msg.topic.split("/")
     try:
         station_segment = topic_parts[1]
+        subtopic = topic_parts[2]
         station_type = station_segment.split("-")[0]
     except IndexError:
         station_segment = "unknown"
+        subtopic = "unknown"
         station_type = "unknown"
 
     log.debug("Message on %s", msg.topic)
+
+    # Forecast — "forecast-<location>/{current,forecast_hourly,forecast_daily}",
+    # a different shape from station observations (no station_id/stations
+    # row involved) — dispatch separately rather than falling into the
+    # Davis-fallback/write_observation path below.
+    if station_segment.startswith("forecast-"):
+        location = station_segment[len("forecast-") :]
+        if subtopic == "current":
+            writer.write_forecast_current(location, payload)
+        elif subtopic == "forecast_hourly":
+            writer.write_forecast_hourly(location, payload)
+        elif subtopic == "forecast_daily":
+            writer.write_forecast_daily(location, payload)
+        else:
+            log.debug("Ignoring unrecognized forecast subtopic: %s", msg.topic)
+        return
 
     # Davis (ESPHome) has no hardware serial or clock sync, unlike the
     # Tempest/AirLink Python dataloggers — fall back to the topic segment

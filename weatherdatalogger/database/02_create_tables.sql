@@ -260,18 +260,24 @@ SELECT
     -- available side by side.
     th.indoor_temperature_c,
     th.indoor_humidity_pct,
-    th.station_pressure_mb          AS davis_station_pressure_mb,
-    th.sea_level_pressure_mb        AS davis_sea_level_pressure_mb,
-    th.pressure_trend_mb            AS davis_pressure_trend_mb,
-    th.pressure_trend               AS davis_pressure_trend,
-    th.sea_level_pressure_trend_mb  AS davis_sea_level_pressure_trend_mb,
-    th.sea_level_pressure_trend     AS davis_sea_level_pressure_trend,
-    -- Also computed on-device from the BME280 reading (wet bulb needs both
-    -- temp/humidity and station pressure) — distinct from pr.wet_bulb_c/
-    -- pr.delta_t_c/pr.air_density_kgm3 above (the `pressure` role)
-    th.wet_bulb_c                   AS davis_wet_bulb_c,
-    th.delta_t_c                    AS davis_delta_t_c,
-    th.air_density_kgm3             AS davis_air_density_kgm3,
+    -- The davis_* pressure/wet-bulb/delta-T/air-density columns below only
+    -- add information when the `pressure` role points at different hardware
+    -- than `temp_humidity` (e.g. the historical Tempest+Davis combo) — in
+    -- that case th.* is the Davis receiver's own BME280 reading, distinct
+    -- from pr.* above. If both roles point at the same station_type (e.g.
+    -- `pressure` reassigned to `davis`), th and pr resolve to the exact same
+    -- row, so these would just be a byte-for-byte duplicate of the
+    -- non-prefixed columns above — ro.pressure_is_temp_humidity_device nulls
+    -- them out in that case instead of showing the same reading twice.
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.station_pressure_mb         END AS davis_station_pressure_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_mb       END AS davis_sea_level_pressure_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend_mb           END AS davis_pressure_trend_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend              END AS davis_pressure_trend,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend_mb END AS davis_sea_level_pressure_trend_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend    END AS davis_sea_level_pressure_trend,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.wet_bulb_c                  END AS davis_wet_bulb_c,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.delta_t_c                   END AS davis_delta_t_c,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.air_density_kgm3            END AS davis_air_density_kgm3,
     -- Air quality — PM1/PM2.5/PM10/AQI/CAQI
     aq.pm_1_ugm3,
     aq.pm_2p5_ugm3,
@@ -343,7 +349,14 @@ LEFT JOIN
         JOIN   stations s ON r.station_id = s.station_id
         WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'air_quality')
         LIMIT  1
-    ) aq ON TRUE;
+    ) aq ON TRUE
+CROSS JOIN
+    (
+        SELECT
+            (SELECT station_type FROM station_roles WHERE role = 'pressure')
+          = (SELECT station_type FROM station_roles WHERE role = 'temp_humidity')
+            AS pressure_is_temp_humidity_device
+    ) ro;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table: history_charting
@@ -598,21 +611,37 @@ DO
         -- window, same convention as the `pressure` role trend above
         AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_temperature_c END),
         AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_humidity_pct END),
-        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN station_pressure_mb END),
-        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_mb END),
-        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN pressure_trend_mb END),
-        SUBSTRING_INDEX(GROUP_CONCAT(
-            CASE WHEN station_type = roles.temp_humidity_type THEN pressure_trend END
-            ORDER BY recorded_at DESC SEPARATOR '\x1F'
-        ), '\x1F', 1),
-        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_trend_mb END),
-        SUBSTRING_INDEX(GROUP_CONCAT(
-            CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_trend END
-            ORDER BY recorded_at DESC SEPARATOR '\x1F'
-        ), '\x1F', 1),
-        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN wet_bulb_c END),
-        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN delta_t_c END),
-        AVG(CASE WHEN station_type = roles.temp_humidity_type THEN air_density_kgm3 END),
+        -- davis_* pressure/wet-bulb/delta-T/air-density: NULL when the
+        -- `pressure` role points at the same station_type as
+        -- `temp_humidity` (e.g. both reassigned to `davis`) — in that case
+        -- these would just duplicate the non-prefixed columns above byte
+        -- for byte. Only meaningful when the two roles are different
+        -- hardware (e.g. the historical Tempest+Davis combo) — see the
+        -- matching comment in the combined_realtime view.
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN station_pressure_mb END) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_mb END) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN pressure_trend_mb END) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            SUBSTRING_INDEX(GROUP_CONCAT(
+                CASE WHEN station_type = roles.temp_humidity_type THEN pressure_trend END
+                ORDER BY recorded_at DESC SEPARATOR '\x1F'
+            ), '\x1F', 1) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_trend_mb END) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            SUBSTRING_INDEX(GROUP_CONCAT(
+                CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_trend END
+                ORDER BY recorded_at DESC SEPARATOR '\x1F'
+            ), '\x1F', 1) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN wet_bulb_c END) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN delta_t_c END) END,
+        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
+            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN air_density_kgm3 END) END,
         -- Air quality
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_1_ugm3 END),
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_ugm3 END),
@@ -662,3 +691,94 @@ DO
         FROM station_roles
     ) roles
     GROUP BY window_start;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Forecast tables — Visual Crossing Timeline Weather API data, fetched and
+-- published to MQTT by visualcrossing_datalogger.py (topics
+-- weatherdatalogger/forecast-<location>/{current,forecast_hourly,forecast_daily}),
+-- written here by db_writer.py. All three hold only the latest fetch per
+-- `location` — not an append-only history — since nothing currently needs to
+-- track how a forecast for a given hour/day changed across successive
+-- fetches, just the current best guess for driving a Home Assistant weather
+-- entity. `location` matches the `location` config value in
+-- [visualcrossing] (defaults to "home"), not a `stations` row — forecasts
+-- aren't tied to a physical device the way `realtime`/`history` are.
+--
+-- (This previously held the WeatherFlow Better Forecast API's data, sourced
+-- from tempest_datalogger.py's forecast thread — replaced entirely, not
+-- extended, since Visual Crossing is a richer superset covering the same
+-- ground: feels_like/cloud_cover/wind_gust/uv_index are new here.)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- One row per location, upserted on every fetch (like `realtime`).
+CREATE TABLE IF NOT EXISTS forecast_current (
+    location            VARCHAR(64)       NOT NULL,
+    fetched_at          DATETIME          NOT NULL,
+    condition           VARCHAR(32)       NULL COMMENT 'HA weather condition, e.g. partlycloudy',
+    temperature_c       FLOAT             NULL,
+    feels_like_c        FLOAT             NULL,
+    humidity_pct        FLOAT             NULL,
+    dew_point_c         FLOAT             NULL,
+    wind_speed_ms       FLOAT             NULL,
+    wind_gust_ms        FLOAT             NULL,
+    wind_bearing_deg    SMALLINT UNSIGNED NULL,
+    pressure_mb         FLOAT             NULL COMMENT 'Sea-level pressure',
+    cloud_cover_pct     TINYINT UNSIGNED  NULL,
+    uv_index            FLOAT             NULL,
+    visibility_km       TINYINT UNSIGNED  NULL,
+    solar_radiation_wm2 FLOAT             NULL,
+    PRIMARY KEY (location)
+) ENGINE=InnoDB;
+
+-- One row per (location, forecast_time); each fetch replaces the full set
+-- for that location (see db_writer.py) so hours that drop out of the
+-- forecast window don't linger. No visibility_km/solar_radiation_wm2 —
+-- Visual Crossing only reports those for current conditions, not forecasts.
+CREATE TABLE IF NOT EXISTS forecast_hourly (
+    id                             BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
+    location                       VARCHAR(64)       NOT NULL,
+    forecast_time                  DATETIME          NOT NULL COMMENT 'UTC hour this row forecasts',
+    fetched_at                     DATETIME          NOT NULL,
+    condition                      VARCHAR(32)       NULL,
+    temperature_c                  FLOAT             NULL,
+    feels_like_c                   FLOAT             NULL,
+    humidity_pct                   FLOAT             NULL,
+    dew_point_c                    FLOAT             NULL,
+    wind_speed_ms                  FLOAT             NULL,
+    wind_gust_ms                   FLOAT             NULL,
+    wind_bearing_deg               SMALLINT UNSIGNED NULL,
+    pressure_mb                    FLOAT             NULL,
+    cloud_cover_pct                TINYINT UNSIGNED  NULL,
+    uv_index                       FLOAT             NULL,
+    precipitation_mm               FLOAT             NULL,
+    precipitation_probability_pct  TINYINT UNSIGNED  NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_forecast_hourly (location, forecast_time)
+) ENGINE=InnoDB;
+
+-- One row per (location, forecast_time); same replace-on-fetch approach as
+-- forecast_hourly. temperature_high_c/temperature_low_c replace a single
+-- temperature_c column since a daily forecast is a high/low pair, not one
+-- instant reading.
+CREATE TABLE IF NOT EXISTS forecast_daily (
+    id                             BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
+    location                       VARCHAR(64)       NOT NULL,
+    forecast_time                  DATETIME          NOT NULL COMMENT 'Day this row forecasts (as reported by the API — see Visual Crossing day datetime)',
+    fetched_at                     DATETIME          NOT NULL,
+    condition                      VARCHAR(32)       NULL,
+    temperature_high_c             FLOAT             NULL,
+    temperature_low_c              FLOAT             NULL,
+    feels_like_c                   FLOAT             NULL,
+    humidity_pct                   FLOAT             NULL,
+    dew_point_c                    FLOAT             NULL,
+    wind_speed_ms                  FLOAT             NULL,
+    wind_gust_ms                   FLOAT             NULL,
+    wind_bearing_deg               SMALLINT UNSIGNED NULL,
+    pressure_mb                    FLOAT             NULL,
+    cloud_cover_pct                TINYINT UNSIGNED  NULL,
+    uv_index                       FLOAT             NULL,
+    precipitation_mm               FLOAT             NULL,
+    precipitation_probability_pct  TINYINT UNSIGNED  NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_forecast_daily (location, forecast_time)
+) ENGINE=InnoDB;

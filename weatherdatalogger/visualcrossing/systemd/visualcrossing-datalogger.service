@@ -1,0 +1,19 @@
+[Unit]
+Description=Visual Crossing → MQTT Forecast Datalogger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tempest
+Group=tempest
+WorkingDirectory=/opt/weatherdatalogger/visualcrossing
+ExecStart=/opt/weatherdatalogger/visualcrossing/venv/bin/python3 visualcrossing_datalogger.py --config /opt/weatherdatalogger/config.ini
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=visualcrossing-datalogger
+
+[Install]
+WantedBy=multi-user.target

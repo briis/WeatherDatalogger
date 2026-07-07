@@ -14,6 +14,7 @@ A unified weather data pipeline that collects data from multiple weather station
 | [`davis/`](davis/) | Davis Vantage Vue (ESP32-WROOM-32 + CC1101, ESPHome) | Active — field-tested |
 | [`weatherdatalogger/airlink/`](weatherdatalogger/airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
 | [`weatherdatalogger/meteobridge/`](weatherdatalogger/meteobridge/) | Meteobridge Pro rain corrector (HTTP polling → MQTT corrections) | Active, optional |
+| [`weatherdatalogger/visualcrossing/`](weatherdatalogger/visualcrossing/) | Visual Crossing Weather API forecast (HTTP polling → MQTT) | Active, optional — lat/lon-based, no station hardware required |
 
 ### Infrastructure (MQTT → storage)
 
@@ -34,7 +35,7 @@ weatherdatalogger/
     lightning
     device_status
     hub_status
-  forecast-<location>/      ← WeatherFlow Better Forecast REST API
+  forecast-<location>/      ← Visual Crossing Weather API (optional)
     current
     forecast_hourly
     forecast_daily
@@ -146,7 +147,7 @@ mysql --defaults-extra-file=/opt/weatherdatalogger/db.cnf \
 
 ### 9. Create the shared config file
 
-All four services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
+All five services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
 
 ```bash
 cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
@@ -161,6 +162,7 @@ nano /opt/weatherdatalogger/config.ini
 | `password` | `[database]` | Database password (set in step 6) |
 | `host` | `[airlink]` | IP address or hostname of your Davis AirLink (if installed) |
 | `host` | `[meteobridge]` | IP address or hostname of your Meteobridge Pro (optional — leave empty to skip; it idles rather than crash-loops) |
+| `enabled`, `api_key`, `latitude`, `longitude` | `[visualcrossing]` | Visual Crossing forecast (optional — leave `enabled = false` to skip; it idles rather than crash-loops) |
 
 Everything else has sensible defaults.
 
@@ -182,6 +184,10 @@ journalctl -u airlink-datalogger -f
 # Meteobridge corrector (skip if you don't have a Meteobridge)
 systemctl enable --now meteobridge-datalogger
 journalctl -u meteobridge-datalogger -f
+
+# Visual Crossing forecast (skip if [visualcrossing] enabled = false)
+systemctl enable --now visualcrossing-datalogger
+journalctl -u visualcrossing-datalogger -f
 ```
 
 On the first observation you should see a `Registered station` line in the DB writer log, then `Wrote … @ …` every 10–15 s.

@@ -1,6 +1,6 @@
 # WeatherFlow Tempest UDP → MQTT Datalogger
 
-Listens for UDP broadcasts from a **WeatherFlow Tempest hub** on the local network (port 50222), computes derived weather metrics, and publishes everything as JSON to an MQTT broker. Optionally polls the WeatherFlow REST API to publish hourly and daily forecast data.
+Listens for UDP broadcasts from a **WeatherFlow Tempest hub** on the local network (port 50222), computes derived weather metrics, and publishes everything as JSON to an MQTT broker.
 
 Designed to run as a **systemd service on Debian/Proxmox LXC** and integrate with **Home Assistant** via MQTT auto-discovery.
 
@@ -14,9 +14,10 @@ Designed to run as a **systemd service on Debian/Proxmox LXC** and integrate wit
 - Computes derived metrics on every observation: dew point, wet bulb, delta-T, heat index, wind chill, feels like, vapor pressure, air density, rain rate, sea level pressure
 - Station and sea level pressure trend (Rising / Steady / Falling) with 3-hour history — persisted across restarts
 - Lightning history: last-detected timestamp, 3-hour count, closest/farthest distance — persisted across restarts
-- Home Assistant MQTT auto-discovery for all sensors (Tempest + Forecast devices)
-- Optional WeatherFlow Better Forecast REST API poller — current conditions plus configurable hourly (default 48 h, up to 120 h) and 10-day daily forecast
+- Home Assistant MQTT auto-discovery for all sensors
 - Systemd service with automatic restart and journald logging
+
+> **Forecast data** used to be fetched here from the WeatherFlow Better Forecast API — it's now handled by the separate [`weatherdatalogger/visualcrossing/`](../visualcrossing/) service instead (Visual Crossing, not tied to a WeatherFlow station). See that service's README.
 
 ---
 
@@ -42,18 +43,6 @@ Example:
 weatherdatalogger/tempest-ST-00000512/observation
 weatherdatalogger/tempest-HB-00013030/hub_status
 ```
-
-### WeatherFlow Forecast (optional)
-
-```
-weatherdatalogger/forecast-<location>/<subtopic>
-```
-
-| Subtopic | Content |
-|---|---|
-| `current` | Current conditions: condition, temperature, humidity, wind, pressure, dew point |
-| `forecast_hourly` | Hourly forecast JSON array (up to `forecast_hours` entries, default 48) |
-| `forecast_daily` | Daily forecast JSON array (up to 10 days) |
 
 ---
 
@@ -124,12 +113,6 @@ All settings live in `config.ini` (copied from `config.example.ini`). Every key 
 | `[station]` | `elevation_m` | `0` | Station elevation above sea level (metres) — needed for sea level pressure |
 | `[station]` | `height_above_ground_m` | `0` | Sensor height above ground (metres) |
 | `[station]` | `data_dir` | _(empty)_ | Directory for persistence files; empty = same folder as `config.ini` |
-| `[forecast]` | `enabled` | `false` | Enable WeatherFlow Better Forecast polling |
-| `[forecast]` | `station_id` | _(empty)_ | WeatherFlow station ID — **required** |
-| `[forecast]` | `api_key` | _(empty)_ | WeatherFlow personal API key — **required** |
-| `[forecast]` | `location` | `home` | Slug used in MQTT topic: `forecast-<location>` |
-| `[forecast]` | `interval_min` | `30` | Polling interval in minutes |
-| `[forecast]` | `forecast_hours` | `48` | Max hourly entries published (API provides up to 120) |
 
 ---
 
@@ -141,35 +124,8 @@ With `discovery = true` in `[homeassistant]` and `retain = true` in `[mqtt]`, th
 
 - **Tempest ST-xxxxx** — all raw observation fields and derived metrics
 - **Tempest HB-xxxxx** — hub status sensors
-- **Forecast \<location\>** — 9 sensors auto-discovered when `[forecast] enabled = true`:
-  - 7 current-condition sensors (condition, temperature, humidity, wind speed, wind bearing, pressure, dew point)
-  - 2 forecast-array sensors (Hourly Forecast, Daily Forecast) — state = entry count, attributes contain the full forecast data
 
-### Weather card with hourly/daily forecast
-
-HA MQTT discovery does not support `weather` entities, and the `mqtt: weather:` configuration key is also invalid. Use HA's `template: weather:` platform instead, which reads from the sensors above.
-
-Add the following to `configuration.yaml` and restart Home Assistant:
-
-```yaml
-template:
-  - weather:
-      - name: "Forecast Home"
-        unique_id: "tempest_forecast_home_weather"
-        condition_template: "{{ states('sensor.forecast_home_condition') }}"
-        temperature_template: "{{ states('sensor.forecast_home_temperature') | float(0) }}"
-        temperature_unit: "°C"
-        humidity_template: "{{ states('sensor.forecast_home_humidity') | float(0) }}"
-        pressure_template: "{{ states('sensor.forecast_home_sea_level_pressure') | float(0) }}"
-        pressure_unit: "hPa"
-        wind_speed_template: "{{ states('sensor.forecast_home_wind_speed') | float(0) }}"
-        wind_speed_unit: "m/s"
-        wind_bearing_template: "{{ states('sensor.forecast_home_wind_bearing') | float(0) }}"
-        forecast_hourly_template: "{{ state_attr('sensor.forecast_home_hourly_forecast', 'forecasts') }}"
-        forecast_daily_template: "{{ state_attr('sensor.forecast_home_daily_forecast', 'forecasts') }}"
-```
-
-Replace `home` in the entity IDs with your `location` slug (hyphens become underscores). If the IDs don't match what HA created, verify the exact names in **Developer Tools → States**. The correct YAML for your location is also logged at INFO level the first time the forecast publishes.
+For a forecast/weather entity, see [`weatherdatalogger/visualcrossing/`](../visualcrossing/).
 
 ---
 
@@ -231,6 +187,4 @@ mosquitto_sub -h <broker> -t "weatherdatalogger/#" -v
 | Sea level pressure seems wrong | Set `elevation_m` in `[station]` to your actual elevation above sea level in metres. |
 | Pressure trend is `null` | Normal until 3 hours of history have accumulated. The history is persisted in `tempest_pressure.json` so it survives restarts. |
 | Lightning history resets on restart | Check that `data_dir` (or the config file directory) is writable by the `tempest` user and that `tempest_lightning.json` exists. |
-| Forecast not appearing | Verify `station_id` and `api_key` are both set in `[forecast]`. Check logs for HTTP errors from the WeatherFlow API. |
-| Forecast weather card missing in HA | HA does not support `mqtt: weather:` — use the `template: weather:` block from the [Home Assistant section](#weather-card-with-hourlydaily-forecast). After restarting HA, verify entity IDs in **Developer Tools → States** if the template doesn't populate. |
 | No data after hub reboot | The hub re-announces within ~60 s — wait and check logs. |

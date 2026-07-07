@@ -12,6 +12,7 @@ Subscribes to MQTT observation topics published by the weather station loggers a
 - Auto-registers new stations in the `stations` table on first observation
 - **Upserts** the `realtime` table — always holds the single latest reading per station
 - **Appends** the `history` table — full time-series log for charting and trend analysis
+- Also subscribes to `{base_topic}/forecast-+/+` — the [`visualcrossing-datalogger`](../visualcrossing/) service (Visual Crossing Weather API) — and **upserts** `forecast_current`/`forecast_hourly`/`forecast_daily` with the latest fetch (not appended; see [Database Schema](#database-schema))
 - Reconnects automatically to both MQTT and MariaDB on connection loss (handles both `OperationalError` and `InterfaceError`)
 
 All timestamps are stored in **UTC** as naive `DATETIME` values. Use `UTC_TIMESTAMP()` (not `NOW()`) when querying if the MariaDB server runs in a non-UTC timezone.
@@ -119,7 +120,9 @@ Both `realtime` and `history` share the same observation columns:
 
 ### `combined_realtime` (view)
 
-A single-row view that merges the latest readings from all station types into one record. Most weather fields are sourced from the `davis` station; pressure, lightning, UV, solar, illuminance, wet bulb/delta T, air density, and battery voltage come from `tempest` (the Davis ISS has no sensors for these); air quality fields come from `airlink`. Tempest-only and air quality columns are `NULL` until those stations are registered.
+A single-row view that merges the latest readings from all station types into one record, sourcing each role (`wind`, `pressure`, `temp_humidity`, ...) from whatever `station_type` `station_roles` currently maps it to — see that table's comment. By default: most weather fields come from `davis`; pressure, lightning, UV, solar, illuminance, wet bulb/delta T, air density, and battery voltage come from `tempest`; air quality fields come from `airlink`. Columns for a role whose station isn't registered yet are `NULL`.
+
+The view also exposes `davis_station_pressure_mb`/`davis_sea_level_pressure_mb`/`davis_pressure_trend*`/`davis_wet_bulb_c`/`davis_delta_t_c`/`davis_air_density_kgm3` — the Davis receiver's own on-board BME280 reading, kept separate from the non-prefixed `pressure`-role columns above so both remain visible side by side when `pressure` and `temp_humidity` point at different hardware (the default Tempest+Davis setup). If `pressure` is reassigned to `davis` too (i.e. one station now supplies both roles), these `davis_*` columns would just duplicate the non-prefixed ones byte for byte — the view instead returns `NULL` for them in that case, so the pressure data shows up once, not twice.
 
 **Use this view as the primary source for dashboards and downstream consumers** — it hides the per-station layout of `realtime` and provides a unified snapshot of all current conditions.
 
@@ -171,6 +174,35 @@ Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data in
 | `caqi_pm2p5`, `caqi_pm10` | MAX | Worst-case EU CAQI in window (AirLink) |
 
 **Requires the MariaDB event scheduler** — see [server installation step 8](../../README.md#8-enable-the-mariadb-event-scheduler).
+
+### `forecast_current`, `forecast_hourly`, `forecast_daily`
+
+Visual Crossing Timeline Weather API data fetched by the [`visualcrossing-datalogger`](../visualcrossing/) service (`[visualcrossing]` section in `config.ini`) and published to `{base_topic}/forecast-<location>/{current,forecast_hourly,forecast_daily}` — see [visualcrossing/README.md](../visualcrossing/README.md) for how the fetch itself is configured. All three tables hold only the **latest fetch** per `location`, not an append-only history — there's no tracking of how a forecast for a given hour/day changed across successive fetches, just the current best guess, which is what a live Home Assistant weather entity needs.
+
+`location` matches the `location` config value (defaults to `home`), not a row in `stations` — forecasts aren't tied to a physical device the way `realtime`/`history` are, so there's no foreign key here.
+
+> These tables previously held WeatherFlow Better Forecast data, sourced from a forecast thread that used to live in `tempest_datalogger.py`. They were replaced outright (not extended) when the forecast source moved to Visual Crossing, which covers the same ground plus more (`feels_like_c`, `cloud_cover_pct`, `wind_gust_ms`, `uv_index`).
+
+| Table | Key | Refresh behavior |
+|---|---|---|
+| `forecast_current` | `location` (PK) | Upserted every fetch, like `realtime` |
+| `forecast_hourly` | `(location, forecast_time)` unique | Each fetch upserts every hour still in the forecast window and deletes any row whose `forecast_time` fell out of it — so the table always mirrors exactly the latest fetch, nothing more |
+| `forecast_daily` | `(location, forecast_time)` unique | Same replace-on-fetch behavior as `forecast_hourly` |
+
+| Column | Description |
+|---|---|
+| `condition` | HA weather condition string, e.g. `partlycloudy`, `rainy` — mapped from Visual Crossing's `icons2` icon set; see `_VC_ICON_TO_HA` in `visualcrossing_datalogger.py` |
+| `temperature_c` | `forecast_current`/`forecast_hourly`: forecast temperature. `forecast_daily`: use `temperature_high_c` instead |
+| `temperature_high_c`, `temperature_low_c` | `forecast_daily` only — the day's forecast high/low |
+| `feels_like_c` | Apparent temperature — all three tables |
+| `humidity_pct`, `dew_point_c` | All three tables |
+| `wind_speed_ms`, `wind_gust_ms`, `wind_bearing_deg` | All three tables |
+| `pressure_mb` | All three tables — sea-level pressure |
+| `cloud_cover_pct`, `uv_index` | All three tables |
+| `visibility_km`, `solar_radiation_wm2` | `forecast_current` only — Visual Crossing doesn't report these for forecasts, only current conditions |
+| `precipitation_mm`, `precipitation_probability_pct` | `forecast_hourly` and `forecast_daily` only |
+| `forecast_time` | The UTC hour (`forecast_hourly`) or day (`forecast_daily`) this row forecasts — not when it was fetched |
+| `fetched_at` | UTC timestamp of the fetch that produced this row |
 
 ---
 
