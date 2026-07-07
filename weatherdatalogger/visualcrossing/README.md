@@ -40,11 +40,28 @@ weatherdatalogger/forecast-<location>/forecast_daily
   "cloud_cover": 40,
   "uv_index": 3,
   "visibility": 15,
-  "solar_radiation": 250.0
+  "solar_radiation": 250.0,
+  "solar_energy": 21.6,
+  "snow": 0.0,
+  "snow_depth": 0.0,
+  "precipitation_type": "rain",
+  "sunrise": "04:52:00",
+  "sunset": "21:58:00",
+  "moon_phase": 0.42
 }
 ```
 
-`forecast_hourly`/`forecast_daily` entries carry the same field names (minus `visibility`/`solar_radiation`, which Visual Crossing only reports for current conditions) plus `datetime`, `precipitation`, and `precipitation_probability`. Daily entries additionally have `templow` (the day's low, alongside `temperature` for the high).
+`forecast_hourly`/`forecast_daily` entries carry most of the same field names, plus `datetime`, `precipitation`, `precipitation_probability`, and `severe_risk`. A few fields are only present on some of the three payloads, reflecting what Visual Crossing itself reports at each granularity:
+
+| Field | current | hourly | daily |
+|---|---|---|---|
+| `visibility` | ✓ | ✓ | — |
+| `solar_radiation`, `solar_energy`, `snow`, `snow_depth`, `precipitation_type` | ✓ | ✓ | ✓ |
+| `severe_risk` | — | ✓ | ✓ |
+| `sunrise`, `sunset`, `moon_phase` | ✓ | — | ✓ |
+| `precipitation_cover` | — | — | ✓ |
+
+Daily entries additionally have `templow` (the day's low, alongside `temperature` for the high). `precipitation_type` comes back from `pyVisualCrossing` as a list (e.g. `["rain", "ice"]`, or `null`); this service flattens it to a single comma-joined string (`"rain,ice"`) before publishing, so downstream consumers don't need to parse a nested array out of the MQTT payload.
 
 ### Field conventions
 
@@ -141,4 +158,4 @@ The free tier allows 1,000 calls/day, and this service makes exactly one call pe
 
 This service is a thin wrapper around [`pyVisualCrossing`](https://github.com/briis/pyVisualCrossing) — it calls `VisualCrossing(...).fetch_data()` on a timer and reshapes the returned `ForecastData`/`ForecastHourlyData`/`ForecastDailyData` objects into the MQTT JSON payloads documented above. The library's own `fetch_data()` is synchronous (blocking HTTP via `urllib`); `async_fetch_data()` also exists but isn't used here since this service already runs its own poll loop in a dedicated process.
 
-Note: as of `pyVisualCrossing` 0.1.16, `aiohttp` is imported unconditionally at module load (for the async path) but isn't declared in the package's own dependencies — see the comment in `requirements.txt`.
+`requirements.txt` pins `pyVisualCrossing>=1.0.2` — that's the version where the package started declaring `aiohttp` as its own dependency (earlier versions imported it unconditionally in `api.py` without declaring it, leaving `pip install` with a broken import unless you added `aiohttp` yourself) and where the full field set this service reads (`snow`, `precipitation_type`, `solar_energy`, `severe_risk`, `sunrise`/`sunset`, `moon_phase`, plus `solar_radiation`/`visibility` on hourly entries) became available — earlier versions silently returned `None` for most of these on hourly/daily objects, even though the underlying API response already included them.

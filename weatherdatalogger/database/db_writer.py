@@ -170,6 +170,13 @@ _FORECAST_CURRENT_FIELDS: tuple[tuple[str, str], ...] = (
     ("uv_index", "uv_index"),
     ("visibility", "visibility_km"),
     ("solar_radiation", "solar_radiation_wm2"),
+    ("solar_energy", "solar_energy_mjm2"),
+    ("snow", "snow_cm"),
+    ("snow_depth", "snow_depth_cm"),
+    ("precipitation_type", "precipitation_type"),
+    ("sunrise", "sunrise"),
+    ("sunset", "sunset"),
+    ("moon_phase", "moon_phase"),
 )
 _FORECAST_HOURLY_FIELDS: tuple[tuple[str, str], ...] = (
     ("condition", "weather_condition"),
@@ -185,6 +192,13 @@ _FORECAST_HOURLY_FIELDS: tuple[tuple[str, str], ...] = (
     ("uv_index", "uv_index"),
     ("precipitation", "precipitation_mm"),
     ("precipitation_probability", "precipitation_probability_pct"),
+    ("visibility", "visibility_km"),
+    ("solar_radiation", "solar_radiation_wm2"),
+    ("solar_energy", "solar_energy_mjm2"),
+    ("severe_risk", "severe_risk"),
+    ("snow", "snow_cm"),
+    ("snow_depth", "snow_depth_cm"),
+    ("precipitation_type", "precipitation_type"),
 )
 _FORECAST_DAILY_FIELDS: tuple[tuple[str, str], ...] = (
     ("condition", "weather_condition"),
@@ -201,6 +215,16 @@ _FORECAST_DAILY_FIELDS: tuple[tuple[str, str], ...] = (
     ("uv_index", "uv_index"),
     ("precipitation", "precipitation_mm"),
     ("precipitation_probability", "precipitation_probability_pct"),
+    ("precipitation_cover", "precipitation_cover_pct"),
+    ("solar_radiation", "solar_radiation_wm2"),
+    ("solar_energy", "solar_energy_mjm2"),
+    ("severe_risk", "severe_risk"),
+    ("snow", "snow_cm"),
+    ("snow_depth", "snow_depth_cm"),
+    ("precipitation_type", "precipitation_type"),
+    ("sunrise", "sunrise"),
+    ("sunset", "sunset"),
+    ("moon_phase", "moon_phase"),
 )
 
 _FC_CURRENT_COLS = ", ".join(c for _, c in _FORECAST_CURRENT_FIELDS)

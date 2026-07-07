@@ -708,32 +708,45 @@ DO
 -- from tempest_datalogger.py's forecast thread — replaced entirely, not
 -- extended, since Visual Crossing is a richer superset covering the same
 -- ground: feels_like/cloud_cover/wind_gust/uv_index are new here.)
+--
+-- snow_cm/snow_depth_cm/precipitation_type/solar_energy_mjm2/severe_risk/
+-- sunrise/sunset/moon_phase/precipitation_cover_pct were added once
+-- pyVisualCrossing 1.0.2 started exposing them (earlier versions parsed a
+-- narrower field set from the same API response) — see
+-- migrations/20260708_add_visualcrossing_extra_fields.sql.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- One row per location, upserted on every fetch (like `realtime`).
 CREATE TABLE IF NOT EXISTS forecast_current (
-    location            VARCHAR(64)       NOT NULL,
-    fetched_at          DATETIME          NOT NULL,
-    weather_condition   VARCHAR(32)       NULL COMMENT 'HA weather condition, e.g. partlycloudy — `condition` is a reserved word in MariaDB',
-    temperature_c       FLOAT             NULL,
-    feels_like_c        FLOAT             NULL,
-    humidity_pct        FLOAT             NULL,
-    dew_point_c         FLOAT             NULL,
-    wind_speed_ms       FLOAT             NULL,
-    wind_gust_ms        FLOAT             NULL,
-    wind_bearing_deg    SMALLINT UNSIGNED NULL,
-    pressure_mb         FLOAT             NULL COMMENT 'Sea-level pressure',
-    cloud_cover_pct     TINYINT UNSIGNED  NULL,
-    uv_index            FLOAT             NULL,
-    visibility_km       TINYINT UNSIGNED  NULL,
-    solar_radiation_wm2 FLOAT             NULL,
+    location             VARCHAR(64)       NOT NULL,
+    fetched_at           DATETIME          NOT NULL,
+    weather_condition    VARCHAR(32)       NULL COMMENT 'HA weather condition, e.g. partlycloudy — `condition` is a reserved word in MariaDB',
+    temperature_c        FLOAT             NULL,
+    feels_like_c         FLOAT             NULL,
+    humidity_pct         FLOAT             NULL,
+    dew_point_c          FLOAT             NULL,
+    wind_speed_ms        FLOAT             NULL,
+    wind_gust_ms         FLOAT             NULL,
+    wind_bearing_deg     SMALLINT UNSIGNED NULL,
+    pressure_mb          FLOAT             NULL COMMENT 'Sea-level pressure',
+    cloud_cover_pct      TINYINT UNSIGNED  NULL,
+    uv_index             FLOAT             NULL,
+    visibility_km        TINYINT UNSIGNED  NULL,
+    solar_radiation_wm2  FLOAT             NULL,
+    solar_energy_mjm2    FLOAT             NULL,
+    snow_cm              FLOAT             NULL,
+    snow_depth_cm        FLOAT             NULL,
+    precipitation_type   VARCHAR(64)       NULL COMMENT 'Comma-joined, e.g. rain,ice — pyVisualCrossing returns a list',
+    sunrise              VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
+    sunset               VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
+    moon_phase           FLOAT             NULL COMMENT 'Fraction 0-1 (0/1 = new moon, 0.5 = full moon)',
     PRIMARY KEY (location)
 ) ENGINE=InnoDB;
 
 -- One row per (location, forecast_time); each fetch replaces the full set
 -- for that location (see db_writer.py) so hours that drop out of the
--- forecast window don't linger. No visibility_km/solar_radiation_wm2 —
--- Visual Crossing only reports those for current conditions, not forecasts.
+-- forecast window don't linger. No sunrise/sunset/moon_phase — Visual
+-- Crossing only reports those for current conditions and daily entries.
 CREATE TABLE IF NOT EXISTS forecast_hourly (
     id                             BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
     location                       VARCHAR(64)       NOT NULL,
@@ -752,6 +765,13 @@ CREATE TABLE IF NOT EXISTS forecast_hourly (
     uv_index                       FLOAT             NULL,
     precipitation_mm               FLOAT             NULL,
     precipitation_probability_pct  TINYINT UNSIGNED  NULL,
+    visibility_km                  TINYINT UNSIGNED  NULL,
+    solar_radiation_wm2            FLOAT             NULL,
+    solar_energy_mjm2              FLOAT             NULL,
+    severe_risk                    FLOAT             NULL COMMENT 'Risk score of severe weather, per Visual Crossing',
+    snow_cm                        FLOAT             NULL,
+    snow_depth_cm                  FLOAT             NULL,
+    precipitation_type             VARCHAR(64)       NULL COMMENT 'Comma-joined, e.g. rain,ice — pyVisualCrossing returns a list',
     PRIMARY KEY (id),
     UNIQUE KEY uq_forecast_hourly (location, forecast_time)
 ) ENGINE=InnoDB;
@@ -759,7 +779,8 @@ CREATE TABLE IF NOT EXISTS forecast_hourly (
 -- One row per (location, forecast_time); same replace-on-fetch approach as
 -- forecast_hourly. temperature_high_c/temperature_low_c replace a single
 -- temperature_c column since a daily forecast is a high/low pair, not one
--- instant reading.
+-- instant reading. No visibility_km — Visual Crossing's daily entries don't
+-- report it (only current conditions and hourly do).
 CREATE TABLE IF NOT EXISTS forecast_daily (
     id                             BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
     location                       VARCHAR(64)       NOT NULL,
@@ -779,6 +800,16 @@ CREATE TABLE IF NOT EXISTS forecast_daily (
     uv_index                       FLOAT             NULL,
     precipitation_mm               FLOAT             NULL,
     precipitation_probability_pct  TINYINT UNSIGNED  NULL,
+    precipitation_cover_pct        TINYINT UNSIGNED  NULL COMMENT 'Percentage of the day with precipitation',
+    solar_radiation_wm2            FLOAT             NULL,
+    solar_energy_mjm2              FLOAT             NULL,
+    severe_risk                    FLOAT             NULL COMMENT 'Risk score of severe weather, per Visual Crossing',
+    snow_cm                        FLOAT             NULL,
+    snow_depth_cm                  FLOAT             NULL,
+    precipitation_type             VARCHAR(64)       NULL COMMENT 'Comma-joined, e.g. rain,ice — pyVisualCrossing returns a list',
+    sunrise                        VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
+    sunset                         VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
+    moon_phase                     FLOAT             NULL COMMENT 'Fraction 0-1 (0/1 = new moon, 0.5 = full moon)',
     PRIMARY KEY (id),
     UNIQUE KEY uq_forecast_daily (location, forecast_time)
 ) ENGINE=InnoDB;

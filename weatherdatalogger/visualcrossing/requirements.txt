@@ -1,7 +1,7 @@
 paho-mqtt
-pyVisualCrossing
-# aiohttp is imported unconditionally by pyVisualCrossing's api.py (for its
-# async fetch path, which this service doesn't use) but isn't declared in
-# its own packaging metadata — listed explicitly here so `pip install -r`
-# doesn't leave the import broken.
-aiohttp
+# 1.0.2+ declares aiohttp as its own dependency (earlier versions imported it
+# unconditionally in api.py without declaring it, leaving `pip install` with
+# a broken import) and exposes the full field set this service reads
+# (snow, precipitation_type, solar_energy, severe_risk, sunrise/sunset,
+# moon_phase, etc.) — see visualcrossing_datalogger.py's payload builders.
+pyVisualCrossing>=1.0.2

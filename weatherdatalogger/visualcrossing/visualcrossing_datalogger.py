@@ -102,6 +102,11 @@ def _ha_condition(icon: str | None) -> str:
     return _VC_ICON_TO_HA.get(icon or "", "exceptional")
 
 
+def _join_precip_type(precipitation_type: list[str] | None) -> str | None:
+    """Flatten pyVisualCrossing's list (e.g. ["rain", "ice"]) to a joined string."""
+    return ",".join(precipitation_type) if precipitation_type else None
+
+
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
@@ -161,6 +166,13 @@ def _build_current_payload(cc: ForecastData) -> dict:
         "uv_index": cc.uv_index,
         "visibility": cc.visibility,
         "solar_radiation": cc.solarradiation,
+        "solar_energy": cc.solarenergy,
+        "snow": cc.snow,
+        "snow_depth": cc.snow_depth,
+        "precipitation_type": _join_precip_type(cc.precipitation_type),
+        "sunrise": cc.sunrise,
+        "sunset": cc.sunset,
+        "moon_phase": cc.moon_phase,
     }
 
 
@@ -181,6 +193,13 @@ def _build_hourly_payload(hourly: list[ForecastHourlyData]) -> list[dict]:
             "uv_index": h.uv_index,
             "precipitation": h.precipitation,
             "precipitation_probability": h.precipitation_probability,
+            "visibility": h.visibility,
+            "solar_radiation": h.solarradiation,
+            "solar_energy": h.solarenergy,
+            "severe_risk": h.severe_risk,
+            "snow": h.snow,
+            "snow_depth": h.snow_depth,
+            "precipitation_type": _join_precip_type(h.precipitation_type),
         }
         for h in hourly
     ]
@@ -204,6 +223,16 @@ def _build_daily_payload(daily: list[ForecastDailyData]) -> list[dict]:
             "uv_index": d.uv_index,
             "precipitation": d.precipitation,
             "precipitation_probability": d.precipitation_probability,
+            "precipitation_cover": d.precipitation_cover,
+            "solar_radiation": d.solarradiation,
+            "solar_energy": d.solarenergy,
+            "severe_risk": d.severe_risk,
+            "snow": d.snow,
+            "snow_depth": d.snow_depth,
+            "precipitation_type": _join_precip_type(d.precipitation_type),
+            "sunrise": d.sunrise,
+            "sunset": d.sunset,
+            "moon_phase": d.moon_phase,
         }
         for d in daily
     ]

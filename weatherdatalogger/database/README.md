@@ -181,7 +181,7 @@ Visual Crossing Timeline Weather API data fetched by the [`visualcrossing-datalo
 
 `location` matches the `location` config value (defaults to `home`), not a row in `stations` — forecasts aren't tied to a physical device the way `realtime`/`history` are, so there's no foreign key here.
 
-> These tables previously held WeatherFlow Better Forecast data, sourced from a forecast thread that used to live in `tempest_datalogger.py`. They were replaced outright (not extended) when the forecast source moved to Visual Crossing, which covers the same ground plus more (`feels_like_c`, `cloud_cover_pct`, `wind_gust_ms`, `uv_index`).
+> These tables previously held WeatherFlow Better Forecast data, sourced from a forecast thread that used to live in `tempest_datalogger.py`. They were replaced outright (not extended) when the forecast source moved to Visual Crossing, which covers the same ground plus more (`feels_like_c`, `cloud_cover_pct`, `wind_gust_ms`, `uv_index`, and later `snow_cm`/`precipitation_type`/`solar_energy_mjm2`/`severe_risk`/`sunrise`/`sunset`/`moon_phase` once `pyVisualCrossing` 1.0.2 started exposing them — see `migrations/20260708_add_visualcrossing_extra_fields.sql`).
 
 | Table | Key | Refresh behavior |
 |---|---|---|
@@ -199,8 +199,15 @@ Visual Crossing Timeline Weather API data fetched by the [`visualcrossing-datalo
 | `wind_speed_ms`, `wind_gust_ms`, `wind_bearing_deg` | All three tables |
 | `pressure_mb` | All three tables — sea-level pressure |
 | `cloud_cover_pct`, `uv_index` | All three tables |
-| `visibility_km`, `solar_radiation_wm2` | `forecast_current` only — Visual Crossing doesn't report these for forecasts, only current conditions |
+| `visibility_km` | `forecast_current` and `forecast_hourly` only — Visual Crossing's daily entries don't report it |
+| `solar_radiation_wm2`, `solar_energy_mjm2` | All three tables |
+| `severe_risk` | `forecast_hourly` and `forecast_daily` only — risk score of severe weather, per Visual Crossing |
+| `snow_cm`, `snow_depth_cm` | All three tables |
+| `precipitation_type` | All three tables — comma-joined string, e.g. `rain,ice` (`pyVisualCrossing` returns a list; there's rarely more than one value, so a normalized join table wasn't worth it) |
 | `precipitation_mm`, `precipitation_probability_pct` | `forecast_hourly` and `forecast_daily` only |
+| `precipitation_cover_pct` | `forecast_daily` only — percentage of the day with precipitation |
+| `sunrise`, `sunset` | `forecast_current` and `forecast_daily` only. Stored as the raw pass-through string from the API — `pyVisualCrossing` doesn't parse these to a time type, so don't assume a fixed format |
+| `moon_phase` | `forecast_current` and `forecast_daily` only — fraction 0-1 (0 or 1 = new moon, 0.5 = full moon) |
 | `forecast_time` | The UTC hour (`forecast_hourly`) or day (`forecast_daily`) this row forecasts — not when it was fetched |
 | `fetched_at` | UTC timestamp of the fetch that produced this row |
 
