@@ -159,3 +159,19 @@ The free tier allows 1,000 calls/day, and this service makes exactly one call pe
 This service is a thin wrapper around [`pyVisualCrossing`](https://github.com/briis/pyVisualCrossing) — it calls `VisualCrossing(...).fetch_data()` on a timer and reshapes the returned `ForecastData`/`ForecastHourlyData`/`ForecastDailyData` objects into the MQTT JSON payloads documented above. The library's own `fetch_data()` is synchronous (blocking HTTP via `urllib`); `async_fetch_data()` also exists but isn't used here since this service already runs its own poll loop in a dedicated process.
 
 `requirements.txt` pins `pyVisualCrossing>=1.0.2` — that's the version where the package started declaring `aiohttp` as its own dependency (earlier versions imported it unconditionally in `api.py` without declaring it, leaving `pip install` with a broken import unless you added `aiohttp` yourself) and where the full field set this service reads (`snow`, `precipitation_type`, `solar_energy`, `severe_risk`, `sunrise`/`sunset`, `moon_phase`, plus `solar_radiation`/`visibility` on hourly entries) became available — earlier versions silently returned `None` for most of these on hourly/daily objects, even though the underlying API response already included them.
+
+---
+
+## Troubleshooting
+
+### Some fields are always `null` (e.g. `feels_like`, `cloud_cover`, `uv_index`, `wind_gust_speed`, `snow`, `sunrise`)
+
+This is usually Visual Crossing's own API response for that location not including the field — not a bug in this service or in `pyVisualCrossing`'s parsing. To tell the two apart, set `[logging] level = DEBUG` in `config.ini`, restart the service, and check the next fetch:
+
+```bash
+journalctl -u visualcrossing-datalogger -f
+```
+
+Look for three `DEBUG` lines: `Raw currentConditions: ...`, `Raw days[0] (excluding hours): ...`, and `Raw days[0].hours[0]: ...` — these dump the actual JSON Visual Crossing returned, before any of this service's parsing. If a field is missing or `null` there too, it's a Visual Crossing data-availability question for that location (check with their support, or whether your account/plan restricts certain elements), not something fixable here. If a field *is* present there but still comes through as `null` in the published MQTT payload or the database, that points to a bug in `pyVisualCrossing` itself (reading the wrong JSON key) — worth reporting upstream.
+
+Remember to set `[logging] level` back to `INFO` afterward — `DEBUG` logs the full raw API response on every poll.

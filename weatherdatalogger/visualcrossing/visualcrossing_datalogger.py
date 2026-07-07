@@ -251,16 +251,53 @@ _VC_ERRORS = (
 )
 
 
+def _log_raw_response(vcapi: VisualCrossing, log: logging.Logger) -> None:
+    """
+    DEBUG-only diagnostic: dump the raw API JSON.
+
+    Covers currentConditions plus one sample day/hour entry, to tell apart
+    "Visual Crossing didn't send this field" from "pyVisualCrossing failed
+    to parse a field it did send". Reaches into VisualCrossing's private
+    _json_data since the library has no public accessor for the raw
+    response — guarded so a future pyVisualCrossing release renaming or
+    removing that attribute just skips the dump instead of breaking the
+    fetch (hence the deliberately broad except below).
+    """
+    try:
+        raw = vcapi._json_data  # noqa: SLF001
+        if not raw:
+            log.debug("Raw API response unavailable (empty or not yet fetched)")
+            return
+        current = raw.get("currentConditions", {})
+        days = raw.get("days", [])
+        today = days[0] if days else {}
+        hours = today.get("hours", [])
+        first_hour = hours[0] if hours else {}
+        log.debug("Raw currentConditions: %s", json.dumps(current))
+        log.debug(
+            "Raw days[0] (excluding hours): %s",
+            json.dumps({k: v for k, v in today.items() if k != "hours"}),
+        )
+        log.debug("Raw days[0].hours[0]: %s", json.dumps(first_hour))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("Could not introspect raw API response: %s", exc)
+
+
 def fetch_forecast(vcapi: VisualCrossing, log: logging.Logger) -> ForecastData | None:
     """Fetch the current+hourly+daily forecast; None on any failure."""
     try:
-        return vcapi.fetch_data()
+        data = vcapi.fetch_data()
     except _VC_ERRORS as exc:
         log.warning("Visual Crossing API error: %s", exc)
         return None
     except Exception:
         log.exception("Unexpected error fetching Visual Crossing forecast")
         return None
+
+    if log.isEnabledFor(logging.DEBUG):
+        _log_raw_response(vcapi, log)
+
+    return data
 
 
 # ---------------------------------------------------------------------------
