@@ -48,7 +48,7 @@ weatherdatalogger/forecast-<location>/forecast_daily
 
 ### Field conventions
 
-Field names intentionally match Home Assistant's own weather-entity attribute names (`condition`, `temperature`, `wind_bearing`, ...) rather than this project's usual unit-suffixed convention (`temperature_c`, `wind_bearing_deg`) — same as the WeatherFlow forecast payload before it. `weatherdb-writer` maps them to proper unit-suffixed DB columns (`temperature_c`, `wind_speed_ms`, ...) on the way into MariaDB; see [`database/README.md`](../database/README.md#forecast_current-forecast_hourly-forecast_daily).
+Field names intentionally match Home Assistant's own weather-entity attribute names (`condition`, `temperature`, `wind_bearing`, ...) rather than this project's usual unit-suffixed convention (`temperature_c`, `wind_bearing_deg`) — same as the WeatherFlow forecast payload before it. `weatherdb-writer` maps them to proper unit-suffixed DB columns (`temperature_c`, `wind_speed_ms`, ...) on the way into MariaDB; see [`database/README.md`](../database/README.md#forecast_current-forecast_hourly-forecast_daily). One exception: the MQTT payload's `condition` key maps to the DB column `weather_condition`, not `condition` — `CONDITION` is a reserved word in MariaDB.
 
 All values are metric (°C, hPa/mb, m/s — `pyVisualCrossing` converts from the API's native units), matching the rest of this project.
 

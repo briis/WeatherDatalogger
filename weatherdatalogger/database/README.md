@@ -191,7 +191,7 @@ Visual Crossing Timeline Weather API data fetched by the [`visualcrossing-datalo
 
 | Column | Description |
 |---|---|
-| `condition` | HA weather condition string, e.g. `partlycloudy`, `rainy` — mapped from Visual Crossing's `icons2` icon set; see `_VC_ICON_TO_HA` in `visualcrossing_datalogger.py` |
+| `weather_condition` | HA weather condition string, e.g. `partlycloudy`, `rainy` — mapped from Visual Crossing's `icons2` icon set; see `_VC_ICON_TO_HA` in `visualcrossing_datalogger.py`. Named `weather_condition`, not `condition` — the latter is a reserved word in MariaDB (used for `DECLARE ... CONDITION FOR`) and can't be used as a bare column name |
 | `temperature_c` | `forecast_current`/`forecast_hourly`: forecast temperature. `forecast_daily`: use `temperature_high_c` instead |
 | `temperature_high_c`, `temperature_low_c` | `forecast_daily` only — the day's forecast high/low |
 | `feels_like_c` | Apparent temperature — all three tables |

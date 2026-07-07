@@ -155,7 +155,7 @@ _SQL_ENSURE_STATION = (
 # (see db/README.md), so each JSON key is mapped explicitly to its DB column
 # rather than reusing it outright, unlike _OBS_FIELDS above.
 _FORECAST_CURRENT_FIELDS: tuple[tuple[str, str], ...] = (
-    ("condition", "condition"),
+    ("condition", "weather_condition"),
     ("temperature", "temperature_c"),
     ("feels_like", "feels_like_c"),
     ("humidity", "humidity_pct"),
@@ -170,7 +170,7 @@ _FORECAST_CURRENT_FIELDS: tuple[tuple[str, str], ...] = (
     ("solar_radiation", "solar_radiation_wm2"),
 )
 _FORECAST_HOURLY_FIELDS: tuple[tuple[str, str], ...] = (
-    ("condition", "condition"),
+    ("condition", "weather_condition"),
     ("temperature", "temperature_c"),
     ("feels_like", "feels_like_c"),
     ("humidity", "humidity_pct"),
@@ -185,7 +185,7 @@ _FORECAST_HOURLY_FIELDS: tuple[tuple[str, str], ...] = (
     ("precipitation_probability", "precipitation_probability_pct"),
 )
 _FORECAST_DAILY_FIELDS: tuple[tuple[str, str], ...] = (
-    ("condition", "condition"),
+    ("condition", "weather_condition"),
     ("temperature", "temperature_high_c"),
     ("templow", "temperature_low_c"),
     ("feels_like", "feels_like_c"),
