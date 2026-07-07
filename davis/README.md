@@ -106,7 +106,7 @@ Auto-cycles through 5 pages every 7 s each (no touch controller on this board, s
 4. **Station lock** — the first valid station ID seen is auto-locked; packets from other stations are silently ignored. Override by setting `known_unit_id` to a specific value (0 = Davis transmitter ID 1, 1 = ID 2, etc.)
 5. **Decoding** — packet type byte selects the measurement: wind (every packet), temperature (type 8), UV (type 3, no sensor fitted here), solar radiation (type 5, no sensor fitted — publishing disabled entirely since RF noise made the "no sensor" sentinel unreliable), humidity (type 10), rain (type 14, but see below). Packet type 9 (Davis' own gust broadcast) is decoded if it's ever observed, but this specific transmitter has never been seen sending it
 6. **Gust and lull** — derived locally every 60 s as the rolling max/min of the ordinary wind samples present in every packet (the same way the console's own display evidently does it), since dedicated gust packets don't arrive on this hardware
-7. **Rain** — the CC1101 tip-derived accumulation/rate calculation is present in the firmware but currently **disabled** (commented out, not deleted); it wasn't stable enough. `Daily Rain`/`Rain Rate` are instead published exclusively by the [Meteobridge corrector](#manual--automated-rain-corrections), a separate service polling a Meteobridge Pro wired to the same ISS
+7. **Rain** — `Daily Rain`/`Rain Rate` are computed standalone from the ISS's own RF tip counter (packet type 14, 0.2 mm/tip), the same way the Davis console itself derives rain — no external station required. Rate is derived from the actual gap between tips (not a fixed 60s bucket), and decays back to 0 if no tip has been seen for 5+ minutes. [Manual/Meteobridge correction](#manual--automated-rain-corrections) is available as an optional override but nothing here depends on it
 8. **Indoor sensor** — the BME280 is polled locally every 60s over I2C (not part of RF decoding at all) and published alongside everything else in `observation`
 9. **Sea-level pressure & trend** — sea-level pressure is recomputed on-device every time the BME280 reports a new station pressure (every 60s), using the same barometric formula as `tempest_datalogger.py`, so it tracks station pressure without lag. The `elevation_m`/`height_above_ground_m` substitutions at the top of the yaml feed the conversion — adjust them for your install. The trend (±1 mb Rising/Falling threshold, also matching `tempest_datalogger.py`) is sampled separately every 15 min and needs 3h of on-device history (12 samples, 15 min apart, tracked with no wall-clock dependency — see the `pressure_hist_*` globals), so it's unavailable for ~3h15m after every boot/reflash, not persisted across reboots
 10. **Wet bulb, delta T, air density** — computed on-device alongside the other comfort metrics (step 7 above), same formulas as `tempest_datalogger.py`. Wet bulb uses a 50-iteration bisection solver and, like sea-level pressure, needs the BME280's station pressure — so it's only computed once a barometer reading is available
@@ -174,8 +174,8 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `air_temperature_c` | °C | |
 | `relative_humidity_pct` | % | |
 | `dew_point_c`, `vapor_pressure_mb`, `heat_index_c`, `wind_chill_c`, `feels_like_c` | °C / hPa | Comfort metrics computed on-device from temperature/humidity/wind — same formulas as `tempest_datalogger.py` |
-| `rain_accumulation_mm` | mm | Today's accumulated rain. Sourced exclusively from the Meteobridge corrector — the CC1101 tip-derived calculation is disabled (see [How it works](#how-it-works)) |
-| `rain_rate_mmh` | mm/h | Current rain rate. Also sourced exclusively from the Meteobridge corrector; falls back to `0` if Meteobridge itself goes quiet for 5+ minutes |
+| `rain_accumulation_mm` | mm | Today's accumulated rain, computed standalone from the ISS's own RF tip counter (see [How it works](#how-it-works)). Persisted across reboots, reset at local midnight |
+| `rain_rate_mmh` | mm/h | Current rain rate, derived from the actual gap between tips. Decays to `0` after 5+ minutes without a tip |
 | `uv_index` | UV Index | Packet type 3 decoded, but this ISS has no UV sensor fitted — will essentially never populate |
 | `solar_radiation_wm2` | W/m² | Not published — no solar sensor fitted, and RF noise made the "no sensor" sentinel unreliable enough that publishing was disabled entirely rather than risk showing a bogus value |
 | `station_pressure_mb` | hPa/mb | From the BME280, polled locally over I2C — not RF-decoded. Named `_mb` (not `_hpa`) to match the DB writer's/Tempest's convention; hPa and mb are numerically identical |
@@ -190,9 +190,9 @@ All field names follow the project standard — descriptive snake_case with SI u
 
 ## Manual & Automated Rain Corrections
 
-`Daily Rain` and `Rain Rate` are published **exclusively** by MQTT correction rather than computed locally on-device. The CC1101 can decode rain tip packets (type 14) and did originally derive both values from them, but that path proved unstable and is now disabled (commented out, not deleted, in `davis-vantage-receiver.yaml` — search for "Publishing from this locally-computed accumulation/rate is DISABLED").
+`Daily Rain` and `Rain Rate` are computed standalone on-device from the ISS's own RF tip counter (packet type 14) — see [How it works](#how-it-works). No external station is required for normal operation.
 
-Both entities are set via fixed MQTT control topics — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
+The MQTT topics below remain available as an **optional** manual/automated correction — e.g. to punch in the console's displayed value after a reflash/reboot that landed between tips (losing sync with the physical tip counter), or as a periodic cross-check if you happen to have an independent source like a Meteobridge. Both are fixed control topics (not the dynamic `weatherdatalogger/davis-<id>` observation prefix, since the transmitter ID auto-locks at runtime and isn't known at compile time) — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
 
 ```bash
 mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
@@ -207,7 +207,7 @@ Or on the server, for the daily total, using the shared config for broker/creden
 
 By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. Both values are clamped to `< 500mm` (or mm/h) on-device — implausible values are logged and ignored, not applied.
 
-**Primary source: [`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/)** — polls a Meteobridge Pro wired to the same Vantage Vue ISS every 60s (configurable) and publishes both corrections automatically. Without this service running, the rain entities will simply sit at whatever they were last manually set to (or "Unknown"), since nothing else publishes to them anymore. See its README for setup.
+**Optional cross-check: [`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/)** — polls a Meteobridge Pro wired to the same Vantage Vue ISS every 60s (configurable) and publishes both corrections automatically, overwriting the standalone RF-tip-derived value each time. This service is not required — without it running, `Daily Rain`/`Rain Rate` continue to be tracked from the RF tip counter as normal. See its README for setup.
 
 ---
 
