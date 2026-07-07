@@ -107,6 +107,19 @@ def _join_precip_type(precipitation_type: list[str] | None) -> str | None:
     return ",".join(precipitation_type) if precipitation_type else None
 
 
+def _kmh_to_ms(kmh: float | None) -> float | None:
+    """
+    Convert km/h to m/s.
+
+    Visual Crossing's metric unit group returns wind speed/gust in km/h, but
+    pyVisualCrossing's wind_speed/wind_gust_speed properties are documented
+    as m/s without actually converting. Fixed here rather than in the
+    wrapper to avoid a breaking change for other pyVisualCrossing consumers
+    who may already depend on its current (km/h) values.
+    """
+    return kmh / 3.6 if kmh is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
@@ -148,6 +161,8 @@ def load_config(path: str) -> configparser.ConfigParser:
 # _FORECAST_*_FIELDS tuples expect. ForecastDailyData.wind_gust is renamed to
 # wind_gust_speed here so all three payloads share one consistent key,
 # despite the library itself naming it differently on daily entries.
+# wind_speed/wind_gust_speed are also converted km/h → m/s via _kmh_to_ms
+# (see its docstring for why that happens here and not in the wrapper).
 # ---------------------------------------------------------------------------
 
 
@@ -158,8 +173,8 @@ def _build_current_payload(cc: ForecastData) -> dict:
         "feels_like": cc.apparent_temperature,
         "humidity": cc.humidity,
         "dew_point": cc.dew_point,
-        "wind_speed": cc.wind_speed,
-        "wind_gust_speed": cc.wind_gust_speed,
+        "wind_speed": _kmh_to_ms(cc.wind_speed),
+        "wind_gust_speed": _kmh_to_ms(cc.wind_gust_speed),
         "wind_bearing": cc.wind_bearing,
         "pressure": cc.pressure,
         "cloud_cover": cc.cloud_cover,
@@ -185,8 +200,8 @@ def _build_hourly_payload(hourly: list[ForecastHourlyData]) -> list[dict]:
             "feels_like": h.apparent_temperature,
             "humidity": h.humidity,
             "dew_point": h.dew_point,
-            "wind_speed": h.wind_speed,
-            "wind_gust_speed": h.wind_gust_speed,
+            "wind_speed": _kmh_to_ms(h.wind_speed),
+            "wind_gust_speed": _kmh_to_ms(h.wind_gust_speed),
             "wind_bearing": h.wind_bearing,
             "pressure": h.pressure,
             "cloud_cover": h.cloud_cover,
@@ -215,8 +230,8 @@ def _build_daily_payload(daily: list[ForecastDailyData]) -> list[dict]:
             "feels_like": d.apparent_temperature,
             "humidity": d.humidity,
             "dew_point": d.dew_point,
-            "wind_speed": d.wind_speed,
-            "wind_gust_speed": d.wind_gust,
+            "wind_speed": _kmh_to_ms(d.wind_speed),
+            "wind_gust_speed": _kmh_to_ms(d.wind_gust),
             "wind_bearing": d.wind_bearing,
             "pressure": d.pressure,
             "cloud_cover": d.cloud_cover,
