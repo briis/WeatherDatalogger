@@ -106,12 +106,17 @@ Auto-cycles through 5 pages every 7 s each (no touch controller on this board, s
 4. **Station lock** — the first valid station ID seen is auto-locked; packets from other stations are silently ignored. Override by setting `known_unit_id` to a specific value (0 = Davis transmitter ID 1, 1 = ID 2, etc.)
 5. **Decoding** — packet type byte selects the measurement: wind (every packet), temperature (type 8), UV (type 3, no sensor fitted here), solar radiation (type 5, no sensor fitted — publishing disabled entirely since RF noise made the "no sensor" sentinel unreliable), humidity (type 10), rain (type 14, but see below). Packet type 9 (Davis' own gust broadcast) is decoded if it's ever observed, but this specific transmitter has never been seen sending it
 6. **Gust and lull** — derived locally every 60 s as the rolling max/min of the ordinary wind samples present in every packet (the same way the console's own display evidently does it), since dedicated gust packets don't arrive on this hardware
-7. **Rain** — `Daily Rain`/`Rain Rate` are computed standalone from the ISS's own RF tip counter (packet type 14, 0.2 mm/tip), the same way the Davis console itself derives rain — no external station required. Rate is derived from the actual gap between tips (not a fixed 60s bucket), and decays back to 0 if no tip has been seen for 5+ minutes. [Manual/Meteobridge correction](#manual--automated-rain-corrections) is available as an optional override but nothing here depends on it
-8. **Indoor sensor** — the BME280 is polled locally every 60s over I2C (not part of RF decoding at all) and published alongside everything else in `observation`
-9. **Sea-level pressure & trend** — sea-level pressure is recomputed on-device every time the BME280 reports a new station pressure (every 60s), using the same barometric formula as `tempest_datalogger.py`, so it tracks station pressure without lag. The `elevation_m`/`height_above_ground_m` substitutions at the top of the yaml feed the conversion — adjust them for your install. The trend (±1 mb Rising/Falling threshold, also matching `tempest_datalogger.py`) is sampled separately every 15 min and needs 3h of on-device history (12 samples, 15 min apart, tracked with no wall-clock dependency — see the `pressure_hist_*` globals), so it's unavailable for ~3h15m after every boot/reflash, not persisted across reboots
-10. **Wet bulb, delta T, air density** — computed on-device alongside the other comfort metrics (step 7 above), same formulas as `tempest_datalogger.py`. Wet bulb uses a 50-iteration bisection solver and, like sea-level pressure, needs the BME280's station pressure — so it's only computed once a barometer reading is available
-11. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
-12. **Local display** — the OLED (see [Hardware](#display--098-oled-ssd1306-driver-128x64)) redraws every 1s and auto-cycles through 5 pages (Davis Receiver, Temp/Humidity, Rain, Pressure, Wind) every 7s each, independent of MQTT/RF timing
+7. **Beaufort scale** — derived on every packet from `Wind Speed`'s own smoothed 5-sample moving average (not gusts), the closest available stand-in on this hardware for the WMO's 10-min sustained-mean convention. Bucketed 0-12 per the standard Beaufort thresholds; the accompanying description (e.g. `Fresh breeze`) is localized per the `language` substitution — see [Localization](#localization)
+8. **Rain** — `Daily Rain`/`Rain Rate` are computed standalone from the ISS's own RF tip counter (packet type 14, 0.2 mm/tip), the same way the Davis console itself derives rain — no external station required. Rate is derived from the actual gap between tips (not a fixed 60s bucket), and decays back to 0 if no tip has been seen for 5+ minutes. [Manual/Meteobridge correction](#manual--automated-rain-corrections) is available as an optional override but nothing here depends on it
+9. **Indoor sensor** — the BME280 is polled locally every 60s over I2C (not part of RF decoding at all) and published alongside everything else in `observation`
+10. **Sea-level pressure & trend** — sea-level pressure is recomputed on-device every time the BME280 reports a new station pressure (every 60s), using the same barometric formula as `tempest_datalogger.py`, so it tracks station pressure without lag. The `elevation_m`/`height_above_ground_m` substitutions at the top of the yaml feed the conversion — adjust them for your install. The trend (±1 mb Rising/Falling threshold, also matching `tempest_datalogger.py`) is sampled separately every 15 min and needs 3h of on-device history (12 samples, 15 min apart, tracked with no wall-clock dependency — see the `pressure_hist_*` globals), so it's unavailable for ~3h15m after every boot/reflash, not persisted across reboots. The trend description (`Rising`/`Steady`/`Falling`) is localized per the `language` substitution, same as Beaufort
+11. **Wet bulb, delta T, air density** — computed on-device alongside the other comfort metrics (step 7 above), same formulas as `tempest_datalogger.py`. Wet bulb uses a 50-iteration bisection solver and, like sea-level pressure, needs the BME280's station pressure — so it's only computed once a barometer reading is available
+12. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
+13. **Local display** — the OLED (see [Hardware](#display--098-oled-ssd1306-driver-128x64)) redraws every 1s and auto-cycles through 5 pages (Davis Receiver, Temp/Humidity, Rain, Pressure, Wind) every 7s each, independent of MQTT/RF timing
+
+### Localization
+
+The `language` substitution at the top of `davis-vantage-receiver.yaml` controls the language of three derived text fields: the Beaufort description (`wind_beaufort_description`), the pressure trend descriptions (`pressure_trend`/`sea_level_pressure_trend`), and the 16-point Wind Cardinal (e.g. `WSW` → `VSV` in Danish, using Ø/Nord/Syd/Vest compass points). Supported values: `"en"` (English, default) and `"da"` (Danish). The underlying numeric values (`wind_beaufort`, `pressure_trend_mb`, `wind_direction_deg`, etc.) are unaffected — only the human-readable text changes. To add another language, extend the lookup tables in the packet lambda (Beaufort, Wind Cardinal) and the 15-min interval lambda (pressure trend).
 
 ---
 
@@ -139,6 +144,8 @@ The one exception is the daily rain correction control topic (`weatherdatalogger
   "rain_accumulation_mm": 4.2,
   "rain_rate_mmh": 0.6,
   "wind_lull_ms": 1.8,
+  "wind_beaufort": 2,
+  "wind_beaufort_description": "Light breeze",
   "dew_point_c": 12.9,
   "vapor_pressure_mb": 14.9,
   "heat_index_c": 18.2,
@@ -171,6 +178,8 @@ All field names follow the project standard — descriptive snake_case with SI u
 | `wind_gust_ms` | m/s | Locally-derived rolling max of `wind_avg_ms` over each 60s interval — packet type 9 (Davis' own gust broadcast) has never been observed on this hardware. Still updates immediately if a real ptype-9 packet ever arrives |
 | `wind_lull_ms` | m/s | Locally-derived rolling min of `wind_avg_ms` over each 60s interval |
 | `wind_direction_deg` | ° | 0–360 |
+| `wind_beaufort` | Beaufort force (0-12) | Derived every packet from `wind_avg_ms`'s smoothed moving average (not gusts) — see [How it works](#how-it-works) |
+| `wind_beaufort_description` | — | e.g. `Fresh breeze` — localized per the `language` substitution ([Localization](#localization)) |
 | `air_temperature_c` | °C | |
 | `relative_humidity_pct` | % | |
 | `dew_point_c`, `vapor_pressure_mb`, `heat_index_c`, `wind_chill_c`, `feels_like_c` | °C / hPa | Comfort metrics computed on-device from temperature/humidity/wind — same formulas as `tempest_datalogger.py` |
@@ -216,6 +225,8 @@ By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_I
 ### 0. Set elevation (optional)
 
 The `substitutions:` block at the top of `davis-vantage-receiver.yaml` has `elevation_m`/`height_above_ground_m`, used only for the Sea Level Pressure conversion. Defaults to `0`/`0` (station pressure = sea level pressure) if left unset — fine for testing, but adjust to your actual install for a meaningful reading.
+
+The same block also has `language` (`"en"` or `"da"`), controlling the Beaufort and pressure trend description text — see [Localization](#localization).
 
 ### 1. Create `secrets.yaml`
 
@@ -281,7 +292,9 @@ Entity names no longer repeat "Davis" (the device name already provides that con
 | Wind Gust | Sensor | m/s | Locally-derived (see [How it works](#how-it-works)) |
 | Wind Lull | Sensor | m/s | Locally-derived |
 | Wind Direction | Sensor | ° | |
-| Wind Cardinal | Text sensor | e.g. `WSW` | 16-point compass, derived from Wind Direction |
+| Wind Cardinal | Text sensor | e.g. `WSW` | 16-point compass, derived from Wind Direction — localized per the `language` substitution ([Localization](#localization)) |
+| Beaufort Scale | Sensor | Beaufort force (0-12) | Derived from Wind Speed's smoothed average, not gusts (see [How it works](#how-it-works)) |
+| Beaufort Description | Text sensor | e.g. `Fresh breeze` | Localized per the `language` substitution ([Localization](#localization)) |
 | Dew Point | Sensor | °C | |
 | Vapor Pressure | Sensor | hPa | |
 | Heat Index | Sensor | °C | |
@@ -298,7 +311,7 @@ Entity names no longer repeat "Davis" (the device name already provides that con
 | Sea Level Pressure | Sensor | hPa | Computed on-device from Barometer + `elevation_m`/`height_above_ground_m` |
 | Pressure Trend | Sensor | hPa | 3h delta of Barometer; unavailable for ~3h15m after boot |
 | Sea Level Pressure Trend | Sensor | hPa | 3h delta of Sea Level Pressure |
-| Pressure Trend Description | Text sensor | e.g. `Falling` | ±1 hPa Rising/Falling threshold, else `Steady` |
+| Pressure Trend Description | Text sensor | e.g. `Falling` | ±1 hPa Rising/Falling threshold, else `Steady` — localized per the `language` substitution ([Localization](#localization)) |
 | Sea Level Pressure Trend Description | Text sensor | e.g. `Falling` | Same thresholding, for Sea Level Pressure |
 | Indoor Temperature | Sensor | °C | BME280, local to the receiver |
 | Indoor Humidity | Sensor | % | BME280, local to the receiver |

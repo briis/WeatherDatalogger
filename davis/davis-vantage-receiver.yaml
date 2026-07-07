@@ -11,6 +11,12 @@ substitutions:
   elevation_m: "12"
   height_above_ground_m: "3"
 
+  # Language for derived text descriptions (Beaufort wind scale, pressure
+  # trend). Supported: "en" (English), "da" (Danish). To add another
+  # language, extend the lookup tables in the on_packet lambda (Beaufort)
+  # and the 15-min interval lambda (pressure trend) further down.
+  language: "da"
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
@@ -521,6 +527,47 @@ cc1101:
             id(davis_wind_cardinal).update();
           }
 
+          // Beaufort wind scale — the WMO standard defines Beaufort force
+          // from a sustained mean wind (traditionally a 10-min average at
+          // 10m), not gusts. We don't have a true 10-min mean on this
+          // hardware, so the closest available stand-in is used: the
+          // "Wind Speed" sensor's own 5-sample sliding-window average
+          // (davis_wind_speed.state, already smoothed by the filter above),
+          // not the raw instantaneous wind_avg_ms.
+          if (!std::isnan(id(davis_wind_speed).state)) {
+            float v = id(davis_wind_speed).state;
+            uint8_t bft;
+            if      (v <  0.5f) bft = 0;
+            else if (v <  1.6f) bft = 1;
+            else if (v <  3.4f) bft = 2;
+            else if (v <  5.5f) bft = 3;
+            else if (v <  8.0f) bft = 4;
+            else if (v < 10.8f) bft = 5;
+            else if (v < 13.9f) bft = 6;
+            else if (v < 17.2f) bft = 7;
+            else if (v < 20.8f) bft = 8;
+            else if (v < 24.5f) bft = 9;
+            else if (v < 28.5f) bft = 10;
+            else if (v < 32.7f) bft = 11;
+            else                bft = 12;
+
+            static const char* const beaufort_en[] = {
+              "Calm", "Light air", "Light breeze", "Gentle breeze",
+              "Moderate breeze", "Fresh breeze", "Strong breeze",
+              "Near gale", "Gale", "Strong gale", "Storm", "Violent storm",
+              "Hurricane"
+            };
+            static const char* const beaufort_da[] = {
+              "Stille", "Næsten stille", "Svag vind", "Let vind",
+              "Jævn vind", "Frisk vind", "Hård vind", "Stiv kuling",
+              "Hård kuling", "Stormende kuling", "Storm", "Voldsom storm",
+              "Orkan"
+            };
+            bool danish = (std::string("${language}") == "da");
+            id(davis_beaufort).publish_state(bft);
+            id(davis_beaufort_desc).publish_state(danish ? beaufort_da[bft] : beaufort_en[bft]);
+          }
+
           // ── 6. Packet-type-specific data ────────────────────────────
           // CALIBRATION (disabled — uncomment to re-check whether new
           // CC1101 hardware ever receives types 9/10; see globals above).
@@ -736,6 +783,14 @@ cc1101:
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"wind_lull_ms\":%.2f", id(davis_wind_lull).state);
 
+          if (!std::isnan(id(davis_beaufort).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_beaufort\":%.0f", id(davis_beaufort).state);
+
+          if (id(davis_beaufort_desc).has_state())
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_beaufort_description\":\"%s\"", id(davis_beaufort_desc).state.c_str());
+
           if (!std::isnan(id(davis_dew_point).state))
             pos += snprintf(buf + pos, sizeof(buf) - pos,
               ",\"dew_point_c\":%.1f", id(davis_dew_point).state);
@@ -848,10 +903,18 @@ interval:
               float slp_delta = p_slp - id(pressure_hist_slp)[0];
               id(davis_pressure_trend_mb).publish_state(stn_delta);
               id(davis_slp_trend_mb).publish_state(slp_delta);
-              id(davis_pressure_trend_desc).publish_state(
-                stn_delta <= -1.0f ? "Falling" : (stn_delta >= 1.0f ? "Rising" : "Steady"));
-              id(davis_slp_trend_desc).publish_state(
-                slp_delta <= -1.0f ? "Falling" : (slp_delta >= 1.0f ? "Rising" : "Steady"));
+
+              // Localized via the `language` substitution ("en"/"da") —
+              // same convention as the Beaufort description in the packet
+              // lambda above.
+              bool danish = (std::string("${language}") == "da");
+              auto trend_desc = [danish](float delta) -> std::string {
+                if (delta <= -1.0f) return danish ? "Faldende" : "Falling";
+                if (delta >=  1.0f) return danish ? "Stigende" : "Rising";
+                return danish ? "Stabil" : "Steady";
+              };
+              id(davis_pressure_trend_desc).publish_state(trend_desc(stn_delta));
+              id(davis_slp_trend_desc).publish_state(trend_desc(slp_delta));
             }
 
             for (int i = 0; i < 11; i++) {
@@ -1074,6 +1137,15 @@ sensor:
     accuracy_decimals: 2
 
   - platform: template
+    # Derived from Wind Speed's smoothed average, not gusts — see the
+    # Beaufort block in the packet lambda above.
+    name: "Beaufort Scale"
+    id: davis_beaufort
+    icon: "mdi:weather-windy"
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
     name: "Wind Direction"
     id: davis_wind_dir
     unit_of_measurement: "°"
@@ -1184,17 +1256,33 @@ text_sensor:
     icon: "mdi:trending-up"
 
   - platform: template
+    # Localized via the `language` substitution ("en"/"da") — see the
+    # Beaufort block in the packet lambda above.
+    name: "Beaufort Description"
+    id: davis_beaufort_desc
+    icon: "mdi:weather-windy"
+
+  - platform: template
+    # Localized via the `language` substitution ("en"/"da") — see the
+    # Beaufort block in the packet lambda above.
     name: "Wind Cardinal"
     id: davis_wind_cardinal
     icon: "mdi:compass-outline"
     lambda: |-
       float deg = id(raw_wind_dir);
       int index = int((deg + 11.25f) / 22.5f) % 16;
-      const char* pts[] = {
+      static const char* const pts_en[] = {
         "N","NNE","NE","ENE","E","ESE","SE","SSE",
         "S","SSW","SW","WSW","W","WNW","NW","NNW"
       };
-      return std::string(pts[index]);
+      // Danish compass points use Ø (Øst) for E and V (Vest) for W in place
+      // of the English E/W — N and S are unchanged.
+      static const char* const pts_da[] = {
+        "N","NNØ","NØ","ØNØ","Ø","ØSØ","SØ","SSØ",
+        "S","SSV","SV","VSV","V","VNV","NV","NNV"
+      };
+      bool danish = (std::string("${language}") == "da");
+      return std::string(danish ? pts_da[index] : pts_en[index]);
 
 button:
   - platform: restart

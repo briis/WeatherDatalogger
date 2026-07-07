@@ -67,6 +67,8 @@ _OBS_FIELDS: tuple[str, ...] = (
     "wind_avg_ms",
     "wind_gust_ms",
     "wind_direction_deg",
+    "wind_beaufort",
+    "wind_beaufort_description",
     "station_pressure_mb",
     "sea_level_pressure_mb",
     "pressure_trend_mb",

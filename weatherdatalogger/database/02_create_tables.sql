@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS realtime (
     wind_avg_ms                 FLOAT         NULL,
     wind_gust_ms                FLOAT         NULL,
     wind_direction_deg          SMALLINT UNSIGNED NULL,
+    wind_beaufort               TINYINT UNSIGNED NULL COMMENT '0-12 Beaufort force, derived from wind_avg_ms',
+    wind_beaufort_description   VARCHAR(32)   NULL COMMENT 'Localized per the davis yaml `language` substitution (en/da)',
     -- pressure
     station_pressure_mb         FLOAT         NULL,
     sea_level_pressure_mb       FLOAT         NULL,
@@ -126,6 +128,8 @@ CREATE TABLE IF NOT EXISTS history (
     wind_avg_ms                 FLOAT         NULL,
     wind_gust_ms                FLOAT         NULL,
     wind_direction_deg          SMALLINT UNSIGNED NULL,
+    wind_beaufort               TINYINT UNSIGNED NULL,
+    wind_beaufort_description   VARCHAR(32)   NULL,
     -- pressure
     station_pressure_mb         FLOAT         NULL,
     sea_level_pressure_mb       FLOAT         NULL,
@@ -211,6 +215,8 @@ SELECT
     w.wind_avg_ms,
     w.wind_gust_ms,
     w.wind_direction_deg,
+    w.wind_beaufort,
+    w.wind_beaufort_description,
     -- Pressure (+ wet bulb/delta T/air density/battery — bundled, see station_roles)
     pr.station_pressure_mb,
     pr.sea_level_pressure_mb,
@@ -354,6 +360,10 @@ CREATE TABLE IF NOT EXISTS history_charting (
     wind_avg_ms                 FLOAT             NULL,
     wind_gust_ms                FLOAT             NULL,
     wind_direction_deg          SMALLINT UNSIGNED NULL,
+    -- Beaufort/description = last value in window, same convention as
+    -- pressure_trend below (an ordinal/text pair isn't meaningful averaged)
+    wind_beaufort               TINYINT UNSIGNED NULL,
+    wind_beaufort_description   VARCHAR(32)       NULL,
 
     -- Pressure (`pressure` role, e.g. Tempest — has trend/sea-level data the
     -- Davis receiver's on-board BME280 doesn't compute) — AVG; trend text =
@@ -465,6 +475,8 @@ DO
         wind_avg_ms,
         wind_gust_ms,
         wind_direction_deg,
+        wind_beaufort,
+        wind_beaufort_description,
         station_pressure_mb,
         sea_level_pressure_mb,
         pressure_trend_mb,
@@ -529,6 +541,16 @@ DO
             AVG(CASE WHEN station_type = roles.wind_type THEN SIN(RADIANS(wind_direction_deg)) END),
             AVG(CASE WHEN station_type = roles.wind_type THEN COS(RADIANS(wind_direction_deg)) END)
         ))) + 360, 360),
+        -- Beaufort/description — last value in window (an ordinal/text
+        -- pair isn't meaningful averaged), same convention as pressure_trend below
+        CAST(SUBSTRING_INDEX(GROUP_CONCAT(
+            CASE WHEN station_type = roles.wind_type THEN wind_beaufort END
+            ORDER BY recorded_at DESC SEPARATOR '\x1F'
+        ), '\x1F', 1) AS UNSIGNED),
+        SUBSTRING_INDEX(GROUP_CONCAT(
+            CASE WHEN station_type = roles.wind_type THEN wind_beaufort_description END
+            ORDER BY recorded_at DESC SEPARATOR '\x1F'
+        ), '\x1F', 1),
         -- Pressure (+ wet bulb/delta T/air density/battery — bundled)
         AVG(CASE WHEN station_type = roles.pressure_type THEN station_pressure_mb END),
         AVG(CASE WHEN station_type = roles.pressure_type THEN sea_level_pressure_mb END),

@@ -102,6 +102,8 @@ Both `realtime` and `history` share the same observation columns:
 | `recorded_at` | UTC timestamp of the observation |
 | `wind_lull_ms`, `wind_avg_ms`, `wind_gust_ms` | Wind speed (m/s) |
 | `wind_direction_deg` | Wind direction (°) |
+| `wind_beaufort` | Beaufort scale (0-12), derived on-device from `wind_avg_ms` (Davis) |
+| `wind_beaufort_description` | Beaufort force description, e.g. `Fresh breeze` — localized per the davis yaml's `language` substitution (`en`/`da`) |
 | `station_pressure_mb`, `sea_level_pressure_mb` | Pressure (mbar) |
 | `pressure_trend`, `sea_level_pressure_trend` | `Rising` \| `Steady` \| `Falling` |
 | `air_temperature_c`, `relative_humidity_pct` | Temperature and humidity |
@@ -156,6 +158,7 @@ Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data in
 | `wind_lull_ms` | MIN | Calmest reading in window (Davis) |
 | `wind_gust_ms` | MAX | Peak gust in window (Davis) |
 | `wind_direction_deg` | Circular AVG | Uses `ATAN2(AVG(SIN), AVG(COS))` — handles 0°/360° boundary correctly (Davis) |
+| `wind_beaufort`, `wind_beaufort_description` | Last value | Most recent Beaufort scale/description in window (Davis) — an ordinal/text pair isn't meaningful averaged, same convention as `pressure_trend` below |
 | Temperature, humidity, dew point, feels like/heat index/wind chill, vapor pressure | AVG | Davis |
 | Pressure, illuminance, UV, solar, wet bulb, delta T, air density, `battery_volts` | AVG | Tempest |
 | `rain_accumulation_mm` | MAX | Davis reports a cumulative "rain so far today" counter (resets at local midnight), not a per-observation delta — MAX gives the running total as of the window's end, not a per-window delta |
