@@ -159,6 +159,8 @@ _SQL_ENSURE_STATION = (
 _FORECAST_CURRENT_FIELDS: tuple[tuple[str, str], ...] = (
     ("condition", "weather_condition"),
     ("temperature", "temperature_c"),
+    ("temperature_high", "temperature_high_c"),
+    ("temperature_low", "temperature_low_c"),
     ("feels_like", "feels_like_c"),
     ("humidity", "humidity_pct"),
     ("dew_point", "dew_point_c"),

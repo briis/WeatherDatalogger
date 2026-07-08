@@ -30,6 +30,8 @@ weatherdatalogger/forecast-<location>/forecast_daily
 {
   "condition": "partlycloudy",
   "temperature": 18.2,
+  "temperature_high": 21.0,
+  "temperature_low": 11.4,
   "feels_like": 19.5,
   "humidity": 72,
   "dew_point": 12.9,
@@ -61,7 +63,7 @@ weatherdatalogger/forecast-<location>/forecast_daily
 | `sunrise`, `sunset`, `moon_phase` | ✓ | — | ✓ |
 | `precipitation_cover` | — | — | ✓ |
 
-Daily entries additionally have `templow` (the day's low, alongside `temperature` for the high). `precipitation_type` comes back from `pyVisualCrossing` as a list (e.g. `["rain", "ice"]`, or `null`); this service flattens it to a single comma-joined string (`"rain,ice"`) before publishing, so downstream consumers don't need to parse a nested array out of the MQTT payload.
+Daily entries additionally have `templow` (the day's low, alongside `temperature` for the high). `current` additionally has `temperature_high`/`temperature_low` — Visual Crossing's `currentConditions` has no high/low of its own, so this service fills those two from `forecast_daily[0]` (today's entry) before publishing. `precipitation_type` comes back from `pyVisualCrossing` as a list (e.g. `["rain", "ice"]`, or `null`); this service flattens it to a single comma-joined string (`"rain,ice"`) before publishing, so downstream consumers don't need to parse a nested array out of the MQTT payload.
 
 ### Field conventions
 

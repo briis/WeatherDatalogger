@@ -714,6 +714,11 @@ DO
 -- pyVisualCrossing 1.0.2 started exposing them (earlier versions parsed a
 -- narrower field set from the same API response) — see
 -- migrations/20260708_add_visualcrossing_extra_fields.sql.
+--
+-- forecast_current.temperature_high_c/temperature_low_c were added since
+-- Visual Crossing's currentConditions has no high/low of its own —
+-- visualcrossing_datalogger.py fills them from forecast_daily[0] instead —
+-- see migrations/20260708_add_forecast_current_high_low.sql.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- One row per location, upserted on every fetch (like `realtime`).
@@ -722,6 +727,8 @@ CREATE TABLE IF NOT EXISTS forecast_current (
     fetched_at           DATETIME          NOT NULL,
     weather_condition    VARCHAR(32)       NULL COMMENT 'HA weather condition, e.g. partlycloudy — `condition` is a reserved word in MariaDB',
     temperature_c        FLOAT             NULL,
+    temperature_high_c   FLOAT             NULL COMMENT "Today's forecast high — sourced from forecast_daily[0], not currentConditions",
+    temperature_low_c    FLOAT             NULL COMMENT "Today's forecast low — sourced from forecast_daily[0], not currentConditions",
     feels_like_c         FLOAT             NULL,
     humidity_pct         FLOAT             NULL,
     dew_point_c          FLOAT             NULL,

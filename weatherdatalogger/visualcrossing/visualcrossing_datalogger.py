@@ -166,10 +166,17 @@ def load_config(path: str) -> configparser.ConfigParser:
 # ---------------------------------------------------------------------------
 
 
-def _build_current_payload(cc: ForecastData) -> dict:
+def _build_current_payload(
+    cc: ForecastData, today: ForecastDailyData | None
+) -> dict:
+    # Visual Crossing's currentConditions has no high/low of its own — the
+    # only source for "today's" high/low is forecast_daily[0], passed in here
+    # by the caller as `today`.
     return {
         "condition": _ha_condition(cc.icon),
         "temperature": cc.temperature,
+        "temperature_high": today.temperature if today else None,
+        "temperature_low": today.temp_low if today else None,
         "feels_like": cc.apparent_temperature,
         "humidity": cc.humidity,
         "dew_point": cc.dew_point,
@@ -381,10 +388,13 @@ def publish_forecast(
     retain = m.getboolean("retain")
     qos = int(m["qos"])
 
+    daily = data.forecast_daily or []
+    today = daily[0] if daily else None
+
     subtopics = [
-        ("current", _build_current_payload(data)),
+        ("current", _build_current_payload(data, today)),
         ("forecast_hourly", _build_hourly_payload(data.forecast_hourly or [])),
-        ("forecast_daily", _build_daily_payload(data.forecast_daily or [])),
+        ("forecast_daily", _build_daily_payload(daily)),
     ]
     for subtopic, payload in subtopics:
         topic = f"{base}/forecast-{location}/{subtopic}"
