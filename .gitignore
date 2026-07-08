@@ -223,3 +223,7 @@ config.ini
 # Persisted runtime data
 tempest_lightning.json
 tempest_pressure.json
+
+# Claude Code local state — contains credentials/session data, never commit
+.claude/
+.claude.json
