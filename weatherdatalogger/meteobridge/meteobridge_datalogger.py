@@ -180,6 +180,12 @@ _TEMPLATE_FIELDS: tuple[str, ...] = (
     "indoor_humidity_pct",
     "lightning_distance_km",
     "lightning_count_today",
+    "pm_10_ugm3",
+    "pm_10_1h_ugm3",
+    "pm_2p5_ugm3",
+    "pm_2p5_1h_ugm3",
+    "pm_1_ugm3",
+    "pm_1_1h_ugm3",
 )
 
 MB_TEMPLATE = (
@@ -192,7 +198,18 @@ MB_TEMPLATE = (
     "[uv0index-act:0],[sol0rad-act:0],"
     "[rain0rate-act:0],[rain0total-daysum:0],"
     "[thb0temp-act:0],[thb0hum-act:0],"
-    "[lgt0dist-act:-],[lgt0total-daysum:0]"
+    "[lgt0dist-act:-],[lgt0total-daysum:0],"
+    # air0pm/air1pm/air2pm = PM10/PM2.5/PM1.0 respectively — confirmed against
+    # live hardware by physical ordering (PM1.0 <= PM2.5 <= PM10 always
+    # holds), which contradicts an earlier, differently-wired service's SQL
+    # template that had pm1/pm10 swapped. -avg60 (60 min) is the longest
+    # averaging window this particular sensor supports — avg180/avg1440
+    # (3h/24h) both silently returned 0 against real hardware, so 3h/24h/
+    # NowCast are computed client-side from a persisted rolling buffer
+    # instead (see record_air_quality()/nowcast()).
+    "[air0pm-act:0],[air0pm-avg60:0],"
+    "[air1pm-act:0],[air1pm-avg60:0],"
+    "[air2pm-act:0],[air2pm-avg60:0]"
 )
 
 
@@ -471,6 +488,219 @@ def lightning_summary(now_ts: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Air quality — US EPA AQI / EU CAQI, same breakpoint tables and formulas as
+# airlink_datalogger.py (each service stays self-contained, so these are
+# duplicated rather than shared). Meteobridge's own PM sensor only buffers a
+# 60-min averaging window (avg180/avg1440 both silently returned 0 against
+# real hardware) — 3h/24h averages and the 12h-weighted EPA NowCast (AQI's
+# input) are computed client-side from a persisted rolling sample buffer,
+# same persisted-state pattern as the lightning window above.
+# ---------------------------------------------------------------------------
+
+_PM25_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
+    (0.0, 12.0, 0, 50),
+    (12.1, 35.4, 51, 100),
+    (35.5, 55.4, 101, 150),
+    (55.5, 150.4, 151, 200),
+    (150.5, 250.4, 201, 300),
+    (250.5, 350.4, 301, 400),
+    (350.5, 500.4, 401, 500),
+)
+
+_PM10_BREAKPOINTS: tuple[tuple[int, int, int, int], ...] = (
+    (0, 54, 0, 50),
+    (55, 154, 51, 100),
+    (155, 254, 101, 150),
+    (255, 354, 151, 200),
+    (355, 424, 201, 300),
+    (425, 504, 301, 400),
+    (505, 604, 401, 500),
+)
+
+
+def _aqi_pm2p5(nowcast_ugm3: float | None) -> int | None:
+    """Compute PM2.5 AQI from NowCast concentration using US EPA breakpoints."""
+    if nowcast_ugm3 is None:
+        return None
+    c = round(nowcast_ugm3, 1)
+    for c_lo, c_hi, aqi_lo, aqi_hi in _PM25_BREAKPOINTS:
+        if c_lo <= c <= c_hi:
+            return round((aqi_hi - aqi_lo) / (c_hi - c_lo) * (c - c_lo) + aqi_lo)
+    return None
+
+
+def _aqi_pm10(nowcast_ugm3: float | None) -> int | None:
+    """Compute PM10 AQI from NowCast concentration using US EPA breakpoints."""
+    if nowcast_ugm3 is None:
+        return None
+    c = round(nowcast_ugm3)
+    for c_lo, c_hi, aqi_lo, aqi_hi in _PM10_BREAKPOINTS:
+        if c_lo <= c <= c_hi:
+            return round((aqi_hi - aqi_lo) / (c_hi - c_lo) * (c - c_lo) + aqi_lo)
+    return None
+
+
+_CAQI_PM25_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
+    (0.0, 15.0, 0, 25),
+    (15.0, 30.0, 25, 50),
+    (30.0, 55.0, 50, 75),
+    (55.0, 110.0, 75, 100),
+    (110.0, 330.0, 100, 200),
+)
+
+_CAQI_PM10_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
+    (0.0, 25.0, 0, 25),
+    (25.0, 50.0, 25, 50),
+    (50.0, 90.0, 50, 75),
+    (90.0, 180.0, 75, 100),
+    (180.0, 540.0, 100, 200),
+)
+
+
+def _caqi_pm2p5(concentration_ugm3: float | None) -> int | None:
+    """Compute the CAQI PM2.5 sub-index from current concentration."""
+    if concentration_ugm3 is None:
+        return None
+    c = round(concentration_ugm3, 1)
+    for c_lo, c_hi, idx_lo, idx_hi in _CAQI_PM25_BREAKPOINTS:
+        if c_lo <= c <= c_hi:
+            return round((idx_hi - idx_lo) / (c_hi - c_lo) * (c - c_lo) + idx_lo)
+    return 200  # beyond even the extrapolated ceiling — cap rather than omit
+
+
+def _caqi_pm10(concentration_ugm3: float | None) -> int | None:
+    """Compute the CAQI PM10 sub-index from current concentration."""
+    if concentration_ugm3 is None:
+        return None
+    c = round(concentration_ugm3)
+    for c_lo, c_hi, idx_lo, idx_hi in _CAQI_PM10_BREAKPOINTS:
+        if c_lo <= c <= c_hi:
+            return round((idx_hi - idx_lo) / (c_hi - c_lo) * (c - c_lo) + idx_lo)
+    return 200
+
+
+_AQ_KEEP_S = 24 * 3600  # retain samples for up to 24 hours
+_NOWCAST_HOURS = 12  # EPA NowCast uses the most recent 12 hourly averages
+
+_aq_samples: list[dict] = []
+_aq_file: list[Path | None] = [None]  # mutable cell avoids `global`
+
+
+def _aq_data_path(cfg: configparser.ConfigParser, config_path: str) -> Path:
+    data_dir = cfg["meteobridge"].get("data_dir", "").strip()
+    if data_dir:
+        return Path(data_dir) / "meteobridge_airquality.json"
+    return Path(config_path).resolve().parent / "meteobridge_airquality.json"
+
+
+def _load_aq(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        cutoff = int(time.time()) - _AQ_KEEP_S
+        return [s for s in data.get("samples", []) if s.get("ts", 0) >= cutoff]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_aq() -> None:
+    path = _aq_file[0]
+    if path is None:
+        return
+    with contextlib.suppress(Exception):
+        path.write_text(json.dumps({"samples": _aq_samples}))
+
+
+def init_air_quality(
+    cfg: configparser.ConfigParser, config_path: str, log: logging.Logger
+) -> None:
+    """Load the persisted PM sample buffer and configure the storage path."""
+    path = _aq_data_path(cfg, config_path)
+    _aq_file[0] = path
+    samples = _load_aq(path)
+    _aq_samples.clear()
+    _aq_samples.extend(samples)
+    log.info("Air quality history: %d sample(s) loaded from %s", len(samples), path)
+
+
+def record_air_quality(
+    now_ts: int, pm1: float | None, pm25: float | None, pm10: float | None
+) -> None:
+    """Append one PM sample to the persisted rolling buffer."""
+    _aq_samples.append({"ts": now_ts, "pm1": pm1, "pm25": pm25, "pm10": pm10})
+    cutoff = now_ts - _AQ_KEEP_S
+    while _aq_samples and _aq_samples[0]["ts"] < cutoff:
+        _aq_samples.pop(0)
+    _save_aq()
+
+
+def _window_avg(now_ts: int, window_s: int, key: str) -> float | None:
+    cutoff = now_ts - window_s
+    vals = [s[key] for s in _aq_samples if s["ts"] >= cutoff and s.get(key) is not None]
+    return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def _hourly_buckets(now_ts: int, key: str) -> list[float | None]:
+    """Return the most recent _NOWCAST_HOURS complete-hour averages, newest first."""
+    buckets: list[float | None] = []
+    for h in range(_NOWCAST_HOURS):
+        hi = now_ts - h * 3600
+        lo = hi - 3600
+        vals = [
+            s[key] for s in _aq_samples if lo <= s["ts"] < hi and s.get(key) is not None
+        ]
+        buckets.append(round(sum(vals) / len(vals), 1) if vals else None)
+    return buckets
+
+
+def _nowcast(now_ts: int, key: str) -> float | None:
+    """
+    Weighted average of the last 12 hourly averages, EPA NowCast style.
+
+    Weight is driven by how much concentration has varied across the
+    available hours. Requires at least 2 of the most recent 3 hours to have
+    data.
+    """
+    buckets = _hourly_buckets(now_ts, key)
+    if sum(1 for b in buckets[:3] if b is not None) < 2:  # noqa: PLR2004
+        return None
+    present = [(i, b) for i, b in enumerate(buckets) if b is not None]
+    if not present:
+        return None
+    c_max = max(b for _, b in present)
+    c_min = min(b for _, b in present)
+    weight = 1.0 if c_max == 0 else max(1.0 - (c_max - c_min) / c_max, 0.5)
+    numerator = sum((weight**i) * b for i, b in present)
+    denominator = sum(weight**i for i, _ in present)
+    return round(numerator / denominator, 1) if denominator else None
+
+
+def air_quality_summary(now_ts: int) -> dict:
+    """Return 3h/24h averages, NowCast, AQI and CAQI for inclusion in the payload."""
+    pm25_3h = _window_avg(now_ts, 3 * 3600, "pm25")
+    pm25_24h = _window_avg(now_ts, _AQ_KEEP_S, "pm25")
+    pm10_3h = _window_avg(now_ts, 3 * 3600, "pm10")
+    pm10_24h = _window_avg(now_ts, _AQ_KEEP_S, "pm10")
+    pm25_nowcast = _nowcast(now_ts, "pm25")
+    pm10_nowcast = _nowcast(now_ts, "pm10")
+    current_pm25 = _aq_samples[-1]["pm25"] if _aq_samples else None
+    current_pm10 = _aq_samples[-1]["pm10"] if _aq_samples else None
+    return {
+        "pm_2p5_3h_ugm3": pm25_3h,
+        "pm_2p5_24h_ugm3": pm25_24h,
+        "pm_2p5_nowcast_ugm3": pm25_nowcast,
+        "pm_10_3h_ugm3": pm10_3h,
+        "pm_10_24h_ugm3": pm10_24h,
+        "pm_10_nowcast_ugm3": pm10_nowcast,
+        "aqi_pm2p5": _aqi_pm2p5(pm25_nowcast),
+        "aqi_pm10": _aqi_pm10(pm10_nowcast),
+        "caqi_pm2p5": _caqi_pm2p5(current_pm25),
+        "caqi_pm10": _caqi_pm10(current_pm10),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Observation assembly
 # ---------------------------------------------------------------------------
 
@@ -548,6 +778,17 @@ def build_observation(
     count_today = int(_to_float(raw["lightning_count_today"]) or 0)
     update_lightning(ts, count_today, dist_km)
     payload.update(lightning_summary(ts))
+
+    pm1 = _to_float(raw["pm_1_ugm3"])
+    pm25 = _to_float(raw["pm_2p5_ugm3"])
+    pm10 = _to_float(raw["pm_10_ugm3"])
+    payload["pm_1_ugm3"] = pm1
+    payload["pm_2p5_ugm3"] = pm25
+    payload["pm_2p5_1h_ugm3"] = _to_float(raw["pm_2p5_1h_ugm3"])
+    payload["pm_10_ugm3"] = pm10
+    payload["pm_10_1h_ugm3"] = _to_float(raw["pm_10_1h_ugm3"])
+    record_air_quality(ts, pm1, pm25, pm10)
+    payload.update(air_quality_summary(ts))
 
     return payload
 
@@ -712,6 +953,21 @@ _METEOBRIDGE_SENSORS: list[tuple[str, str, str | None, str | None, str | None]] 
         "distance",
         "measurement",
     ),
+    ("pm_1_ugm3", "PM1.0", "µg/m³", "pm1", "measurement"),
+    ("pm_2p5_ugm3", "PM2.5", "µg/m³", "pm25", "measurement"),
+    ("pm_2p5_1h_ugm3", "PM2.5 (1-hour average)", "µg/m³", "pm25", "measurement"),
+    ("pm_2p5_3h_ugm3", "PM2.5 (3-hour average)", "µg/m³", "pm25", "measurement"),
+    ("pm_2p5_24h_ugm3", "PM2.5 (24-hour average)", "µg/m³", "pm25", "measurement"),
+    ("pm_2p5_nowcast_ugm3", "PM2.5 NowCast", "µg/m³", "pm25", "measurement"),
+    ("pm_10_ugm3", "PM10", "µg/m³", "pm10", "measurement"),
+    ("pm_10_1h_ugm3", "PM10 (1-hour average)", "µg/m³", "pm10", "measurement"),
+    ("pm_10_3h_ugm3", "PM10 (3-hour average)", "µg/m³", "pm10", "measurement"),
+    ("pm_10_24h_ugm3", "PM10 (24-hour average)", "µg/m³", "pm10", "measurement"),
+    ("pm_10_nowcast_ugm3", "PM10 NowCast", "µg/m³", "pm10", "measurement"),
+    ("aqi_pm2p5", "AQI (PM2.5)", None, "aqi", "measurement"),
+    ("aqi_pm10", "AQI (PM10)", None, "aqi", "measurement"),
+    ("caqi_pm2p5", "CAQI (PM2.5)", None, "aqi", "measurement"),
+    ("caqi_pm10", "CAQI (PM10)", None, "aqi", "measurement"),
 ]
 
 _SENSOR_ICON_OVERRIDES = {
@@ -861,6 +1117,7 @@ def main() -> None:
     log = setup_logging(log_cfg["level"], log_cfg["file"])
 
     init_lightning(cfg, args.config, log)
+    init_air_quality(cfg, args.config, log)
     run(cfg, log)
 
 

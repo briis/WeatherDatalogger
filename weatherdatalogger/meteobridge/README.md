@@ -37,6 +37,12 @@ All fields in a single flat JSON object, matching the `realtime`/`history` table
 | `rain_accumulation_mm` | mm | Meteobridge `rain0total-daysum` (today's accumulated total) |
 | `indoor_temperature_c` / `indoor_humidity_pct` | °C / % | Meteobridge `thb0temp-act` / `thb0hum-act` — wherever the Meteobridge unit itself sits, not necessarily a comfortable room (see note below) |
 | `lightning_last_detected` / `lightning_count_3h` / `lightning_min_dist_3h_km` / `lightning_max_dist_3h_km` | — / — / km / km | Derived client-side from Meteobridge's `lgt0total-daysum` counter and `lgt0dist-act` — see "Lightning" below |
+| `pm_1_ugm3` / `pm_2p5_ugm3` / `pm_10_ugm3` | µg/m³ | Meteobridge `air2pm-act` / `air1pm-act` / `air0pm-act` — see "Air quality" below for the channel mapping |
+| `pm_2p5_1h_ugm3` / `pm_10_1h_ugm3` | µg/m³ | Meteobridge `air1pm-avg60` / `air0pm-avg60` |
+| `pm_2p5_3h_ugm3` / `pm_2p5_24h_ugm3` / `pm_10_3h_ugm3` / `pm_10_24h_ugm3` | µg/m³ | Computed client-side from a persisted rolling sample buffer — Meteobridge's own averaging tops out at 60 min for this sensor |
+| `pm_2p5_nowcast_ugm3` / `pm_10_nowcast_ugm3` | µg/m³ | Computed client-side — EPA NowCast (12h weighted average) from the same buffer |
+| `aqi_pm2p5` / `aqi_pm10` | — | US EPA AQI, from the NowCast values above — same breakpoint tables as `airlink_datalogger.py` |
+| `caqi_pm2p5` / `caqi_pm10` | — | EU CAQI, from the current (`-act`) concentration — same breakpoint tables as `airlink_datalogger.py` |
 | `serial_number` | — | Meteobridge MAC, colons replaced with hyphens |
 | `timestamp` | Unix s | Meteobridge `epoch` |
 
@@ -47,6 +53,20 @@ All fields in a single flat JSON object, matching the `realtime`/`history` table
 ## Lightning
 
 Meteobridge only exposes a cumulative daily strike counter (`lgt0total-daysum`) and the *current* strike distance (`lgt0dist-act`) — there's no per-strike timestamp macro (`-time` was tried against real hardware and isn't supported). New strikes are detected by watching the counter increase between polls; each detected strike is recorded (at the current poll's distance reading — the counter alone can't attribute distance per-strike if several land between polls) into a rolling 3-hour window, persisted across restarts in `meteobridge_lightning.json` (see `[meteobridge] data_dir`) — the same approach `tempest_datalogger.py` uses for WeatherFlow's own discrete strike events, just fed from a polled counter instead. A counter *decrease* is treated as Meteobridge's own local-midnight reset, not negative strikes.
+
+## Air quality
+
+This Meteobridge has a PM sensor wired in as a "logical air quality" sensor (separate from — and a comparison source to — the dedicated Davis AirLink, see `weatherdatalogger/airlink/`). Meteobridge's three PM channels are `air0pm`/`air1pm`/`air2pm`, and **the mapping isn't what a naive `pm1`/`pm25`/`pm10` naming guess would suggest**: validated against real hardware by checking that PM1.0 ≤ PM2.5 ≤ PM10 always holds physically —
+
+| Meteobridge channel | Actual reading |
+|---|---|
+| `air0pm` | PM10 |
+| `air1pm` | PM2.5 |
+| `air2pm` | PM1.0 |
+
+An earlier, separately-maintained service's SQL template had `pm1`/`pm10` swapped (assigned from `air0pm`/`air2pm` directly, opposite of the table above) — worth checking if that's still running anywhere and feeding wrong values downstream.
+
+`-avg60` (60-minute average) is the longest window this particular sensor supports — `-avg180`/`-avg1440` (3h/24h) both silently returned `0` against real hardware rather than an error, so 3h/24h averages are computed client-side from a persisted rolling sample buffer (`meteobridge_airquality.json`, see `[meteobridge] data_dir`), one sample recorded per poll. The same buffer feeds an EPA NowCast calculation (a weighted average of the last 12 hourly averages, weighted by how much concentration has varied — the standard AirNow algorithm, requiring at least 2 of the most recent 3 hours to have data) so `aqi_pm2p5`/`aqi_pm10` use the same NowCast-based methodology as `airlink_datalogger.py`, not a cruder single-reading approximation. `caqi_pm2p5`/`caqi_pm10` use the current concentration instead, matching AirLink's own CAQI convention (CAQI is designed as a real-time hourly index, unlike the smoothed US AQI).
 
 ## Installation
 
@@ -108,7 +128,7 @@ password   =
 interval_s = 60            # Poll interval in seconds
 timeout_s  = 10             # HTTP request timeout
 language   = en            # wind_beaufort_description language — "en" or "da"
-data_dir   =                # Persisted lightning-window state file directory; empty = same as config file
+data_dir   =                # Directory for meteobridge_lightning.json / meteobridge_airquality.json; empty = same as config file
 ```
 
 Shared keys used by this service:
@@ -135,7 +155,7 @@ discovery_prefix = homeassistant
 
 ## Home Assistant Discovery
 
-Set `[homeassistant] discovery = true` to auto-create a **Meteobridge \<mac\>** device in Home Assistant with sensors covering wind, pressure (+ trend), temperature/humidity, solar/UV, rain, indoor conditions, and the lightning summary.
+Set `[homeassistant] discovery = true` to auto-create a **Meteobridge \<mac\>** device in Home Assistant with sensors covering wind, pressure (+ trend), temperature/humidity, solar/UV, rain, indoor conditions, the lightning summary, and PM/AQI/CAQI.
 
 ## How the request works
 
