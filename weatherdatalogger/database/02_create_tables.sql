@@ -197,19 +197,18 @@ CREATE TABLE IF NOT EXISTS history (
 -- whatever station_type station_roles currently maps it to (see that table's
 -- comment, and migrations/20260703_add_station_roles.sql for the full
 -- role -> column mapping and how to reassign a role). Column names are
--- historical and no longer strictly literal: "tempest_recorded_at" reflects
--- the `pressure` role, not literally a Tempest station once reassigned; kept
--- as-is to avoid breaking existing dashboards built against this view.
+-- role-based, not tied to any specific station make/model, so a role can be
+-- reassigned to new hardware (including a station type added later) without
+-- the column names becoming misleading.
 -- `wind` is the mandatory anchor (INNER JOIN) — a setup with no station that
--- reports wind (e.g. AirLink-only) gets zero rows back regardless of role
--- config, same limitation as the original Davis-only anchor had.
+-- reports wind gets zero rows back regardless of role config.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW combined_realtime AS
 SELECT
     -- Timestamps
     w.recorded_at                   AS recorded_at,
-    pr.recorded_at                  AS tempest_recorded_at,
-    aq.recorded_at                  AS airlink_recorded_at,
+    pr.recorded_at                  AS data_recorded_at,
+    aq.recorded_at                  AS air_quality_recorded_at,
     -- Wind
     w.wind_lull_ms,
     w.wind_avg_ms,
@@ -250,34 +249,35 @@ SELECT
     pr.air_density_kgm3,
     -- Device
     pr.battery_volts,
-    th.battery_low                  AS davis_battery_low,
-    -- Indoor (Davis receiver's own BME280 — co-located with the receiver,
-    -- not the outdoor ISS; sourced from the same temp_humidity(davis) join
-    -- as davis_battery_low above, since it's the same MQTT observation row).
-    -- The receiver computes its own sea-level pressure + 3h trend on-device
-    -- (see davis-vantage-receiver.yaml), independently of pr.* above (the
-    -- `pressure` role, e.g. Tempest) — the two are not merged, both remain
-    -- available side by side.
+    th.battery_low                  AS temp_humidity_battery_low,
+    -- Indoor (the temp_humidity-role station's own onboard indoor sensor,
+    -- co-located with its receiver, distinct from its outdoor sensor array;
+    -- sourced from the same temp_humidity join as temp_humidity_battery_low
+    -- above, since it's the same MQTT observation row). Some receivers
+    -- compute their own sea-level pressure + trend on-device, independently
+    -- of pr.* above (the `pressure` role) — the two are not merged, both
+    -- remain available side by side.
     th.indoor_temperature_c,
     th.indoor_humidity_pct,
-    -- The davis_* pressure/wet-bulb/delta-T/air-density columns below only
-    -- add information when the `pressure` role points at different hardware
-    -- than `temp_humidity` (e.g. the historical Tempest+Davis combo) — in
-    -- that case th.* is the Davis receiver's own BME280 reading, distinct
-    -- from pr.* above. If both roles point at the same station_type (e.g.
-    -- `pressure` reassigned to `davis`), th and pr resolve to the exact same
-    -- row, so these would just be a byte-for-byte duplicate of the
-    -- non-prefixed columns above — ro.pressure_is_temp_humidity_device nulls
-    -- them out in that case instead of showing the same reading twice.
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.station_pressure_mb         END AS davis_station_pressure_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_mb       END AS davis_sea_level_pressure_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend_mb           END AS davis_pressure_trend_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend              END AS davis_pressure_trend,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend_mb END AS davis_sea_level_pressure_trend_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend    END AS davis_sea_level_pressure_trend,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.wet_bulb_c                  END AS davis_wet_bulb_c,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.delta_t_c                   END AS davis_delta_t_c,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.air_density_kgm3            END AS davis_air_density_kgm3,
+    -- The temp_humidity_* pressure/wet-bulb/delta-T/air-density columns below
+    -- only add information when the `pressure` role points at different
+    -- hardware than `temp_humidity` (e.g. the historical Tempest+Davis combo)
+    -- — in that case th.* is the temp_humidity-role station's own onboard
+    -- barometer/BME280 reading, distinct from pr.* above. If both roles point
+    -- at the same station_type (e.g. `pressure` reassigned to the same
+    -- station as `temp_humidity`), th and pr resolve to the exact same row,
+    -- so these would just be a byte-for-byte duplicate of the non-prefixed
+    -- columns above — ro.pressure_is_temp_humidity_device nulls them out in
+    -- that case instead of showing the same reading twice.
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.station_pressure_mb         END AS temp_humidity_station_pressure_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_mb       END AS temp_humidity_sea_level_pressure_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend_mb           END AS temp_humidity_pressure_trend_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend              END AS temp_humidity_pressure_trend,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend_mb END AS temp_humidity_sea_level_pressure_trend_mb,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend    END AS temp_humidity_sea_level_pressure_trend,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.wet_bulb_c                  END AS temp_humidity_wet_bulb_c,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.delta_t_c                   END AS temp_humidity_delta_t_c,
+    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.air_density_kgm3            END AS temp_humidity_air_density_kgm3,
     -- Air quality — PM1/PM2.5/PM10/AQI/CAQI
     aq.pm_1_ugm3,
     aq.pm_2p5_ugm3,
@@ -420,23 +420,24 @@ CREATE TABLE IF NOT EXISTS history_charting (
 
     -- Device
     battery_volts               FLOAT             NULL,
-    davis_battery_low           BOOLEAN           NULL,
+    temp_humidity_battery_low   BOOLEAN           NULL,
 
-    -- Indoor (Davis receiver's own BME280) — AVG; trend text = last value in
-    -- window, same convention as pressure_trend above. davis_station_pressure_mb
-    -- is the receiver's own barometer, distinct from station_pressure_mb
-    -- above (the `pressure` role)
-    indoor_temperature_c              FLOAT             NULL,
-    indoor_humidity_pct               FLOAT             NULL,
-    davis_station_pressure_mb         FLOAT             NULL,
-    davis_sea_level_pressure_mb       FLOAT             NULL,
-    davis_pressure_trend_mb           FLOAT             NULL,
-    davis_pressure_trend              VARCHAR(16)       NULL,
-    davis_sea_level_pressure_trend_mb FLOAT             NULL,
-    davis_sea_level_pressure_trend    VARCHAR(16)       NULL,
-    davis_wet_bulb_c                  FLOAT             NULL,
-    davis_delta_t_c                   FLOAT             NULL,
-    davis_air_density_kgm3            FLOAT             NULL,
+    -- Indoor (the temp_humidity-role station's own onboard indoor sensor) —
+    -- AVG; trend text = last value in window, same convention as
+    -- pressure_trend above. temp_humidity_station_pressure_mb is that
+    -- station's own barometer, distinct from station_pressure_mb above (the
+    -- `pressure` role)
+    indoor_temperature_c                      FLOAT             NULL,
+    indoor_humidity_pct                       FLOAT             NULL,
+    temp_humidity_station_pressure_mb         FLOAT             NULL,
+    temp_humidity_sea_level_pressure_mb       FLOAT             NULL,
+    temp_humidity_pressure_trend_mb           FLOAT             NULL,
+    temp_humidity_pressure_trend              VARCHAR(16)       NULL,
+    temp_humidity_sea_level_pressure_trend_mb FLOAT             NULL,
+    temp_humidity_sea_level_pressure_trend    VARCHAR(16)       NULL,
+    temp_humidity_wet_bulb_c                  FLOAT             NULL,
+    temp_humidity_delta_t_c                   FLOAT             NULL,
+    temp_humidity_air_density_kgm3            FLOAT             NULL,
 
     -- Air quality (AirLink) — instant PM=AVG, pre-averaged PM=AVG, AQI=MAX
     pm_1_ugm3                   FLOAT             NULL,
@@ -516,18 +517,18 @@ DO
         vapor_pressure_mb,
         air_density_kgm3,
         battery_volts,
-        davis_battery_low,
+        temp_humidity_battery_low,
         indoor_temperature_c,
         indoor_humidity_pct,
-        davis_station_pressure_mb,
-        davis_sea_level_pressure_mb,
-        davis_pressure_trend_mb,
-        davis_pressure_trend,
-        davis_sea_level_pressure_trend_mb,
-        davis_sea_level_pressure_trend,
-        davis_wet_bulb_c,
-        davis_delta_t_c,
-        davis_air_density_kgm3,
+        temp_humidity_station_pressure_mb,
+        temp_humidity_sea_level_pressure_mb,
+        temp_humidity_pressure_trend_mb,
+        temp_humidity_pressure_trend,
+        temp_humidity_sea_level_pressure_trend_mb,
+        temp_humidity_sea_level_pressure_trend,
+        temp_humidity_wet_bulb_c,
+        temp_humidity_delta_t_c,
+        temp_humidity_air_density_kgm3,
         pm_1_ugm3,
         pm_2p5_ugm3,
         pm_2p5_1h_ugm3,
@@ -607,17 +608,18 @@ DO
         -- Device
         AVG(CASE WHEN station_type = roles.pressure_type THEN battery_volts END),
         MAX(CASE WHEN station_type = roles.temp_humidity_type THEN battery_low END),
-        -- Indoor (Davis receiver's own BME280) — trend text = last value in
-        -- window, same convention as the `pressure` role trend above
+        -- Indoor (the temp_humidity-role station's own onboard indoor
+        -- sensor) — trend text = last value in window, same convention as
+        -- the `pressure` role trend above
         AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_temperature_c END),
         AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_humidity_pct END),
-        -- davis_* pressure/wet-bulb/delta-T/air-density: NULL when the
-        -- `pressure` role points at the same station_type as
-        -- `temp_humidity` (e.g. both reassigned to `davis`) — in that case
-        -- these would just duplicate the non-prefixed columns above byte
-        -- for byte. Only meaningful when the two roles are different
-        -- hardware (e.g. the historical Tempest+Davis combo) — see the
-        -- matching comment in the combined_realtime view.
+        -- temp_humidity_* pressure/wet-bulb/delta-T/air-density: NULL when
+        -- the `pressure` role points at the same station_type as
+        -- `temp_humidity` — in that case these would just duplicate the
+        -- non-prefixed columns above byte for byte. Only meaningful when the
+        -- two roles are different hardware (e.g. the historical
+        -- Tempest+Davis combo) — see the matching comment in the
+        -- combined_realtime view.
         CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
             AVG(CASE WHEN station_type = roles.temp_humidity_type THEN station_pressure_mb END) END,
         CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE

@@ -103,7 +103,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   `observation` payload as `station_pressure_mb`/`indoor_temperature_c`/
   `indoor_humidity_pct`, and persisted to the `realtime`/`history`/
   `history_charting` tables via the existing `temp_humidity`(davis) role —
-  see `combined_realtime`'s `davis_station_pressure_mb`/`indoor_temperature_c`/
+  see `combined_realtime`'s `temp_humidity_station_pressure_mb`/`indoor_temperature_c`/
   `indoor_humidity_pct` columns
 - The receiver also computes its own **sea-level pressure + 3h trend**
   on-device from that same BME280 reading (same formula/±1mb thresholds as
@@ -116,9 +116,9 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   12 = exactly 3h) that needs no wall-clock/timestamp bookkeeping and isn't
   persisted across reboots, so trend is simply omitted from the payload for
   ~3h15m after every boot or reflash. Exposed in `combined_realtime` as
-  `davis_sea_level_pressure_mb`/
-  `davis_pressure_trend_mb`/`davis_pressure_trend`/
-  `davis_sea_level_pressure_trend_mb`/`davis_sea_level_pressure_trend` —
+  `temp_humidity_sea_level_pressure_mb`/
+  `temp_humidity_pressure_trend_mb`/`temp_humidity_pressure_trend`/
+  `temp_humidity_sea_level_pressure_trend_mb`/`temp_humidity_sea_level_pressure_trend` —
   kept separate from Tempest's own `pressure` role fields (`pr.*` in the
   view), which remain the richer source if both a Tempest and a Davis
   receiver are present (Tempest's sea-level/trend is computed server-side
@@ -129,8 +129,8 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   wet bulb via a 50-iteration bisection solver), piggybacking on the
   existing comfort-metrics block since they need the same temp/humidity
   plus the BME280's station pressure. Exposed in `combined_realtime` as
-  `davis_wet_bulb_c`/`davis_delta_t_c`/`davis_air_density_kgm3`, again kept
-  separate from Tempest's `pr.wet_bulb_c`/`pr.delta_t_c`/`pr.air_density_kgm3`
+  `temp_humidity_wet_bulb_c`/`temp_humidity_delta_t_c`/`temp_humidity_air_density_kgm3`,
+  again kept separate from Tempest's `pr.wet_bulb_c`/`pr.delta_t_c`/`pr.air_density_kgm3`
 
 ### Davis AirLink
 - Air quality sensor measuring PM1.0, PM2.5, and PM10 particulate matter
