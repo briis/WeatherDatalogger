@@ -132,6 +132,7 @@ The `temp_humidity`-role station's own on-board barometer/BME280 reading (which 
 | `data_recorded_at` | Tempest — timestamp of the latest `pressure`-role observation |
 | `air_quality_recorded_at` | AirLink — timestamp of the latest `air_quality`-role observation |
 | Wind, temperature, humidity, dew point, feels like/heat index/wind chill, rain, vapor pressure | Davis |
+| `battery_low` | Davis — low-battery flag (`temp_humidity`-role station; Davis reports low/ok, not voltage) |
 | Pressure, lightning, UV, solar, illuminance, wet bulb, delta T, air density, `battery_volts` | Tempest |
 | `pm_*`, `aqi_*`, `caqi_*` | AirLink |
 

@@ -28,7 +28,9 @@
 -- temp_humidity_battery_low and the 9 dead temp_humidity_* CASE columns.
 -- Since 20260709_derole_station_columns.sql is already recorded in
 -- schema_migrations, editing it further has no effect on deploy — so the
--- corrected view is (re)created here instead.
+-- corrected view is (re)created here instead. It restores the low-battery
+-- flag as plain `battery_low` (dropped by mistake in that earlier working-tree
+-- edit) — same rationale as the history_charting rename above.
 
 USE weatherdatalogger;
 
@@ -99,6 +101,7 @@ SELECT
     pr.air_density_kgm3,
     -- Device
     pr.battery_volts,
+    th.battery_low,
     -- Indoor (the temp_humidity-role station's own onboard indoor sensor,
     -- co-located with its receiver, distinct from its outdoor sensor array)
     th.indoor_temperature_c,

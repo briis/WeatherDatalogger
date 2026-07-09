@@ -249,6 +249,7 @@ SELECT
     pr.air_density_kgm3,
     -- Device
     pr.battery_volts,
+    th.battery_low,
     -- Indoor (the temp_humidity-role station's own onboard indoor sensor,
     -- co-located with its receiver, distinct from its outdoor sensor array)
     th.indoor_temperature_c,
