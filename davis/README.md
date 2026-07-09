@@ -216,7 +216,7 @@ Or on the server, for the daily total, using the shared config for broker/creden
 
 By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. Both values are clamped to `< 500mm` (or mm/h) on-device — implausible values are logged and ignored, not applied.
 
-**Optional cross-check: [`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/)** — polls a Meteobridge Pro wired to the same Vantage Vue ISS every 60s (configurable) and publishes both corrections automatically, overwriting the standalone RF-tip-derived value each time. This service is not required — without it running, `Daily Rain`/`Rain Rate` continue to be tracked from the RF tip counter as normal. See its README for setup.
+**[`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/)**, if you have one wired to the same Vantage Vue ISS, no longer pushes automated corrections into the two topics above — it's now a full station integration with its own database rows (`weatherdatalogger/meteobridge-<mac>/observation`) rather than a correction feed for this device. To compare its rain reading against this device's RF-tip-derived one, query the database directly (both are logged under their own `station_id`) rather than looking at these entities. See its README for setup.
 
 ---
 

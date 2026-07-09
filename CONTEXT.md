@@ -46,17 +46,19 @@ weatherdatalogger/
     rapid_wind
     device_status
   davis-vantage-receiver/  ← Static control topics (device name, not station
-    set_daily_rain             ID — not known at compile time): the ONLY
-    set_rain_rate                writers of the rain fields above. The
-                                  CC1101's own tip-derived rain calculation
-                                  is disabled (unstable) — these topics,
-                                  driven by the Meteobridge corrector below,
-                                  are now the sole source
+    set_daily_rain             ID — not known at compile time): OPTIONAL
+    set_rain_rate                manual/cross-check correction only. The
+                                  rain fields above are computed standalone
+                                  from the CC1101's own RF tip counter;
+                                  nothing depends on these topics
   airlink-<did>/           ← Davis AirLink air quality sensor (Python service)
     observation            — PM1/PM2.5/PM10, AQI, temperature, humidity
+  meteobridge-<mac>/       ← Meteobridge (Python service, optional)
+    observation            — wind, pressure, temp/humidity, solar/UV, rain,
+                              indoor, lightning summary
 ```
 
-The Meteobridge corrector (`meteobridge/meteobridge_datalogger.py`) is not a station — it has no observation topic of its own. It only publishes to the `davis-vantage-receiver/set_daily_rain` / `set_rain_rate` control topics above, which are now the sole source for the Davis receiver's rain fields.
+Meteobridge (`meteobridge/meteobridge_datalogger.py`) is a full station like Tempest/AirLink — see "Meteobridge" below. Which physical station actually supplies each `combined_realtime` field when more than one reports the same kind of reading is controlled by the `station_roles` database table, not by any of the loggers themselves.
 
 `<serial>` for Tempest comes from the hub's UDP broadcast (`ST-…` for the sensor, `HB-…` for the hub).
 `<id>` for Davis is the station ID locked by the CC1101 receiver.
@@ -94,9 +96,11 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   reliable (gust and lull are both locally derived, not received over RF — see
   Known Issues). No UV or solar sensor is fitted; solar publishing is disabled
   entirely (RF noise made every "no sensor" sentinel check tried unreliable).
-  Rain accumulation/rate: the CC1101 tip-derived calculation proved unstable
-  and is disabled — `Daily Rain`/`Rain Rate` are now sourced exclusively from
-  the Meteobridge corrector (see below)**
+  Rain accumulation/rate: `Daily Rain`/`Rain Rate` are computed standalone
+  from the CC1101's own RF tip counter, the same way the console itself
+  derives rain — no external station required. The `set_daily_rain`/
+  `set_rain_rate` MQTT control topics remain available as an optional
+  manual/cross-check correction, but nothing depends on them**
 - A **BME280** is soldered directly to the receiver's ESP32 (I2C, `0x76`) —
   provides `Barometer`/`Indoor Temperature`/`Indoor Humidity`, polled locally
   every 60s, not RF-decoded and not part of the outdoor ISS. Published in the
@@ -142,12 +146,12 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - CAQI (EU CITEAIR) is also computed, from *current* (not NowCast) concentration, added alongside the US AQI fields rather than replacing them (`caqi_pm2p5`/`caqi_pm10`)
 - **Status: active**
 
-### Meteobridge Pro (optional)
-- Third-party bridge device, separately owned/configured, also wired to the same Vantage Vue ISS — not part of this project's own hardware, just a data source it can optionally consume
-- Exposes a local REST template API (`cgi-bin/template.cgi?template=...`) where `[bracket]` macros are substituted server-side — see the [Meteobridge Add-On Services wiki](https://www.meteobridge.com/wiki/index.php?title=Add-On_Services)
-- Proven consistent with the physical console — unlike the CC1101 receiver's own tip-derived rain calculation, which turned out unstable and has since been disabled entirely in the firmware
-- `meteobridge_datalogger.py` polls it every 60s (configurable) and publishes rain_today/rain_rate to the Davis receiver's MQTT control topics — not its own station, no observation topic or database rows. Now the **sole** source for those two Davis entities, not just a correction layer
-- **Status: active, optional** — the service idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured, but without it the Davis rain entities won't update at all
+### Meteobridge (optional)
+- Third-party bridge device, separately owned/configured, wired to the same Vantage Vue ISS as the Davis receiver, plus its own onboard barometer/indoor sensor and a second attached station providing solar/UV/lightning — not part of this project's own hardware, just a data source it can optionally consume
+- Exposes a local REST template API (`cgi-bin/template.cgi?template=...`) where `[bracket]` macros are substituted server-side — see the [Meteobridge Templates wiki](https://www.meteobridge.com/wiki/index.php?title=Templates)
+- `meteobridge_datalogger.py` polls it every 60s (configurable) and publishes a **full observation** (wind, pressure + trend, temp/humidity, solar/UV, rain, indoor, lightning summary) to `weatherdatalogger/meteobridge-<mac>/observation` — a full station integration with its own database rows, like Tempest/AirLink. Earlier versions of this service only pushed rain corrections into the Davis receiver's own MQTT control topics; that correction was never depended on (Davis's rain fields are self-sufficient) and has been retired
+- Since its fields overlap with Davis/Tempest (same physical ISS, or independently-derived equivalents), which station actually feeds `combined_realtime` for a given role is a `station_roles` table update, not a code change: `UPDATE station_roles SET station_type = 'meteobridge' WHERE role = '...'`
+- **Status: active, optional** — the service idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured
 
 ---
 
@@ -230,10 +234,10 @@ WeatherDatalogger/                   ← repo root
 │   │   ├── systemd/
 │   │   │   └── weatherdb-writer.service
 │   │   └── README.md
-│   ├── meteobridge/                 ← Optional Meteobridge → Davis rain corrector
+│   ├── meteobridge/                 ← Optional Meteobridge station
 │   │   ├── meteobridge_datalogger.py ← Main Python service (HTTP polling → MQTT
-│   │   │                                corrections, single file); no observation
-│   │   │                                topic or database rows of its own
+│   │   │                                full observation, single file); own
+│   │   │                                observation topic and database rows
 │   │   ├── requirements.txt        ← Runtime dependency: paho-mqtt
 │   │   ├── systemd/
 │   │   │   └── meteobridge-datalogger.service
@@ -358,9 +362,9 @@ Each service uses only the sections relevant to it — extra sections are ignore
 
 | Section | Key settings |
 |---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` — `meteobridge_datalogger.py` doesn't read `retain` (its corrections are always unretained, hardcoded) |
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
 | `[logging]` | `level`, `file` |
-| `[homeassistant]` | `discovery` (bool), `discovery_prefix` — not used by `meteobridge_datalogger.py`, which creates no entities of its own |
+| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
 
 > **Note:** `client_id` is NOT in the shared config — each service's `DEFAULT_CONFIG` provides its own unique default (`tempest-datalogger`, `airlink-datalogger`, `weatherdb-writer`, `meteobridge-datalogger`, `visualcrossing-datalogger`).
 
@@ -391,7 +395,7 @@ Each service uses only the sections relevant to it — extra sections are ignore
 
 | Section | Key settings |
 |---|---|
-| `[meteobridge]` | `host` (optional — service idles rather than crash-loops if unset), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — HTTP basic auth; empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10) |
+| `[meteobridge]` | `host` (optional — service idles rather than crash-loops if unset), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — HTTP basic auth; empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10), `language` (en/da), `data_dir` (lightning-window state file) |
 
 ### visualcrossing_datalogger.py
 

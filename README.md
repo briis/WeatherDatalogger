@@ -13,7 +13,7 @@ A unified weather data pipeline that collects data from multiple weather station
 | [`weatherdatalogger/tempest/`](weatherdatalogger/tempest/) | WeatherFlow Tempest (UDP → MQTT) | Active |
 | [`davis/`](davis/) | Davis Vantage Vue (ESP32-WROOM-32 + CC1101, ESPHome) | Active — field-tested |
 | [`weatherdatalogger/airlink/`](weatherdatalogger/airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
-| [`weatherdatalogger/meteobridge/`](weatherdatalogger/meteobridge/) | Meteobridge Pro rain corrector (HTTP polling → MQTT corrections) | Active, optional |
+| [`weatherdatalogger/meteobridge/`](weatherdatalogger/meteobridge/) | Meteobridge (HTTP polling → MQTT full observation) | Active, optional |
 | [`weatherdatalogger/visualcrossing/`](weatherdatalogger/visualcrossing/) | Visual Crossing Weather API forecast (HTTP polling → MQTT) | Active, optional — lat/lon-based, no station hardware required |
 
 ### Infrastructure (MQTT → storage)
@@ -43,14 +43,16 @@ weatherdatalogger/
     observation
     rapid_wind
     device_status
-  davis-vantage-receiver/   ← Static control topics — manual/automated rain corrections
-    set_daily_rain
-    set_rain_rate
+  davis-vantage-receiver/   ← Static control topics — OPTIONAL manual rain correction
+    set_daily_rain            (Davis's own rain fields are computed standalone
+    set_rain_rate              from its RF tip counter; nothing depends on these)
   airlink-<did>/            ← Davis AirLink air quality sensor
+    observation
+  meteobridge-<mac>/        ← Meteobridge (optional)
     observation
 ```
 
-The optional Meteobridge corrector (`weatherdatalogger/meteobridge/`) has no observation topic of its own — it only publishes to the `davis-vantage-receiver` control topics above.
+Meteobridge (`weatherdatalogger/meteobridge/`) is a full station like any other — `station_roles` (see `weatherdatalogger/database/`) decides which physical station actually supplies each field of `combined_realtime` when more than one reports the same kind of reading.
 
 ---
 
@@ -181,7 +183,7 @@ journalctl -u tempest-datalogger -f
 systemctl enable --now airlink-datalogger
 journalctl -u airlink-datalogger -f
 
-# Meteobridge corrector (skip if you don't have a Meteobridge)
+# Meteobridge datalogger (skip if you don't have a Meteobridge)
 systemctl enable --now meteobridge-datalogger
 journalctl -u meteobridge-datalogger -f
 

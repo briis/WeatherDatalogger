@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
 """
-Meteobridge → Davis Rain Corrector.
+Meteobridge HTTP → MQTT Datalogger.
 
-Polls a Meteobridge Pro's local REST template API for the Davis Vantage
-Vue's rain readings and republishes them as MQTT corrections to the
-davis-vantage-receiver ESPHome device's own control topics:
+Polls a Meteobridge's local REST template API — wired directly to the same
+Vantage Vue ISS as the davis-vantage-receiver ESPHome device, plus the
+Meteobridge unit's own onboard barometer/indoor sensor and a second attached
+station providing solar/UV/lightning — and publishes a full observation to
+MQTT under the topic:
 
-    weatherdatalogger/davis-vantage-receiver/set_daily_rain
-    weatherdatalogger/davis-vantage-receiver/set_rain_rate
+    weatherdatalogger/meteobridge-<mac>/observation
 
-Meteobridge is wired directly to the same Vantage Vue ISS and has proven
-consistent with the physical console, whereas the CC1101 RF receiver's own
-rain rate needs to see two tips after every reboot before it can compute a
-value (see davis/AGENT.md "Rain accumulation & rate"). This service acts as
-a periodic correction source rather than a full independent station — it
-does not publish its own observation topic or get its own row in the
-database; it only nudges the existing Davis entities toward Meteobridge's
-more trustworthy reading.
+This is a full station integration: db_writer.py picks up the observation
+topic automatically and writes it to the `realtime`/`history` tables like
+any other station. It supersedes the old rain-correction-only role this
+service used to play (pushing set_daily_rain/set_rain_rate into the Davis
+receiver's own MQTT control topics) — see AGENT.md "Rain accumulation &
+rate". That correction was never depended on: Davis's own rain fields are
+computed standalone from its RF tip counter, so retiring the push has no
+effect on that device either way.
 
-Units: the template below requests plain numeric output and assumes
-Meteobridge is configured for metric units (mm / mm per hour), consistent
-with the rest of this project. If your Meteobridge is configured for
-imperial units, either reconfigure it to metric or adjust MM_TEMPLATE below.
+Which station supplies which combined_realtime field is controlled by the
+`station_roles` table, not by this script — see database/02_create_tables.sql.
+Point any role at `meteobridge` there to prefer this station's reading.
+
+Fields published (flat JSON object, SI units) mirror the columns in
+`realtime`/`history` (see db_writer.py _OBS_FIELDS): wind, pressure
+(+ 3h trend), outdoor temperature/humidity/dew point/wet bulb/heat index/
+wind chill, solar/UV, rain, indoor temperature/humidity, and a best-effort
+lightning summary. illuminance_lux and battery_volts/battery_low have no
+known Meteobridge macro and are omitted (NULL in the database).
 
 Usage:
     python3 meteobridge_datalogger.py [--config config.ini]
@@ -30,11 +37,15 @@ Usage:
 import argparse
 import base64
 import configparser
+import contextlib
+import json
 import logging
+import math
 import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -54,6 +65,12 @@ DEFAULT_CONFIG = {
         "password": "",
         "interval_s": "60",
         "timeout_s": "10",
+        # Language for wind_beaufort_description — "en" or "da", same
+        # convention/wording as davis-vantage-receiver.yaml's beaufort_en/da.
+        "language": "en",
+        # Directory for the persisted lightning-window state file. Empty =
+        # same directory as the config file.
+        "data_dir": "",
     },
     "mqtt": {
         "broker": "localhost",
@@ -63,22 +80,18 @@ DEFAULT_CONFIG = {
         "tls": "false",
         "base_topic": "weatherdatalogger",
         "client_id": "meteobridge-datalogger",
+        "retain": "false",
         "qos": "0",
     },
     "logging": {
         "level": "INFO",
         "file": "",
     },
+    "homeassistant": {
+        "discovery": "false",
+        "discovery_prefix": "homeassistant",
+    },
 }
-
-# Meteobridge template — square-bracket macros are substituted server-side
-# before the response is sent. Deliberately quote-free: an earlier
-# JSON-shaped template (with "-quoted keys) came back from real hardware
-# with every quote backslash-escaped (some Meteobridge firmware applies
-# PHP/CGI-style addslashes() to template output), which broke json.loads.
-# A plain comma-separated pair sidesteps that entirely — nothing for
-# Meteobridge to escape, and no JSON parser needed on our end either.
-MM_TEMPLATE = "[rain0total-daysum],[rain0rate-act]"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -116,8 +129,71 @@ def load_config(path: str) -> configparser.ConfigParser:
 
 
 # ---------------------------------------------------------------------------
-# API fetch and parse
+# Meteobridge template — square-bracket macros substituted server-side.
+# Deliberately quote-free CSV, not JSON: real hardware backslash-escapes
+# every quote in JSON-shaped template output (some Meteobridge firmware
+# applies PHP/CGI-style addslashes()), breaking json.loads. A ":fallback"
+# suffix on each macro means one missing/unavailable sensor degrades that
+# single field to a default instead of losing the whole poll — validated
+# against real hardware; see the field-by-field notes below.
+#
+# Macro suffixes validated live against real hardware (2026-07):
+#   wind0wind-min1/-avg1/-max1  — lull/avg/gust are self-consistent
+#     (lull <= avg <= gust) against a live reading
+#   thb0press-delta3h / thb0seapress-delta3h — both returned the same delta,
+#     which is physically expected (the sea-level offset is ~constant, so
+#     the *change* over 3h should match at both altitudes)
+#   th0dew < th0wetbulb < th0temp — self-consistent against a live reading
+#   lgt0dist-act — correctly falls back to "-" (not 0) when there's no
+#     current strike, so a 0 km reading is never confused with "no data"
+#   lgt0total-act returned a nonsensical "0%" — -daysum (mirroring
+#     rain0total's convention) returns a clean numeric 0 instead
+#   lgt0dist-time (hoped-for last-strike timestamp) is not supported —
+#     falls back cleanly, so lightning_last_detected is derived client-side
+#     instead (see update_lightning() below)
+# See https://www.meteobridge.com/wiki/index.php?title=Templates for the
+# macro suffix reference.
 # ---------------------------------------------------------------------------
+
+_TEMPLATE_FIELDS: tuple[str, ...] = (
+    "mac",
+    "epoch",
+    "wind_lull_ms",
+    "wind_avg_ms",
+    "wind_gust_ms",
+    "wind_direction_deg",
+    "station_pressure_mb",
+    "sea_level_pressure_mb",
+    "station_pressure_trend_3h_mb",
+    "sea_level_pressure_trend_3h_mb",
+    "air_temperature_c",
+    "relative_humidity_pct",
+    "dew_point_c",
+    "wet_bulb_c",
+    "heat_index_c",
+    "wind_chill_c",
+    "uv_index",
+    "solar_radiation_wm2",
+    "rain_rate_mmh",
+    "rain_accumulation_mm",
+    "indoor_temperature_c",
+    "indoor_humidity_pct",
+    "lightning_distance_km",
+    "lightning_count_today",
+)
+
+MB_TEMPLATE = (
+    "[mbsystem-mac:-],[epoch],"
+    "[wind0wind-min1:0],[wind0wind-avg1:0],[wind0wind-max1:0],[wind0dir-act:0],"
+    "[thb0press-act:0],[thb0seapress-act:0],"
+    "[thb0press-delta3h:0],[thb0seapress-delta3h:0],"
+    "[th0temp-act:0],[th0hum-act:0],[th0dew-act:0],[th0wetbulb-act:0],"
+    "[th0heatindex-act:0],[wind0chill-act:0],"
+    "[uv0index-act:0],[sol0rad-act:0],"
+    "[rain0rate-act:0],[rain0total-daysum:0],"
+    "[thb0temp-act:0],[thb0hum-act:0],"
+    "[lgt0dist-act:-],[lgt0total-daysum:0]"
+)
 
 
 def _auth_headers(mb: configparser.SectionProxy) -> dict[str, str]:
@@ -129,15 +205,25 @@ def _auth_headers(mb: configparser.SectionProxy) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
-def fetch_rain(
+def _to_float(raw: str) -> float | None:
+    raw = raw.strip()
+    if raw in ("-", ""):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def fetch_raw(
     cfg: configparser.ConfigParser, log: logging.Logger
-) -> tuple[float, float] | None:
-    """Fetch (rain_today_mm, rain_rate_mmh) from Meteobridge; None on any failure."""
+) -> dict[str, str] | None:
+    """Fetch the template response from Meteobridge; return field name -> raw string."""
     mb = cfg["meteobridge"]
     host = mb["host"].strip()
     port = int(mb["port"])
     timeout = int(mb["timeout_s"])
-    query = urllib.parse.urlencode({"template": MM_TEMPLATE})
+    query = urllib.parse.urlencode({"template": MB_TEMPLATE})
     url = f"http://{host}:{port}/cgi-bin/template.cgi?{query}"
 
     try:
@@ -149,15 +235,321 @@ def fetch_rain(
         return None
 
     parts = body.split(",")
-    if len(parts) != 2:
-        log.warning("Meteobridge response has unexpected shape: %r", body)
+    if len(parts) != len(_TEMPLATE_FIELDS):
+        log.warning(
+            "Meteobridge response has unexpected shape (%d fields, expected %d): %r",
+            len(parts),
+            len(_TEMPLATE_FIELDS),
+            body,
+        )
         return None
 
-    try:
-        return float(parts[0]), float(parts[1])
-    except ValueError:
-        log.warning("Meteobridge returned non-numeric values: %r", body)
+    return dict(zip(_TEMPLATE_FIELDS, parts, strict=True))
+
+
+# ---------------------------------------------------------------------------
+# Beaufort wind scale — same WMO thresholds and English/Danish wording as
+# davis-vantage-receiver.yaml (lines 540-565), computed client-side from
+# wind_avg_ms rather than trusting Meteobridge's own "=bft" unit converter,
+# so the numbers/wording match exactly regardless of which station a role
+# currently points at.
+# ---------------------------------------------------------------------------
+
+_BEAUFORT_THRESHOLDS_MS: tuple[float, ...] = (
+    0.5,
+    1.6,
+    3.4,
+    5.5,
+    8.0,
+    10.8,
+    13.9,
+    17.2,
+    20.8,
+    24.5,
+    28.5,
+    32.7,
+)
+_BEAUFORT_EN: tuple[str, ...] = (
+    "Calm",
+    "Light air",
+    "Light breeze",
+    "Gentle breeze",
+    "Moderate breeze",
+    "Fresh breeze",
+    "Strong breeze",
+    "Near gale",
+    "Gale",
+    "Strong gale",
+    "Storm",
+    "Violent storm",
+    "Hurricane",
+)
+_BEAUFORT_DA: tuple[str, ...] = (
+    "Stille",
+    "Næsten stille",
+    "Svag vind",
+    "Let vind",
+    "Jævn vind",
+    "Frisk vind",
+    "Hård vind",
+    "Stiv kuling",
+    "Hård kuling",
+    "Stormende kuling",
+    "Storm",
+    "Voldsom storm",
+    "Orkan",
+)
+
+
+def _beaufort(wind_ms: float, language: str) -> tuple[int, str]:
+    force = next(
+        (i for i, t in enumerate(_BEAUFORT_THRESHOLDS_MS) if wind_ms < t),
+        len(_BEAUFORT_THRESHOLDS_MS),
+    )
+    names = _BEAUFORT_DA if language == "da" else _BEAUFORT_EN
+    return force, names[force]
+
+
+# ---------------------------------------------------------------------------
+# Derived metrics not directly available from Meteobridge — same formulas as
+# tempest_datalogger.py (source: apidocs.tempestwx.com/reference/derived-metrics)
+# ---------------------------------------------------------------------------
+
+_R_DRY_AIR = 287.058  # J/(kg·K)
+_HI_TEMP_MIN_F = 80.0  # heat index valid above this (°F)
+_HI_RH_MIN = 40.0  # heat index valid above this (%)
+_WC_TEMP_MAX_F = 50.0  # wind chill valid below this (°F)
+_WC_WIND_MIN_MPH = 3.0  # wind chill valid above this (mph)
+_PRESSURE_TREND_MB = 1.0  # threshold for Rising/Falling label
+
+
+def _c_to_f(t: float) -> float:
+    return t * 9.0 / 5.0 + 32.0
+
+
+def _ms_to_mph(v: float) -> float:
+    return v * 2.23694
+
+
+def _vapor_pressure_mb(t_c: float, rh: float) -> float:
+    return round((rh / 100.0) * 6.112 * math.exp(17.67 * t_c / (t_c + 243.5)), 2)
+
+
+def _air_density(p_mb: float, t_c: float) -> float:
+    return round(p_mb * 100.0 / (_R_DRY_AIR * (t_c + 273.15)), 3)
+
+
+def _feels_like_c(
+    t_c: float,
+    rh: float,
+    wind_ms: float,
+    heat_index_c: float | None,
+    wind_chill_c: float | None,
+) -> float:
+    """Pick heat index, wind chill, or plain temp using tempest's thresholds."""
+    t_f = _c_to_f(t_c)
+    v_mph = _ms_to_mph(wind_ms)
+    if t_f >= _HI_TEMP_MIN_F and rh >= _HI_RH_MIN and heat_index_c is not None:
+        return heat_index_c
+    if t_f <= _WC_TEMP_MAX_F and v_mph > _WC_WIND_MIN_MPH and wind_chill_c is not None:
+        return wind_chill_c
+    return round(t_c, 1)
+
+
+def _pressure_trend_label(delta_mb: float | None) -> str | None:
+    if delta_mb is None:
         return None
+    if delta_mb <= -_PRESSURE_TREND_MB:
+        return "Falling"
+    if delta_mb >= _PRESSURE_TREND_MB:
+        return "Rising"
+    return "Steady"
+
+
+# ---------------------------------------------------------------------------
+# Lightning window — Meteobridge only exposes a cumulative daily strike
+# counter and the *current* strike distance (no per-strike timestamp; the
+# "-time" macro suffix was tried against real hardware and doesn't work),
+# so new strikes are detected by watching lgt0total-daysum increase between
+# polls, same rolling-3h-summary shape as tempest_datalogger.py's
+# lightning_summary() but fed from a polled counter instead of discrete
+# WeatherFlow UDP strike events. Persisted across restarts like tempest's.
+# ---------------------------------------------------------------------------
+
+_LIGHTNING_WINDOW_S = 3 * 3600  # 3-hour summary window
+_LIGHTNING_KEEP_S = 24 * 3600  # retain events for up to 24 hours
+
+_lightning_events: list[dict] = []
+_lightning_last_count: list[int | None] = [None]
+_lightning_file: list[Path | None] = [None]  # mutable cell avoids `global`
+
+
+def _lightning_data_path(cfg: configparser.ConfigParser, config_path: str) -> Path:
+    data_dir = cfg["meteobridge"].get("data_dir", "").strip()
+    if data_dir:
+        return Path(data_dir) / "meteobridge_lightning.json"
+    return Path(config_path).resolve().parent / "meteobridge_lightning.json"
+
+
+def _load_lightning(path: Path) -> tuple[list[dict], int | None]:
+    if not path.exists():
+        return [], None
+    try:
+        data = json.loads(path.read_text())
+        cutoff = int(time.time()) - _LIGHTNING_KEEP_S
+        events = [e for e in data.get("events", []) if e.get("ts", 0) >= cutoff]
+        return events, data.get("last_count")
+    except Exception:  # noqa: BLE001
+        return [], None
+
+
+def _save_lightning() -> None:
+    path = _lightning_file[0]
+    if path is None:
+        return
+    with contextlib.suppress(Exception):
+        path.write_text(
+            json.dumps(
+                {"events": _lightning_events, "last_count": _lightning_last_count[0]}
+            )
+        )
+
+
+def init_lightning(
+    cfg: configparser.ConfigParser, config_path: str, log: logging.Logger
+) -> None:
+    """Load persisted lightning window state and configure the storage path."""
+    path = _lightning_data_path(cfg, config_path)
+    _lightning_file[0] = path
+    events, last_count = _load_lightning(path)
+    _lightning_events.clear()
+    _lightning_events.extend(events)
+    _lightning_last_count[0] = last_count
+    log.info("Lightning history: %d event(s) loaded from %s", len(events), path)
+
+
+def update_lightning(now_ts: int, count_today: int, dist_km: float | None) -> None:
+    """
+    Record one synthetic event per strike detected since the last poll.
+
+    A jump in the daily counter can represent several strikes at once — the
+    counter alone can't attribute a distance to each individually, so every
+    strike in the jump is recorded at the current poll's distance reading. A
+    *decrease* means Meteobridge's own local-midnight reset fired; no new
+    strikes are assumed for that poll.
+    """
+    last = _lightning_last_count[0]
+    if last is not None and count_today > last:
+        _lightning_events.extend(
+            {"ts": now_ts, "dist": dist_km} for _ in range(count_today - last)
+        )
+    _lightning_last_count[0] = count_today
+
+    cutoff = now_ts - _LIGHTNING_KEEP_S
+    while _lightning_events and _lightning_events[0]["ts"] < cutoff:
+        _lightning_events.pop(0)
+    _save_lightning()
+
+
+def lightning_summary(now_ts: int) -> dict:
+    """Return 3h lightning summary fields for inclusion in the observation payload."""
+    cutoff = now_ts - _LIGHTNING_WINDOW_S
+    recent = [e for e in _lightning_events if e["ts"] >= cutoff]
+    last_ts_val = max((e["ts"] for e in _lightning_events), default=None)
+    last_ts = (
+        datetime.fromtimestamp(last_ts_val, tz=UTC).isoformat()
+        if last_ts_val is not None
+        else None
+    )
+    dists = [e["dist"] for e in recent if e.get("dist") is not None]
+    return {
+        "lightning_last_detected": last_ts,
+        "lightning_count_3h": len(recent),
+        "lightning_min_dist_3h_km": min(dists) if dists else None,
+        "lightning_max_dist_3h_km": max(dists) if dists else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Observation assembly
+# ---------------------------------------------------------------------------
+
+
+def build_observation(
+    raw: dict[str, str], cfg: configparser.ConfigParser, log: logging.Logger
+) -> dict | None:
+    """Turn a raw template response into a flat observation payload, or None."""
+    mac = raw["mac"].strip()
+    if mac in ("-", ""):
+        log.warning("Meteobridge returned no MAC address — skipping this poll")
+        return None
+    station_id = mac.replace(":", "-")
+
+    try:
+        ts = int(float(raw["epoch"]))
+    except ValueError:
+        ts = int(time.time())
+
+    wind_avg = _to_float(raw["wind_avg_ms"]) or 0.0
+    air_temp = _to_float(raw["air_temperature_c"])
+    rh = _to_float(raw["relative_humidity_pct"])
+    station_pressure = _to_float(raw["station_pressure_mb"])
+    wet_bulb = _to_float(raw["wet_bulb_c"])
+    heat_index = _to_float(raw["heat_index_c"])
+    wind_chill = _to_float(raw["wind_chill_c"])
+
+    language = cfg["meteobridge"]["language"].strip().lower()
+    beaufort_force, beaufort_desc = _beaufort(wind_avg, language)
+
+    payload: dict = {
+        "serial_number": station_id,
+        "timestamp": ts,
+        "wind_lull_ms": _to_float(raw["wind_lull_ms"]),
+        "wind_avg_ms": wind_avg,
+        "wind_gust_ms": _to_float(raw["wind_gust_ms"]),
+        "wind_direction_deg": _to_float(raw["wind_direction_deg"]),
+        "wind_beaufort": beaufort_force,
+        "wind_beaufort_description": beaufort_desc,
+        "station_pressure_mb": station_pressure,
+        "sea_level_pressure_mb": _to_float(raw["sea_level_pressure_mb"]),
+        "pressure_trend_mb": _to_float(raw["station_pressure_trend_3h_mb"]),
+        "sea_level_pressure_trend_mb": _to_float(
+            raw["sea_level_pressure_trend_3h_mb"]
+        ),
+        "air_temperature_c": air_temp,
+        "relative_humidity_pct": rh,
+        "dew_point_c": _to_float(raw["dew_point_c"]),
+        "wet_bulb_c": wet_bulb,
+        "heat_index_c": heat_index,
+        "wind_chill_c": wind_chill,
+        "uv_index": _to_float(raw["uv_index"]),
+        "solar_radiation_wm2": _to_float(raw["solar_radiation_wm2"]),
+        "rain_rate_mmh": _to_float(raw["rain_rate_mmh"]),
+        "rain_accumulation_mm": _to_float(raw["rain_accumulation_mm"]),
+        "indoor_temperature_c": _to_float(raw["indoor_temperature_c"]),
+        "indoor_humidity_pct": _to_float(raw["indoor_humidity_pct"]),
+    }
+    payload["pressure_trend"] = _pressure_trend_label(payload["pressure_trend_mb"])
+    payload["sea_level_pressure_trend"] = _pressure_trend_label(
+        payload["sea_level_pressure_trend_mb"]
+    )
+
+    if air_temp is not None and rh is not None:
+        payload["vapor_pressure_mb"] = _vapor_pressure_mb(air_temp, rh)
+        payload["feels_like_c"] = _feels_like_c(
+            air_temp, rh, wind_avg, heat_index, wind_chill
+        )
+    if air_temp is not None and wet_bulb is not None:
+        payload["delta_t_c"] = round(air_temp - wet_bulb, 1)
+    if station_pressure is not None and air_temp is not None:
+        payload["air_density_kgm3"] = _air_density(station_pressure, air_temp)
+
+    dist_km = _to_float(raw["lightning_distance_km"])
+    count_today = int(_to_float(raw["lightning_count_today"]) or 0)
+    update_lightning(ts, count_today, dist_km)
+    payload.update(lightning_summary(ts))
+
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -213,27 +605,184 @@ def mqtt_connect(
             time.sleep(10)
 
 
-def publish_correction(
+def publish(
     client: mqtt.Client,
     cfg: configparser.ConfigParser,
     topic: str,
-    value: float,
+    payload: dict,
     log: logging.Logger,
 ) -> None:
-    """Publish a bare numeric payload — the Davis control topics expect a plain
-    mm/mm-per-hour value, not JSON. Never retained: these are one-shot
-    corrections, not state to replay to a freshly (re)connecting subscriber.
-    """
-    qos = int(cfg["mqtt"]["qos"])
-    payload = f"{value:.1f}"
+    """Serialise payload as JSON and publish; log but do not raise on error."""
+    m = cfg["mqtt"]
+    retain = m.getboolean("retain", fallback=False)
+    qos = int(m["qos"])
     try:
-        result = client.publish(topic, payload, qos=qos, retain=False)
+        result = client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("MQTT publish error rc=%s topic=%s", result.rc, topic)
         else:
-            log.debug("Published %s → %s", payload, topic)
+            log.debug("Published → %s", topic)
     except Exception:
         log.exception("Publish exception")
+
+
+# ---------------------------------------------------------------------------
+# Home Assistant MQTT Discovery
+# ---------------------------------------------------------------------------
+
+# Each entry: (field, friendly_name, unit_of_measurement, device_class, state_class)
+_METEOBRIDGE_SENSORS: list[tuple[str, str, str | None, str | None, str | None]] = [
+    ("wind_lull_ms", "Wind Lull", "m/s", "wind_speed", "measurement"),
+    ("wind_avg_ms", "Wind Speed", "m/s", "wind_speed", "measurement"),
+    ("wind_gust_ms", "Wind Gust", "m/s", "wind_speed", "measurement"),
+    (
+        "wind_direction_deg",
+        "Wind Direction",
+        "°",
+        "wind_direction",
+        "measurement_angle",
+    ),
+    ("wind_beaufort", "Beaufort Scale", None, None, "measurement"),
+    ("wind_beaufort_description", "Beaufort Description", None, None, None),
+    ("station_pressure_mb", "Pressure", "hPa", "atmospheric_pressure", "measurement"),
+    (
+        "sea_level_pressure_mb",
+        "Sea Level Pressure",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    (
+        "pressure_trend_mb",
+        "Pressure Trend",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    ("pressure_trend", "Pressure Trend Description", None, None, None),
+    (
+        "sea_level_pressure_trend_mb",
+        "Sea Level Pressure Trend",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    (
+        "sea_level_pressure_trend",
+        "Sea Level Pressure Trend Description",
+        None,
+        None,
+        None,
+    ),
+    ("air_temperature_c", "Temperature", "°C", "temperature", "measurement"),
+    ("relative_humidity_pct", "Humidity", "%", "humidity", "measurement"),
+    ("dew_point_c", "Dew Point", "°C", "temperature", "measurement"),
+    ("wet_bulb_c", "Wet Bulb Temperature", "°C", "temperature", "measurement"),
+    ("delta_t_c", "Delta T", "°C", "temperature", "measurement"),
+    ("feels_like_c", "Feels Like", "°C", "temperature", "measurement"),
+    ("heat_index_c", "Heat Index", "°C", "temperature", "measurement"),
+    ("wind_chill_c", "Wind Chill", "°C", "temperature", "measurement"),
+    ("uv_index", "UV Index", None, None, "measurement"),
+    ("solar_radiation_wm2", "Solar Radiation", "W/m²", "irradiance", "measurement"),
+    ("rain_rate_mmh", "Rain Rate", "mm/h", "precipitation_intensity", "measurement"),
+    ("rain_accumulation_mm", "Rain Accumulation", "mm", "precipitation", "measurement"),
+    ("indoor_temperature_c", "Indoor Temperature", "°C", "temperature", "measurement"),
+    ("indoor_humidity_pct", "Indoor Humidity", "%", "humidity", "measurement"),
+    (
+        "vapor_pressure_mb",
+        "Vapor Pressure",
+        "hPa",
+        "atmospheric_pressure",
+        "measurement",
+    ),
+    ("air_density_kgm3", "Air Density", "kg/m³", None, "measurement"),
+    ("lightning_last_detected", "Lightning Last Detected", None, "timestamp", None),
+    ("lightning_count_3h", "Lightning Strikes (3h)", None, None, "measurement"),
+    (
+        "lightning_min_dist_3h_km",
+        "Lightning Min Distance (3h)",
+        "km",
+        "distance",
+        "measurement",
+    ),
+    (
+        "lightning_max_dist_3h_km",
+        "Lightning Max Distance (3h)",
+        "km",
+        "distance",
+        "measurement",
+    ),
+]
+
+_SENSOR_ICON_OVERRIDES = {
+    "wind_beaufort": "mdi:speedometer",
+    "pressure_trend": "mdi:trending-up",
+    "sea_level_pressure_trend": "mdi:trending-up",
+    "pressure_trend_mb": "mdi:arrow-collapse",
+    "sea_level_pressure_trend_mb": "mdi:arrow-collapse",
+    "air_density_kgm3": "mdi:weight-kilogram",
+}
+
+_discovered: set[str] = set()
+
+
+def _device_info(station_id: str) -> dict:
+    return {
+        "identifiers": [f"meteobridge_{station_id}"],
+        "name": f"Meteobridge {station_id}",
+        "manufacturer": "Smartbedded",
+        "model": "Meteobridge",
+    }
+
+
+def publish_ha_discovery(
+    station_id: str,
+    client: mqtt.Client,
+    cfg: configparser.ConfigParser,
+    log: logging.Logger,
+) -> None:
+    """Publish retained MQTT discovery config for all Meteobridge sensors (once)."""
+    if station_id in _discovered:
+        return
+
+    prefix = cfg["homeassistant"]["discovery_prefix"].rstrip("/")
+    base = cfg["mqtt"]["base_topic"].rstrip("/")
+    state_topic = f"{base}/meteobridge-{station_id}/observation"
+    device = _device_info(station_id)
+
+    for field, name, unit, device_class, state_class in _METEOBRIDGE_SENSORS:
+        unique_id = f"meteobridge_{station_id}_{field}"
+        payload: dict = {
+            "name": name,
+            "unique_id": unique_id,
+            "state_topic": state_topic,
+            "value_template": f"{{{{ value_json.{field} }}}}",
+            "device": device,
+        }
+        if unit:
+            payload["unit_of_measurement"] = unit
+        if device_class:
+            payload["device_class"] = device_class
+        if state_class:
+            payload["state_class"] = state_class
+        icon = _SENSOR_ICON_OVERRIDES.get(field)
+        if icon:
+            payload["icon"] = icon
+
+        topic = f"{prefix}/sensor/{unique_id}/config"
+        try:
+            result = client.publish(topic, json.dumps(payload), qos=1, retain=True)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning("Discovery publish error rc=%s topic=%s", result.rc, topic)
+        except Exception:
+            log.exception("Discovery publish exception for %s", topic)
+
+    _discovered.add(station_id)
+    log.info(
+        "HA discovery published: Meteobridge %s (%d sensors)",
+        station_id,
+        len(_METEOBRIDGE_SENSORS),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,33 +809,29 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
 
     interval_s = int(mb["interval_s"])
     base = cfg["mqtt"]["base_topic"].rstrip("/")
-    rain_total_topic = f"{base}/davis-vantage-receiver/set_daily_rain"
-    rain_rate_topic = f"{base}/davis-vantage-receiver/set_rain_rate"
+    ha_discovery = cfg["homeassistant"].getboolean("discovery")
 
     log.info(
-        "Polling Meteobridge at %s:%s every %s s  →  %s / %s",
+        "Polling Meteobridge at %s:%s every %s s  base topic: %s",
         host,
         mb["port"],
         interval_s,
-        rain_total_topic,
-        rain_rate_topic,
+        base,
     )
 
     try:
         while True:
             try:
-                result = fetch_rain(cfg, log)
-                if result is not None:
-                    rain_today, rain_rate = result
-                    log.info(
-                        "Meteobridge: rain_today=%.1fmm rain_rate=%.1fmm/h",
-                        rain_today,
-                        rain_rate,
-                    )
-                    publish_correction(
-                        client, cfg, rain_total_topic, rain_today, log)
-                    publish_correction(
-                        client, cfg, rain_rate_topic, rain_rate, log)
+                raw = fetch_raw(cfg, log)
+                if raw is not None:
+                    payload = build_observation(raw, cfg, log)
+                    if payload is not None:
+                        station_id = payload["serial_number"]
+                        topic = f"{base}/meteobridge-{station_id}/observation"
+                        log.info("observation → %s", topic)
+                        publish(client, cfg, topic, payload, log)
+                        if ha_discovery:
+                            publish_ha_discovery(station_id, client, cfg, log)
             except Exception:
                 log.exception("Unexpected error in poll loop")
             time.sleep(interval_s)
@@ -304,8 +849,7 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
 
 def main() -> None:
     """Parse CLI arguments and run the datalogger."""
-    parser = argparse.ArgumentParser(
-        description="Meteobridge → Davis rain corrector")
+    parser = argparse.ArgumentParser(description="Meteobridge HTTP → MQTT datalogger")
     parser.add_argument(
         "--config",
         default="/opt/weatherdatalogger/config.ini",
@@ -315,6 +859,8 @@ def main() -> None:
     cfg = load_config(args.config)
     log_cfg = cfg["logging"]
     log = setup_logging(log_cfg["level"], log_cfg["file"])
+
+    init_lightning(cfg, args.config, log)
     run(cfg, log)
 
 
