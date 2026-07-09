@@ -122,7 +122,7 @@ Both `realtime` and `history` share the same observation columns:
 
 A single-row view that merges the latest readings from all station types into one record, sourcing each role (`wind`, `pressure`, `temp_humidity`, ...) from whatever `station_type` `station_roles` currently maps it to — see that table's comment. By default: most weather fields come from `davis`; pressure, lightning, UV, solar, illuminance, wet bulb/delta T, air density, and battery voltage come from `tempest`; air quality fields come from `airlink`. Columns for a role whose station isn't registered yet are `NULL`.
 
-The view also exposes `temp_humidity_station_pressure_mb`/`temp_humidity_sea_level_pressure_mb`/`temp_humidity_pressure_trend*`/`temp_humidity_wet_bulb_c`/`temp_humidity_delta_t_c`/`temp_humidity_air_density_kgm3` — the `temp_humidity`-role station's own on-board barometer/BME280 reading, kept separate from the non-prefixed `pressure`-role columns above so both remain visible side by side when `pressure` and `temp_humidity` point at different hardware (the default Tempest+Davis setup). If `pressure` is reassigned to the same station as `temp_humidity` (i.e. one station now supplies both roles), these `temp_humidity_*` columns would just duplicate the non-prefixed ones byte for byte — the view instead returns `NULL` for them in that case, so the pressure data shows up once, not twice.
+The `temp_humidity`-role station's own on-board barometer/BME280 reading (which would only add information when `pressure` and `temp_humidity` point at different hardware) isn't exposed here or in `history_charting` — on this install both roles currently resolve to the same station, so those columns were always `NULL` and were dropped entirely (see migrations/20260709_derole_station_columns.sql and migrations/20260709_drop_empty_temp_humidity_columns.sql).
 
 **Use this view as the primary source for dashboards and downstream consumers** — it hides the per-station layout of `realtime` and provides a unified snapshot of all current conditions.
 
@@ -132,7 +132,6 @@ The view also exposes `temp_humidity_station_pressure_mb`/`temp_humidity_sea_lev
 | `data_recorded_at` | Tempest — timestamp of the latest `pressure`-role observation |
 | `air_quality_recorded_at` | AirLink — timestamp of the latest `air_quality`-role observation |
 | Wind, temperature, humidity, dew point, feels like/heat index/wind chill, rain, vapor pressure | Davis |
-| `temp_humidity_battery_low` | Davis — low-battery flag (Davis reports low/ok, not voltage) |
 | Pressure, lightning, UV, solar, illuminance, wet bulb, delta T, air density, `battery_volts` | Tempest |
 | `pm_*`, `aqi_*`, `caqi_*` | AirLink |
 
@@ -168,7 +167,7 @@ Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data in
 | `rain_rate_mmh` | MAX | Peak rain rate in window (Davis) |
 | `pressure_trend`, `sea_level_pressure_trend` | Last value | Most recent text label in window (Tempest) |
 | Lightning fields | MAX / MIN | Rolling 3-hour counters from device (Tempest) |
-| `temp_humidity_battery_low` | MAX | True if a low-battery reading occurred anywhere in the window |
+| `battery_low` | MAX | True if a low-battery reading (`temp_humidity`-role station) occurred anywhere in the window |
 | `pm_*` (instant) | AVG | AirLink |
 | `aqi_pm2p5`, `aqi_pm10` | MAX | Worst-case US AQI in window (AirLink) |
 | `caqi_pm2p5`, `caqi_pm10` | MAX | Worst-case EU CAQI in window (AirLink) |

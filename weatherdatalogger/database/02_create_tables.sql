@@ -249,35 +249,10 @@ SELECT
     pr.air_density_kgm3,
     -- Device
     pr.battery_volts,
-    th.battery_low                  AS temp_humidity_battery_low,
     -- Indoor (the temp_humidity-role station's own onboard indoor sensor,
-    -- co-located with its receiver, distinct from its outdoor sensor array;
-    -- sourced from the same temp_humidity join as temp_humidity_battery_low
-    -- above, since it's the same MQTT observation row). Some receivers
-    -- compute their own sea-level pressure + trend on-device, independently
-    -- of pr.* above (the `pressure` role) — the two are not merged, both
-    -- remain available side by side.
+    -- co-located with its receiver, distinct from its outdoor sensor array)
     th.indoor_temperature_c,
     th.indoor_humidity_pct,
-    -- The temp_humidity_* pressure/wet-bulb/delta-T/air-density columns below
-    -- only add information when the `pressure` role points at different
-    -- hardware than `temp_humidity` (e.g. the historical Tempest+Davis combo)
-    -- — in that case th.* is the temp_humidity-role station's own onboard
-    -- barometer/BME280 reading, distinct from pr.* above. If both roles point
-    -- at the same station_type (e.g. `pressure` reassigned to the same
-    -- station as `temp_humidity`), th and pr resolve to the exact same row,
-    -- so these would just be a byte-for-byte duplicate of the non-prefixed
-    -- columns above — ro.pressure_is_temp_humidity_device nulls them out in
-    -- that case instead of showing the same reading twice.
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.station_pressure_mb         END AS temp_humidity_station_pressure_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_mb       END AS temp_humidity_sea_level_pressure_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend_mb           END AS temp_humidity_pressure_trend_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.pressure_trend              END AS temp_humidity_pressure_trend,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend_mb END AS temp_humidity_sea_level_pressure_trend_mb,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.sea_level_pressure_trend    END AS temp_humidity_sea_level_pressure_trend,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.wet_bulb_c                  END AS temp_humidity_wet_bulb_c,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.delta_t_c                   END AS temp_humidity_delta_t_c,
-    CASE WHEN ro.pressure_is_temp_humidity_device THEN NULL ELSE th.air_density_kgm3            END AS temp_humidity_air_density_kgm3,
     -- Air quality — PM1/PM2.5/PM10/AQI/CAQI
     aq.pm_1_ugm3,
     aq.pm_2p5_ugm3,
@@ -349,14 +324,7 @@ LEFT JOIN
         JOIN   stations s ON r.station_id = s.station_id
         WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'air_quality')
         LIMIT  1
-    ) aq ON TRUE
-CROSS JOIN
-    (
-        SELECT
-            (SELECT station_type FROM station_roles WHERE role = 'pressure')
-          = (SELECT station_type FROM station_roles WHERE role = 'temp_humidity')
-            AS pressure_is_temp_humidity_device
-    ) ro;
+    ) aq ON TRUE;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table: history_charting
@@ -420,24 +388,11 @@ CREATE TABLE IF NOT EXISTS history_charting (
 
     -- Device
     battery_volts               FLOAT             NULL,
-    temp_humidity_battery_low   BOOLEAN           NULL,
+    battery_low                 BOOLEAN           NULL COMMENT 'temp_humidity-role low-battery flag',
 
-    -- Indoor (the temp_humidity-role station's own onboard indoor sensor) —
-    -- AVG; trend text = last value in window, same convention as
-    -- pressure_trend above. temp_humidity_station_pressure_mb is that
-    -- station's own barometer, distinct from station_pressure_mb above (the
-    -- `pressure` role)
-    indoor_temperature_c                      FLOAT             NULL,
-    indoor_humidity_pct                       FLOAT             NULL,
-    temp_humidity_station_pressure_mb         FLOAT             NULL,
-    temp_humidity_sea_level_pressure_mb       FLOAT             NULL,
-    temp_humidity_pressure_trend_mb           FLOAT             NULL,
-    temp_humidity_pressure_trend              VARCHAR(16)       NULL,
-    temp_humidity_sea_level_pressure_trend_mb FLOAT             NULL,
-    temp_humidity_sea_level_pressure_trend    VARCHAR(16)       NULL,
-    temp_humidity_wet_bulb_c                  FLOAT             NULL,
-    temp_humidity_delta_t_c                   FLOAT             NULL,
-    temp_humidity_air_density_kgm3            FLOAT             NULL,
+    -- Indoor (the temp_humidity-role station's own onboard indoor sensor) — AVG
+    indoor_temperature_c        FLOAT             NULL,
+    indoor_humidity_pct         FLOAT             NULL,
 
     -- Air quality (AirLink) — instant PM=AVG, pre-averaged PM=AVG, AQI=MAX
     pm_1_ugm3                   FLOAT             NULL,
@@ -517,18 +472,9 @@ DO
         vapor_pressure_mb,
         air_density_kgm3,
         battery_volts,
-        temp_humidity_battery_low,
+        battery_low,
         indoor_temperature_c,
         indoor_humidity_pct,
-        temp_humidity_station_pressure_mb,
-        temp_humidity_sea_level_pressure_mb,
-        temp_humidity_pressure_trend_mb,
-        temp_humidity_pressure_trend,
-        temp_humidity_sea_level_pressure_trend_mb,
-        temp_humidity_sea_level_pressure_trend,
-        temp_humidity_wet_bulb_c,
-        temp_humidity_delta_t_c,
-        temp_humidity_air_density_kgm3,
         pm_1_ugm3,
         pm_2p5_ugm3,
         pm_2p5_1h_ugm3,
@@ -609,41 +555,9 @@ DO
         AVG(CASE WHEN station_type = roles.pressure_type THEN battery_volts END),
         MAX(CASE WHEN station_type = roles.temp_humidity_type THEN battery_low END),
         -- Indoor (the temp_humidity-role station's own onboard indoor
-        -- sensor) — trend text = last value in window, same convention as
-        -- the `pressure` role trend above
+        -- sensor) — AVG
         AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_temperature_c END),
         AVG(CASE WHEN station_type = roles.temp_humidity_type THEN indoor_humidity_pct END),
-        -- temp_humidity_* pressure/wet-bulb/delta-T/air-density: NULL when
-        -- the `pressure` role points at the same station_type as
-        -- `temp_humidity` — in that case these would just duplicate the
-        -- non-prefixed columns above byte for byte. Only meaningful when the
-        -- two roles are different hardware (e.g. the historical
-        -- Tempest+Davis combo) — see the matching comment in the
-        -- combined_realtime view.
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN station_pressure_mb END) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_mb END) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN pressure_trend_mb END) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            SUBSTRING_INDEX(GROUP_CONCAT(
-                CASE WHEN station_type = roles.temp_humidity_type THEN pressure_trend END
-                ORDER BY recorded_at DESC SEPARATOR '\x1F'
-            ), '\x1F', 1) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_trend_mb END) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            SUBSTRING_INDEX(GROUP_CONCAT(
-                CASE WHEN station_type = roles.temp_humidity_type THEN sea_level_pressure_trend END
-                ORDER BY recorded_at DESC SEPARATOR '\x1F'
-            ), '\x1F', 1) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN wet_bulb_c END) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN delta_t_c END) END,
-        CASE WHEN MAX(roles.pressure_type) = MAX(roles.temp_humidity_type) THEN NULL ELSE
-            AVG(CASE WHEN station_type = roles.temp_humidity_type THEN air_density_kgm3 END) END,
         -- Air quality
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_1_ugm3 END),
         AVG(CASE WHEN station_type = roles.air_quality_type THEN pm_2p5_ugm3 END),
