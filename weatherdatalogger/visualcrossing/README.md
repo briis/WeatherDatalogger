@@ -49,7 +49,8 @@ weatherdatalogger/forecast-<location>/forecast_daily
   "precipitation_type": "rain",
   "sunrise": "04:52:00",
   "sunset": "21:58:00",
-  "moon_phase": 0.42
+  "moon_phase": 0.42,
+  "description": "Similar temperatures continuing with no rain expected."
 }
 ```
 
@@ -62,8 +63,11 @@ weatherdatalogger/forecast-<location>/forecast_daily
 | `severe_risk` | — | ✓ | ✓ |
 | `sunrise`, `sunset`, `moon_phase` | ✓ | — | ✓ |
 | `precipitation_cover` | — | — | ✓ |
+| `description` | ✓ | — | ✓ |
 
 Daily entries additionally have `templow` (the day's low, alongside `temperature` for the high). `current` additionally has `temperature_high`/`temperature_low` — Visual Crossing's `currentConditions` has no high/low of its own, so this service fills those two from `forecast_daily[0]` (today's entry) before publishing. `precipitation_type` comes back from `pyVisualCrossing` as a list (e.g. `["rain", "ice"]`, or `null`); this service flattens it to a single comma-joined string (`"rain,ice"`) before publishing, so downstream consumers don't need to parse a nested array out of the MQTT payload.
+
+`description` is a narrative summary sentence in the configured `language`. On `current` it's the API response's top-level summary of the whole forecast period (exposed by `pyVisualCrossing` as `ForecastData.description`); on `forecast_daily` it's each day's own summary. Visual Crossing doesn't report a `description` per day through `pyVisualCrossing` itself — the wrapper's `ForecastDailyData` has no such field — so this service reads it straight off the raw API response (`VisualCrossing._json_data["days"][i]["description"]`) instead, matched by index to `forecast_daily`. Not present on `forecast_hourly` — Visual Crossing doesn't report a description at hourly granularity.
 
 ### Field conventions
 

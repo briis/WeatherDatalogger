@@ -208,6 +208,7 @@ Visual Crossing Timeline Weather API data fetched by the [`visualcrossing-datalo
 | `precipitation_cover_pct` | `forecast_daily` only — percentage of the day with precipitation |
 | `sunrise`, `sunset` | `forecast_current` and `forecast_daily` only. Stored as the raw pass-through string from the API — `pyVisualCrossing` doesn't parse these to a time type, so don't assume a fixed format |
 | `moon_phase` | `forecast_current` and `forecast_daily` only — fraction 0-1 (0 or 1 = new moon, 0.5 = full moon) |
+| `description` | `forecast_current` and `forecast_daily` only — narrative summary sentence. On `forecast_current` it's the API response's top-level summary of the whole forecast period; on `forecast_daily` it's that specific day's summary (not exposed by `pyVisualCrossing` — read from the raw API response, see `visualcrossing/README.md`) |
 | `forecast_time` | The UTC hour (`forecast_hourly`) or day (`forecast_daily`) this row forecasts — not when it was fetched |
 | `fetched_at` | UTC timestamp of the fetch that produced this row |
 

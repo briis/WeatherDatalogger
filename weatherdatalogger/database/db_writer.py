@@ -179,6 +179,7 @@ _FORECAST_CURRENT_FIELDS: tuple[tuple[str, str], ...] = (
     ("sunrise", "sunrise"),
     ("sunset", "sunset"),
     ("moon_phase", "moon_phase"),
+    ("description", "description"),
 )
 _FORECAST_HOURLY_FIELDS: tuple[tuple[str, str], ...] = (
     ("condition", "weather_condition"),
@@ -227,6 +228,7 @@ _FORECAST_DAILY_FIELDS: tuple[tuple[str, str], ...] = (
     ("sunrise", "sunrise"),
     ("sunset", "sunset"),
     ("moon_phase", "moon_phase"),
+    ("description", "description"),
 )
 
 _FC_CURRENT_COLS = ", ".join(c for _, c in _FORECAST_CURRENT_FIELDS)

@@ -636,6 +636,15 @@ DO
 -- Visual Crossing's currentConditions has no high/low of its own —
 -- visualcrossing_datalogger.py fills them from forecast_daily[0] instead —
 -- see migrations/20260708_add_forecast_current_high_low.sql.
+--
+-- description was added to forecast_current (the API's top-level narrative
+-- summary of the whole forecast period, e.g. "Similar temperatures
+-- continuing with a chance of rain") and forecast_daily (per-day narrative,
+-- e.g. "Cloudy throughout the day with rain in the morning"). The top-level
+-- one is exposed by pyVisualCrossing as ForecastData.description; the
+-- per-day one isn't parsed by the wrapper at all, so
+-- visualcrossing_datalogger.py reads it straight off the raw API response —
+-- see migrations/20260713_add_forecast_description.sql.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- One row per location, upserted on every fetch (like `realtime`).
@@ -664,6 +673,7 @@ CREATE TABLE IF NOT EXISTS forecast_current (
     sunrise              VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
     sunset               VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
     moon_phase           FLOAT             NULL COMMENT 'Fraction 0-1 (0/1 = new moon, 0.5 = full moon)',
+    description          VARCHAR(255)      NULL COMMENT 'Narrative summary of the whole forecast period, from the API response top level',
     PRIMARY KEY (location)
 ) ENGINE=InnoDB;
 
@@ -734,6 +744,7 @@ CREATE TABLE IF NOT EXISTS forecast_daily (
     sunrise                        VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
     sunset                         VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
     moon_phase                     FLOAT             NULL COMMENT 'Fraction 0-1 (0/1 = new moon, 0.5 = full moon)',
+    description                    VARCHAR(255)      NULL COMMENT 'Narrative summary of this specific day, from the API response (not parsed by pyVisualCrossing — read from the raw JSON)',
     PRIMARY KEY (id),
     UNIQUE KEY uq_forecast_daily (location, forecast_time)
 ) ENGINE=InnoDB;

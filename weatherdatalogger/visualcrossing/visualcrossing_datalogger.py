@@ -195,6 +195,7 @@ def _build_current_payload(
         "sunrise": cc.sunrise,
         "sunset": cc.sunset,
         "moon_phase": cc.moon_phase,
+        "description": cc.description,
     }
 
 
@@ -227,7 +228,13 @@ def _build_hourly_payload(hourly: list[ForecastHourlyData]) -> list[dict]:
     ]
 
 
-def _build_daily_payload(daily: list[ForecastDailyData]) -> list[dict]:
+def _build_daily_payload(
+    daily: list[ForecastDailyData], day_descriptions: list[str | None]
+) -> list[dict]:
+    # day_descriptions comes from the raw API response (see
+    # _raw_day_descriptions) since pyVisualCrossing's ForecastDailyData has
+    # no description field of its own — index-aligned with `daily` because
+    # both are built from api_result["days"] in the same order.
     return [
         {
             "datetime": d.datetime.isoformat(),
@@ -255,8 +262,11 @@ def _build_daily_payload(daily: list[ForecastDailyData]) -> list[dict]:
             "sunrise": d.sunrise,
             "sunset": d.sunset,
             "moon_phase": d.moon_phase,
+            "description": (
+                day_descriptions[i] if i < len(day_descriptions) else None
+            ),
         }
-        for d in daily
+        for i, d in enumerate(daily)
     ]
 
 
@@ -303,6 +313,23 @@ def _log_raw_response(vcapi: VisualCrossing, log: logging.Logger) -> None:
         log.debug("Raw days[0].hours[0]: %s", json.dumps(first_hour))
     except Exception as exc:  # noqa: BLE001
         log.debug("Could not introspect raw API response: %s", exc)
+
+
+def _raw_day_descriptions(vcapi: VisualCrossing) -> list[str | None]:
+    """
+    Per-day `description` text, straight off the raw API response.
+
+    pyVisualCrossing's ForecastDailyData has no description field (only
+    ForecastData/currentConditions does) — same raw _json_data access
+    _log_raw_response uses above, guarded the same way. Order matches
+    ForecastData.forecast_daily since both come from api_result["days"] in
+    the same iteration.
+    """
+    try:
+        raw_days = vcapi._json_data.get("days") or []  # noqa: SLF001
+    except AttributeError:
+        return []
+    return [d.get("description") for d in raw_days]
 
 
 def fetch_forecast(vcapi: VisualCrossing, log: logging.Logger) -> ForecastData | None:
@@ -380,6 +407,7 @@ def publish_forecast(
     cfg: configparser.ConfigParser,
     location: str,
     data: ForecastData,
+    vcapi: VisualCrossing,
     log: logging.Logger,
 ) -> None:
     """Publish current/hourly/daily forecast payloads for one location."""
@@ -394,7 +422,10 @@ def publish_forecast(
     subtopics = [
         ("current", _build_current_payload(data, today)),
         ("forecast_hourly", _build_hourly_payload(data.forecast_hourly or [])),
-        ("forecast_daily", _build_daily_payload(daily)),
+        (
+            "forecast_daily",
+            _build_daily_payload(daily, _raw_day_descriptions(vcapi)),
+        ),
     ]
     for subtopic, payload in subtopics:
         topic = f"{base}/forecast-{location}/{subtopic}"
@@ -461,7 +492,7 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
             try:
                 data = fetch_forecast(vcapi, log)
                 if data is not None:
-                    publish_forecast(client, cfg, location, data, log)
+                    publish_forecast(client, cfg, location, data, vcapi, log)
             except Exception:
                 log.exception("Unexpected error in poll loop")
             time.sleep(interval_s)
