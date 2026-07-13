@@ -33,6 +33,7 @@ import paho.mqtt.client as mqtt
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = {
     "airlink": {
+        "enabled": "false",  # set true to enable this service
         "host": "",
         "port": "80",
         "interval_s": "60",
@@ -92,6 +93,21 @@ def load_config(path: str) -> configparser.ConfigParser:
     if Path(path).exists():
         cfg.read(path)
     return cfg
+
+
+def _enabled_key_present(path: str, section: str) -> bool:
+    """
+    Return True if config.ini itself (not DEFAULT_CONFIG) sets `enabled` for `section`.
+
+    Distinguishes "explicitly disabled" from "config.ini predates the
+    `enabled` flag" so upgraded installs get a clear one-time warning
+    instead of silently going idle.
+    """
+    if not Path(path).exists():
+        return False
+    raw = configparser.ConfigParser()
+    raw.read(path)
+    return raw.has_option(section, "enabled")
 
 
 # ---------------------------------------------------------------------------
@@ -455,13 +471,25 @@ def publish_ha_discovery(
 # ---------------------------------------------------------------------------
 
 
-def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
+def run(cfg: configparser.ConfigParser, config_path: str, log: logging.Logger) -> None:
     """Connect to MQTT, then poll the AirLink API on a fixed interval."""
+    al = cfg["airlink"]
+    if not al.getboolean("enabled"):
+        if not _enabled_key_present(config_path, "airlink"):
+            log.warning(
+                "[airlink] enabled is not set in config.ini — defaulting to "
+                "disabled as of this version (previously ran whenever `host` "
+                "was set). Add 'enabled = true' under [airlink] to keep "
+                "logging AirLink data."
+            )
+        else:
+            log.info("[airlink] enabled = false — exiting")
+        return
+
     client = make_mqtt_client(cfg, log)
     mqtt_connect(client, cfg, log)
     client.loop_start()
 
-    al = cfg["airlink"]
     host = al["host"].strip()
     if not host:
         log.error(
@@ -522,7 +550,7 @@ def main() -> None:
     cfg = load_config(args.config)
     log_cfg = cfg["logging"]
     log = setup_logging(log_cfg["level"], log_cfg["file"])
-    run(cfg, log)
+    run(cfg, args.config, log)
 
 
 if __name__ == "__main__":

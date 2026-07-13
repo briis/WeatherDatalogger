@@ -54,9 +54,17 @@ After completing the [server installation](../README.md#installation), edit the 
 nano /opt/weatherdatalogger/config.ini
 ```
 
-Minimum required settings:
+**Required before first start** — this service is off by default:
+
+| Key | Section | What to set |
+|---|---|---|
+| `enabled` | `[tempest]` | `true` |
+| `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
 
 ```ini
+[tempest]
+enabled = true          # required — this service is off by default
+
 [mqtt]
 broker = 192.168.1.10   # IP or hostname of your MQTT broker
 retain = true           # recommended for Home Assistant
@@ -96,6 +104,7 @@ All settings live in `config.ini` (copied from `config.example.ini`). Every key 
 
 | Section | Key | Default | Description |
 |---|---|---|---|
+| `[tempest]` | `enabled` | `false` | Set `true` to run this service — off by default so a fresh install doesn't try to log a station you don't own |
 | `[udp]` | `listen_address` | `0.0.0.0` | Interface to bind |
 | `[udp]` | `listen_port` | `50222` | Tempest hub broadcast port |
 | `[mqtt]` | `broker` | `localhost` | MQTT broker hostname or IP |

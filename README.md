@@ -37,7 +37,7 @@ weatherdatalogger/
     lightning
     device_status
     hub_status
-  forecast-<location>/      ← Visual Crossing Weather API (optional)
+  forecast-<provider>-<location>/  ← forecast provider(s), e.g. forecast-visualcrossing-home (optional)
     current
     forecast_hourly
     forecast_daily
@@ -154,17 +154,18 @@ cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
 nano /opt/weatherdatalogger/config.ini
 ```
 
-**Required fields** — the services will not start correctly until these are set:
+**Every station/forecast service is off by default** (`enabled = false`) — set `enabled = true` under each one you actually own, then fill in that service's other required fields:
 
 | Field | Section | Description |
 |---|---|---|
 | `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
 | `password` | `[database]` | Database password (set in step 6) |
-| `host` | `[airlink]` | IP address or hostname of your Davis AirLink (if installed) |
-| `host` | `[meteobridge]` | IP address or hostname of your Meteobridge Pro (optional — leave empty to skip; it idles rather than crash-loops) |
-| `enabled`, `api_key`, `latitude`, `longitude` | `[visualcrossing]` | Visual Crossing forecast (optional — leave `enabled = false` to skip; it idles rather than crash-loops) |
+| `enabled` | `[tempest]` | Set `true` if you have a WeatherFlow Tempest |
+| `enabled`, `host` | `[airlink]` | Set `true` + IP/hostname if you have a Davis AirLink |
+| `enabled`, `host` | `[meteobridge]` | Set `true` + IP/hostname if you have a Meteobridge Pro |
+| `enabled`, `api_key`, `latitude`, `longitude` | `[visualcrossing]` | Set `true` + your API key/coordinates for Visual Crossing forecast data |
 
-Everything else has sensible defaults.
+A service left `enabled = false` idles rather than crash-loops, so it's safe to leave every optional one at its default and enable only what you own.
 
 ### 10. Enable and start the services
 
@@ -173,15 +174,15 @@ Everything else has sensible defaults.
 systemctl enable --now weatherdb-writer
 journalctl -u weatherdb-writer -f
 
-# Tempest datalogger
+# Tempest datalogger (skip if [tempest] enabled = false)
 systemctl enable --now tempest-datalogger
 journalctl -u tempest-datalogger -f
 
-# AirLink datalogger (skip if you don't have an AirLink)
+# AirLink datalogger (skip if [airlink] enabled = false)
 systemctl enable --now airlink-datalogger
 journalctl -u airlink-datalogger -f
 
-# Meteobridge datalogger (skip if you don't have a Meteobridge)
+# Meteobridge datalogger (skip if [meteobridge] enabled = false)
 systemctl enable --now meteobridge-datalogger
 journalctl -u meteobridge-datalogger -f
 
@@ -191,6 +192,11 @@ journalctl -u visualcrossing-datalogger -f
 ```
 
 On the first observation you should see a `Registered station` line in the DB writer log, then `Wrote … @ …` every 10–15 s.
+
+> `systemctl enable`/`disable` and `config.ini`'s `enabled` flag are
+> independent — a service can be systemd-enabled (starts on boot) yet
+> config-disabled (starts, logs, and immediately idles), and vice versa.
+> Both need to say "yes" for a service to actually do anything.
 
 ---
 
@@ -203,10 +209,28 @@ sudo bash /opt/weatherdatalogger/scripts/deploy.sh
 The deploy script:
 - Clones the latest code from GitHub to a temporary staging directory
 - Updates all production files for every service
+- Records the installed version to `/opt/weatherdatalogger/VERSION`
 - Applies any pending SQL migrations to the database
 - Updates Python dependencies in each virtual environment
 - Syncs systemd unit files and reloads the daemon if changed
-- Restarts each service (only if it was already enabled)
+- Restarts each service — only if it's systemd-enabled *and* (for station/forecast services) `enabled = true` in its own `config.ini` section; a config-disabled service is skipped rather than restarted, since it would just idle back down
+
+Check what's currently installed anytime with:
+
+```bash
+cat /opt/weatherdatalogger/VERSION
+```
+
+Include this when reporting a bug or requesting a change — it pins down exactly which commit is running. See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each version.
+
+> **Breaking change (this version):** Tempest, AirLink, and Meteobridge now
+> require an explicit `enabled = true` in their own `config.ini` section,
+> matching how Visual Crossing already worked — previously Tempest always
+> ran and AirLink/Meteobridge ran whenever `host` was set. Existing
+> deployments will see a `WARNING` in that service's journal after
+> upgrading (`[<service>] enabled is not set in config.ini — defaulting to
+> disabled...`) and the service will idle until you add `enabled = true`
+> under its section in `config.ini` and restart it.
 
 `/opt/weatherdatalogger/config.ini` is never touched — your local configuration is always preserved.
 

@@ -8,12 +8,17 @@
 # What this script does:
 #   1. Clones the repo to a temporary staging directory
 #   2. Installs all service files under /opt/weatherdatalogger/
-#   3. Syncs systemd unit files and reloads the daemon if any changed
-#   4. Generates /opt/weatherdatalogger/db.cnf from config.ini (DB credentials)
-#   5. Applies any pending SQL migration scripts to the database
-#   6. Updates Python dependencies in each virtual environment
-#   7. Restores ownership to the 'weatherdatalogger' service user
-#   8. Restarts each service (only if it was already enabled)
+#   3. Records the installed version (repo's VERSION file + commit SHA) to
+#      /opt/weatherdatalogger/VERSION — `cat` it anytime to check what's
+#      installed; report it when asking for a change or filing an issue
+#   4. Syncs systemd unit files and reloads the daemon if any changed
+#   5. Generates /opt/weatherdatalogger/db.cnf from config.ini (DB credentials)
+#   6. Applies any pending SQL migration scripts to the database
+#   7. Updates Python dependencies in each virtual environment
+#   8. Restores ownership to the 'weatherdatalogger' service user
+#   9. Restarts each service — only if it's systemd-enabled AND (for
+#      station/forecast services) its own [section] enabled = true in
+#      config.ini, since a config-disabled service would just idle back down
 #
 # Files never touched:
 #   /opt/weatherdatalogger/config.ini  — your local configuration is preserved
@@ -60,6 +65,14 @@ echo "==> Fetching latest code from GitHub…"
 git clone --quiet --depth 1 --branch main "$REPO_URL" "$STAGING"
 STAGING_WDL="$STAGING/weatherdatalogger"
 
+# Version = VERSION file (bumped by hand on meaningful changes) + the short
+# commit SHA of what was actually cloned, so a user reporting an issue can
+# give you an identifier that's both human-friendly and exact.
+REPO_VERSION=$(cat "$STAGING/VERSION" 2>/dev/null || echo "0.0.0")
+REPO_SHA=$(git -C "$STAGING" rev-parse --short HEAD)
+INSTALLED_VERSION="$REPO_VERSION ($REPO_SHA)"
+echo "==> Deploying WeatherDatalogger $INSTALLED_VERSION"
+
 # ---------------------------------------------------------------------------
 # Create directory structure
 # ---------------------------------------------------------------------------
@@ -103,6 +116,11 @@ cp -a "$STAGING_WDL/database/migrations/." "$WRITER_DIR/migrations/"
 # Shared config example and deploy script
 install -m 644 "$STAGING_WDL/config.example.ini"       "$INSTALL_ROOT/config.example.ini"
 install -m 755 "$STAGING_WDL/scripts/deploy.sh"        "$INSTALL_ROOT/scripts/deploy.sh"
+
+# Installed version — persisted so it can be checked anytime later without
+# re-running deploy.sh: `cat /opt/weatherdatalogger/VERSION`. Report this
+# when asking for a change or filing an issue.
+echo "$INSTALLED_VERSION" > "$INSTALL_ROOT/VERSION"
 
 # Davis receiver — ESPHome firmware is flashed independently (not a systemd
 # service here), but its server-side helper scripts live in the repo under
@@ -239,17 +257,59 @@ echo "==> Setting ownership (weatherdatalogger:weatherdatalogger)…"
 chown -R weatherdatalogger:weatherdatalogger "$INSTALL_ROOT"
 
 # ---------------------------------------------------------------------------
-# Restart services — only if already enabled
+# Restart services — only if systemd-enabled AND (for station/forecast
+# services) config-enabled. A service that's systemd-enabled but has
+# [section] enabled = false in config.ini would just idle back down
+# immediately (see each *_datalogger.py's enabled gate), so restarting it
+# would be pointless churn — skip it instead, same as the systemd-disabled
+# case below.
 # ---------------------------------------------------------------------------
-for service in "$TEMPEST_SERVICE" "$WRITER_SERVICE" "$AIRLINK_SERVICE" "$METEOBRIDGE_SERVICE" "$VISUALCROSSING_SERVICE"; do
-    if systemctl is-enabled --quiet "$service" 2>/dev/null; then
-        echo "==> Restarting $service…"
-        systemctl restart "$service"
-        systemctl --no-pager --lines=20 status "$service" || true
-    else
+
+# Mirrors the db.cnf generation above: shells out to Python/configparser
+# rather than hand-parsing INI in bash. fallback=False covers both "no
+# config.ini yet" and "section/key not present" (e.g. a config.ini that
+# predates the enabled flag) the same way each service's own DEFAULT_CONFIG
+# does.
+_config_enabled() {
+    local section="$1"
+    [[ -f "$SHARED_CONFIG" ]] || return 1
+    local value
+    value=$(python3 - "$SHARED_CONFIG" "$section" <<'PYEOF'
+import configparser, sys
+path, section = sys.argv[1], sys.argv[2]
+c = configparser.ConfigParser()
+c.read(path)
+print(c.getboolean(section, "enabled", fallback=False))
+PYEOF
+)
+    [[ "$value" == "True" ]]
+}
+
+# service:config-section pairs — empty section (weatherdb-writer) means "no
+# config-level gate, systemd enablement alone decides".
+for service_section in \
+    "$TEMPEST_SERVICE:tempest" \
+    "$WRITER_SERVICE:" \
+    "$AIRLINK_SERVICE:airlink" \
+    "$METEOBRIDGE_SERVICE:meteobridge" \
+    "$VISUALCROSSING_SERVICE:visualcrossing"; do
+
+    IFS=: read -r service section <<< "$service_section"
+
+    if ! systemctl is-enabled --quiet "$service" 2>/dev/null; then
         echo "==> $service not yet enabled — skipping restart."
         echo "    To enable: systemctl enable --now $service"
+        continue
     fi
+
+    if [[ -n "$section" ]] && ! _config_enabled "$section"; then
+        echo "==> $service is systemd-enabled but [$section] enabled is not true in config.ini — skipping restart (it would just idle)."
+        continue
+    fi
+
+    echo "==> Restarting $service…"
+    systemctl restart "$service"
+    systemctl --no-pager --lines=20 status "$service" || true
 done
 
-echo "==> Deploy complete."
+echo "==> Deploy complete. Installed version: $INSTALLED_VERSION"

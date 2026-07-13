@@ -39,6 +39,9 @@ import paho.mqtt.client as mqtt
 # Defaults (overridden by config.ini)
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = {
+    "tempest": {
+        "enabled": "false",  # set true to enable this service
+    },
     "udp": {
         "listen_address": "0.0.0.0",  # noqa: S104
         "listen_port": "50222",
@@ -103,6 +106,21 @@ def load_config(path: str) -> configparser.ConfigParser:
     if Path(path).exists():
         cfg.read(path)
     return cfg
+
+
+def _enabled_key_present(path: str, section: str) -> bool:
+    """
+    Return True if config.ini itself (not DEFAULT_CONFIG) sets `enabled` for `section`.
+
+    Distinguishes "explicitly disabled" from "config.ini predates the
+    `enabled` flag" so upgraded installs get a clear one-time warning
+    instead of silently going idle.
+    """
+    if not Path(path).exists():
+        return False
+    raw = configparser.ConfigParser()
+    raw.read(path)
+    return raw.has_option(section, "enabled")
 
 
 # ---------------------------------------------------------------------------
@@ -897,8 +915,19 @@ def dispatch(
 # ---------------------------------------------------------------------------
 
 
-def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
+def run(cfg: configparser.ConfigParser, config_path: str, log: logging.Logger) -> None:
     """Set up MQTT and UDP socket, then run the main receive-dispatch loop."""
+    if not cfg["tempest"].getboolean("enabled"):
+        if not _enabled_key_present(config_path, "tempest"):
+            log.warning(
+                "[tempest] enabled is not set in config.ini — defaulting to "
+                "disabled as of this version (previously always ran). Add "
+                "'enabled = true' under [tempest] to keep logging Tempest data."
+            )
+        else:
+            log.info("[tempest] enabled = false — exiting")
+        return
+
     # Set up MQTT
     client = make_mqtt_client(cfg, log)
     mqtt_connect(client, cfg, log)
@@ -967,7 +996,7 @@ def main() -> None:
 
     init_pressure(cfg, args.config, log)
     init_lightning(cfg, args.config, log)
-    run(cfg, log)
+    run(cfg, args.config, log)
 
 
 if __name__ == "__main__":

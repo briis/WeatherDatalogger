@@ -64,10 +64,11 @@ cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
 nano /opt/weatherdatalogger/config.ini
 ```
 
-**Required before first start** — the service will not poll until these are set:
+**Required before first start** — this service is off by default:
 
 | Key | Section | What to set |
 |---|---|---|
+| `enabled` | `[airlink]` | `true` |
 | `host` | `[airlink]` | IP address or hostname of the AirLink (e.g. `192.168.1.43`) |
 | `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
 
@@ -86,7 +87,8 @@ Settings live in the shared `/opt/weatherdatalogger/config.ini`. AirLink-specifi
 
 ```ini
 [airlink]
-host       =               # REQUIRED — AirLink IP address or hostname
+enabled    = false         # REQUIRED — set true to enable this service
+host       =               # REQUIRED if enabled — AirLink IP address or hostname
 port       = 80            # HTTP port (default 80)
 interval_s = 60            # Poll interval in seconds
 timeout_s  = 10            # HTTP request timeout

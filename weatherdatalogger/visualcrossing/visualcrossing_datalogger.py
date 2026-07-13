@@ -4,16 +4,17 @@ Visual Crossing → MQTT Forecast Datalogger.
 
 Polls the Visual Crossing Timeline Weather API (via the `pyVisualCrossing`
 wrapper) on a fixed interval and republishes current conditions plus hourly
-and daily forecasts to MQTT, in the same topic shape the WeatherFlow Better
-Forecast poller used to publish (now removed from tempest_datalogger.py):
+and daily forecasts to MQTT:
 
-    weatherdatalogger/forecast-<location>/current
-    weatherdatalogger/forecast-<location>/forecast_hourly
-    weatherdatalogger/forecast-<location>/forecast_daily
+    weatherdatalogger/forecast-visualcrossing-<location>/current
+    weatherdatalogger/forecast-visualcrossing-<location>/forecast_hourly
+    weatherdatalogger/forecast-visualcrossing-<location>/forecast_daily
 
-db_writer.py already subscribes to `forecast-+/+` and persists these to the
-forecast_current/forecast_hourly/forecast_daily tables — no changes needed
-there beyond the column set matching this service's payload shape.
+The `visualcrossing` segment is this service's FORECAST_PROVIDER slug —
+db_writer.py parses `forecast-<provider>-<location>` and persists to the
+forecast_current/forecast_hourly/forecast_daily tables keyed on
+(provider, location[, forecast_time]), so a second forecast provider can
+coexist against the same location without colliding.
 
 Unlike the WeatherFlow forecast (tied to a registered Tempest station), this
 is purely lat/lon-based — no station hardware required.
@@ -54,7 +55,7 @@ DEFAULT_CONFIG = {
         "longitude": "",  # Forecast location — must be set by user
         "days": "14",  # Free tier max; today + next N days
         "language": "en",  # See pyVisualCrossing.const.SUPPORTED_LANGUAGES
-        "location": "home",  # label used in MQTT topic: forecast-<location>
+        "location": "home",  # label used in MQTT topic: forecast-<provider>-<location>
         "interval_min": "60",  # 24 calls/day at default — free tier is 1000/day
     },
     "mqtt": {
@@ -73,6 +74,18 @@ DEFAULT_CONFIG = {
         "file": "",
     },
 }
+
+# Identifies this script as a forecast source in the MQTT topic
+# (forecast-<provider>-<location>/...) and, via db_writer.py, in the
+# forecast_current/forecast_hourly/forecast_daily tables — lets a second
+# forecast provider (e.g. Pirate Weather, WeatherFlow Better Forecast)
+# coexist without colliding on the same location. Hardcoded per-script, same
+# convention station scripts already use for their own brand identity (e.g.
+# airlink_datalogger.py's f"airlink_{did}") — not a config key, since "which
+# provider is this script" is a fact about the deployed code, not a user
+# preference. Must not contain a hyphen: db_writer.py's topic parser
+# partitions on the first "-" to split provider from location.
+FORECAST_PROVIDER = "visualcrossing"
 
 # Visual Crossing's "icons2" icon set (fixed by the pyVisualCrossing wrapper)
 # mapped to Home Assistant's weather condition strings — same role as
@@ -428,7 +441,7 @@ def publish_forecast(
         ),
     ]
     for subtopic, payload in subtopics:
-        topic = f"{base}/forecast-{location}/{subtopic}"
+        topic = f"{base}/forecast-{FORECAST_PROVIDER}-{location}/{subtopic}"
         try:
             result = client.publish(topic, json.dumps(payload), qos=qos, retain=retain)
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
@@ -436,7 +449,7 @@ def publish_forecast(
         except Exception:
             log.exception("Publish exception for %s", topic)
 
-    log.info("Forecast published → forecast-%s", location)
+    log.info("Forecast published → forecast-%s-%s", FORECAST_PROVIDER, location)
 
 
 # ---------------------------------------------------------------------------
@@ -480,10 +493,11 @@ def run(cfg: configparser.ConfigParser, log: logging.Logger) -> None:
     interval_s = int(vc["interval_min"]) * 60
 
     log.info(
-        "Polling Visual Crossing for (%s, %s) every %s min  →  forecast-%s",
+        "Polling Visual Crossing for (%s, %s) every %s min  →  forecast-%s-%s",
         latitude,
         longitude,
         vc["interval_min"],
+        FORECAST_PROVIDER,
         location,
     )
 

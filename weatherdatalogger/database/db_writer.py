@@ -233,8 +233,9 @@ _FORECAST_DAILY_FIELDS: tuple[tuple[str, str], ...] = (
 
 _FC_CURRENT_COLS = ", ".join(c for _, c in _FORECAST_CURRENT_FIELDS)
 _SQL_UPSERT_FORECAST_CURRENT = (
-    f"INSERT INTO forecast_current (location, fetched_at, {_FC_CURRENT_COLS}) "
-    f"VALUES (%s, %s, {', '.join(['%s'] * len(_FORECAST_CURRENT_FIELDS))}) "
+    "INSERT INTO forecast_current "
+    f"(provider, location, fetched_at, {_FC_CURRENT_COLS}) "
+    f"VALUES (%s, %s, %s, {', '.join(['%s'] * len(_FORECAST_CURRENT_FIELDS))}) "
     "ON DUPLICATE KEY UPDATE fetched_at = VALUES(fetched_at), "
     + ", ".join(f"{c} = VALUES({c})" for _, c in _FORECAST_CURRENT_FIELDS)
 )
@@ -242,25 +243,27 @@ _SQL_UPSERT_FORECAST_CURRENT = (
 _FC_HOURLY_COLS = ", ".join(c for _, c in _FORECAST_HOURLY_FIELDS)
 _SQL_UPSERT_FORECAST_HOURLY = (
     "INSERT INTO forecast_hourly "
-    f"(location, forecast_time, fetched_at, {_FC_HOURLY_COLS}) "
-    f"VALUES (%s, %s, %s, {', '.join(['%s'] * len(_FORECAST_HOURLY_FIELDS))}) "
+    f"(provider, location, forecast_time, fetched_at, {_FC_HOURLY_COLS}) "
+    f"VALUES (%s, %s, %s, %s, {', '.join(['%s'] * len(_FORECAST_HOURLY_FIELDS))}) "
     "ON DUPLICATE KEY UPDATE fetched_at = VALUES(fetched_at), "
     + ", ".join(f"{c} = VALUES({c})" for _, c in _FORECAST_HOURLY_FIELDS)
 )
 _SQL_DELETE_STALE_FORECAST_HOURLY = (
-    "DELETE FROM forecast_hourly WHERE location = %s AND forecast_time NOT IN %s"
+    "DELETE FROM forecast_hourly "
+    "WHERE provider = %s AND location = %s AND forecast_time NOT IN %s"
 )
 
 _FC_DAILY_COLS = ", ".join(c for _, c in _FORECAST_DAILY_FIELDS)
 _SQL_UPSERT_FORECAST_DAILY = (
     "INSERT INTO forecast_daily "
-    f"(location, forecast_time, fetched_at, {_FC_DAILY_COLS}) "
-    f"VALUES (%s, %s, %s, {', '.join(['%s'] * len(_FORECAST_DAILY_FIELDS))}) "
+    f"(provider, location, forecast_time, fetched_at, {_FC_DAILY_COLS}) "
+    f"VALUES (%s, %s, %s, %s, {', '.join(['%s'] * len(_FORECAST_DAILY_FIELDS))}) "
     "ON DUPLICATE KEY UPDATE fetched_at = VALUES(fetched_at), "
     + ", ".join(f"{c} = VALUES({c})" for _, c in _FORECAST_DAILY_FIELDS)
 )
 _SQL_DELETE_STALE_FORECAST_DAILY = (
-    "DELETE FROM forecast_daily WHERE location = %s AND forecast_time NOT IN %s"
+    "DELETE FROM forecast_daily "
+    "WHERE provider = %s AND location = %s AND forecast_time NOT IN %s"
 )
 
 
@@ -415,22 +418,35 @@ class DbWriter:
         except pymysql.Error as exc:
             self._log.error("DB write error for rain_raw %s: %s", station_id, exc)
 
-    def write_forecast_current(self, location: str, payload: dict) -> None:
+    def write_forecast_current(
+        self, provider: str, location: str, payload: dict
+    ) -> None:
         fetched_at = datetime.now(UTC).replace(tzinfo=None)
         values = tuple(payload.get(f) for f, _ in _FORECAST_CURRENT_FIELDS)
-        row = (location, fetched_at, *values)
+        row = (provider, location, fetched_at, *values)
         try:
             self._execute(_SQL_UPSERT_FORECAST_CURRENT, row)
-            self._log.debug("Wrote forecast_current for %s @ %s", location, fetched_at)
+            self._log.debug(
+                "Wrote forecast_current for %s/%s @ %s", provider, location, fetched_at
+            )
         except pymysql.Error as exc:
-            self._log.error("DB write error for forecast_current %s: %s", location, exc)
+            self._log.error(
+                "DB write error for forecast_current %s/%s: %s", provider, location, exc
+            )
 
     def _write_forecast_series(
-        self, spec: _ForecastSeriesSpec, location: str, payload: list[dict]
+        self,
+        spec: _ForecastSeriesSpec,
+        provider: str,
+        location: str,
+        payload: list[dict],
     ) -> None:
         if not isinstance(payload, list) or not payload:
             self._log.warning(
-                "Skipping empty/malformed %s payload for %s", spec.table, location
+                "Skipping empty/malformed %s payload for %s/%s",
+                spec.table,
+                provider,
+                location,
             )
             return
 
@@ -443,24 +459,36 @@ class DbWriter:
                     continue
                 forecast_times.append(ts)
                 values = tuple(entry.get(f) for f, _ in spec.fields)
-                self._execute(spec.upsert_sql, (location, ts, fetched_at, *values))
+                self._execute(
+                    spec.upsert_sql, (provider, location, ts, fetched_at, *values)
+                )
             if forecast_times:
-                self._execute(spec.delete_stale_sql, (location, tuple(forecast_times)))
+                self._execute(
+                    spec.delete_stale_sql,
+                    (provider, location, tuple(forecast_times)),
+                )
             self._log.debug(
-                "Wrote %s for %s @ %s (%d entries)",
+                "Wrote %s for %s/%s @ %s (%d entries)",
                 spec.table,
+                provider,
                 location,
                 fetched_at,
                 len(forecast_times),
             )
         except pymysql.Error as exc:
-            self._log.error("DB write error for %s %s: %s", spec.table, location, exc)
+            self._log.error(
+                "DB write error for %s %s/%s: %s", spec.table, provider, location, exc
+            )
 
-    def write_forecast_hourly(self, location: str, payload: list[dict]) -> None:
-        self._write_forecast_series(_HOURLY_SPEC, location, payload)
+    def write_forecast_hourly(
+        self, provider: str, location: str, payload: list[dict]
+    ) -> None:
+        self._write_forecast_series(_HOURLY_SPEC, provider, location, payload)
 
-    def write_forecast_daily(self, location: str, payload: list[dict]) -> None:
-        self._write_forecast_series(_DAILY_SPEC, location, payload)
+    def write_forecast_daily(
+        self, provider: str, location: str, payload: list[dict]
+    ) -> None:
+        self._write_forecast_series(_DAILY_SPEC, provider, location, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -486,9 +514,10 @@ def _on_connect(
     # computed standalone from the RF tip counter. To resume a future
     # comparison exercise, subscribe to f"{base}/+/rain_raw" here and route
     # it to DbWriter.write_rain_raw() in _on_message below.
-    # Forecast — visualcrossing_datalogger.py publishes to
-    # forecast-<location>/{current,forecast_hourly,forecast_daily}. Can't
-    # combine into one f"{base}/forecast-+/+" filter — MQTT's single-level
+    # Forecast — visualcrossing_datalogger.py (and any future forecast
+    # provider) publishes to
+    # forecast-<provider>-<location>/{current,forecast_hourly,forecast_daily}.
+    # Can't combine into one f"{base}/forecast-+/+" filter — MQTT's single-level
     # wildcard must occupy an *entire* topic level on its own (the spec
     # forbids combining it with a literal prefix like "forecast-" in the
     # same level; paho-mqtt raises ValueError for this at subscribe time).
@@ -546,18 +575,29 @@ def _on_message(
 
     log.debug("Message on %s", msg.topic)
 
-    # Forecast — "forecast-<location>/{current,forecast_hourly,forecast_daily}",
-    # a different shape from station observations (no station_id/stations
-    # row involved) — dispatch separately rather than falling into the
-    # Davis-fallback/write_observation path below.
+    # Forecast — "forecast-<provider>-<location>/{current,forecast_hourly,
+    # forecast_daily}", a different shape from station observations (no
+    # station_id/stations row involved) — dispatch separately rather than
+    # falling into the Davis-fallback/write_observation path below.
+    # partition (not split) on the first "-" only, so `location` may still
+    # contain hyphens (e.g. visualcrossing_datalogger.py's location slug
+    # replaces spaces with "-") — same reasoning as `station_type` above,
+    # just one level deeper since providers sit in front of locations here.
     if station_segment.startswith("forecast-"):
-        location = station_segment[len("forecast-") :]
+        provider, sep, location = station_segment[len("forecast-") :].partition("-")
+        if not sep:
+            log.warning(
+                "Malformed forecast topic segment %r — expected "
+                "forecast-<provider>-<location>",
+                station_segment,
+            )
+            return
         if subtopic == "current":
-            writer.write_forecast_current(location, payload)
+            writer.write_forecast_current(provider, location, payload)
         elif subtopic == "forecast_hourly":
-            writer.write_forecast_hourly(location, payload)
+            writer.write_forecast_hourly(provider, location, payload)
         elif subtopic == "forecast_daily":
-            writer.write_forecast_daily(location, payload)
+            writer.write_forecast_daily(provider, location, payload)
         else:
             log.debug("Ignoring unrecognized forecast subtopic: %s", msg.topic)
         return

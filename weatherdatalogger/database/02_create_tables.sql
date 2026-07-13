@@ -612,14 +612,24 @@ DO
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Forecast tables — Visual Crossing Timeline Weather API data, fetched and
 -- published to MQTT by visualcrossing_datalogger.py (topics
--- weatherdatalogger/forecast-<location>/{current,forecast_hourly,forecast_daily}),
--- written here by db_writer.py. All three hold only the latest fetch per
--- `location` — not an append-only history — since nothing currently needs to
--- track how a forecast for a given hour/day changed across successive
--- fetches, just the current best guess for driving a Home Assistant weather
--- entity. `location` matches the `location` config value in
--- [visualcrossing] (defaults to "home"), not a `stations` row — forecasts
+-- weatherdatalogger/forecast-<provider>-<location>/{current,forecast_hourly,
+-- forecast_daily}), written here by db_writer.py. All three hold only the
+-- latest fetch per (provider, location) — not an append-only history —
+-- since nothing currently needs to track how a forecast for a given
+-- hour/day changed across successive fetches, just the current best guess
+-- for driving a Home Assistant weather entity. `location` matches the
+-- `location` config value in the provider's own config section (e.g.
+-- [visualcrossing], defaults to "home"), not a `stations` row — forecasts
 -- aren't tied to a physical device the way `realtime`/`history` are.
+--
+-- `provider` is a forecast source slug (e.g. "visualcrossing"), hardcoded
+-- per forecast-datalogger script as its own FORECAST_PROVIDER constant —
+-- see visualcrossing_datalogger.py. It lets a second forecast provider
+-- (e.g. Pirate Weather, WeatherFlow Better Forecast) coexist against the
+-- same `location` without colliding on the same row/topic — see
+-- migrations/20260713_add_forecast_provider.sql for why this was added
+-- after the fact (originally these tables assumed Visual Crossing would be
+-- the only forecast source, keyed on `location` alone).
 --
 -- (This previously held the WeatherFlow Better Forecast API's data, sourced
 -- from tempest_datalogger.py's forecast thread — replaced entirely, not
@@ -647,8 +657,9 @@ DO
 -- see migrations/20260713_add_forecast_description.sql.
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- One row per location, upserted on every fetch (like `realtime`).
+-- One row per (provider, location), upserted on every fetch (like `realtime`).
 CREATE TABLE IF NOT EXISTS forecast_current (
+    provider             VARCHAR(32)       NOT NULL COMMENT 'Forecast provider slug, e.g. visualcrossing — matches the MQTT topic segment forecast-<provider>-<location>',
     location             VARCHAR(64)       NOT NULL,
     fetched_at           DATETIME          NOT NULL,
     weather_condition    VARCHAR(32)       NULL COMMENT 'HA weather condition, e.g. partlycloudy — `condition` is a reserved word in MariaDB',
@@ -674,15 +685,17 @@ CREATE TABLE IF NOT EXISTS forecast_current (
     sunset               VARCHAR(32)       NULL COMMENT 'Raw pass-through string from the API — pyVisualCrossing does not parse it to a time type',
     moon_phase           FLOAT             NULL COMMENT 'Fraction 0-1 (0/1 = new moon, 0.5 = full moon)',
     description          VARCHAR(255)      NULL COMMENT 'Narrative summary of the whole forecast period, from the API response top level',
-    PRIMARY KEY (location)
+    PRIMARY KEY (provider, location)
 ) ENGINE=InnoDB;
 
--- One row per (location, forecast_time); each fetch replaces the full set
--- for that location (see db_writer.py) so hours that drop out of the
--- forecast window don't linger. No sunrise/sunset/moon_phase — Visual
--- Crossing only reports those for current conditions and daily entries.
+-- One row per (provider, location, forecast_time); each fetch replaces the
+-- full set for that provider+location (see db_writer.py) so hours that drop
+-- out of the forecast window don't linger. No sunrise/sunset/moon_phase —
+-- Visual Crossing only reports those for current conditions and daily
+-- entries.
 CREATE TABLE IF NOT EXISTS forecast_hourly (
     id                             BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
+    provider                       VARCHAR(32)       NOT NULL COMMENT 'Forecast provider slug, e.g. visualcrossing — matches the MQTT topic segment forecast-<provider>-<location>',
     location                       VARCHAR(64)       NOT NULL,
     forecast_time                  DATETIME          NOT NULL COMMENT 'UTC hour this row forecasts',
     fetched_at                     DATETIME          NOT NULL,
@@ -707,16 +720,17 @@ CREATE TABLE IF NOT EXISTS forecast_hourly (
     snow_depth_cm                  FLOAT             NULL,
     precipitation_type             VARCHAR(64)       NULL COMMENT 'Comma-joined, e.g. rain,ice — pyVisualCrossing returns a list',
     PRIMARY KEY (id),
-    UNIQUE KEY uq_forecast_hourly (location, forecast_time)
+    UNIQUE KEY uq_forecast_hourly (provider, location, forecast_time)
 ) ENGINE=InnoDB;
 
--- One row per (location, forecast_time); same replace-on-fetch approach as
--- forecast_hourly. temperature_high_c/temperature_low_c replace a single
--- temperature_c column since a daily forecast is a high/low pair, not one
--- instant reading. No visibility_km — Visual Crossing's daily entries don't
--- report it (only current conditions and hourly do).
+-- One row per (provider, location, forecast_time); same replace-on-fetch
+-- approach as forecast_hourly. temperature_high_c/temperature_low_c replace
+-- a single temperature_c column since a daily forecast is a high/low pair,
+-- not one instant reading. No visibility_km — Visual Crossing's daily
+-- entries don't report it (only current conditions and hourly do).
 CREATE TABLE IF NOT EXISTS forecast_daily (
     id                             BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
+    provider                       VARCHAR(32)       NOT NULL COMMENT 'Forecast provider slug, e.g. visualcrossing — matches the MQTT topic segment forecast-<provider>-<location>',
     location                       VARCHAR(64)       NOT NULL,
     forecast_time                  DATETIME          NOT NULL COMMENT 'Day this row forecasts (as reported by the API — see Visual Crossing day datetime)',
     fetched_at                     DATETIME          NOT NULL,
@@ -746,5 +760,5 @@ CREATE TABLE IF NOT EXISTS forecast_daily (
     moon_phase                     FLOAT             NULL COMMENT 'Fraction 0-1 (0/1 = new moon, 0.5 = full moon)',
     description                    VARCHAR(255)      NULL COMMENT 'Narrative summary of this specific day, from the API response (not parsed by pyVisualCrossing — read from the raw JSON)',
     PRIMARY KEY (id),
-    UNIQUE KEY uq_forecast_daily (location, forecast_time)
+    UNIQUE KEY uq_forecast_daily (provider, location, forecast_time)
 ) ENGINE=InnoDB;

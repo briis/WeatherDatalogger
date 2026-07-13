@@ -177,20 +177,21 @@ Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data in
 
 ### `forecast_current`, `forecast_hourly`, `forecast_daily`
 
-Visual Crossing Timeline Weather API data fetched by the [`visualcrossing-datalogger`](../visualcrossing/) service (`[visualcrossing]` section in `config.ini`) and published to `{base_topic}/forecast-<location>/{current,forecast_hourly,forecast_daily}` — see [visualcrossing/README.md](../visualcrossing/README.md) for how the fetch itself is configured. All three tables hold only the **latest fetch** per `location`, not an append-only history — there's no tracking of how a forecast for a given hour/day changed across successive fetches, just the current best guess, which is what a live Home Assistant weather entity needs.
+Weather forecast data fetched by forecast-provider services — currently just [`visualcrossing-datalogger`](../visualcrossing/) (`[visualcrossing]` section in `config.ini`) — and published to `{base_topic}/forecast-<provider>-<location>/{current,forecast_hourly,forecast_daily}`; see [visualcrossing/README.md](../visualcrossing/README.md) for how that fetch is configured. All three tables hold only the **latest fetch** per `(provider, location)`, not an append-only history — there's no tracking of how a forecast for a given hour/day changed across successive fetches, just the current best guess, which is what a live Home Assistant weather entity needs.
 
-`location` matches the `location` config value (defaults to `home`), not a row in `stations` — forecasts aren't tied to a physical device the way `realtime`/`history` are, so there's no foreign key here.
+`location` matches the `location` config value in the provider's own config section (defaults to `home`), not a row in `stations` — forecasts aren't tied to a physical device the way `realtime`/`history` are, so there's no foreign key here. `provider` is a forecast-source slug (e.g. `visualcrossing`) hardcoded per forecast-datalogger script as its own `FORECAST_PROVIDER` constant — it lets a second forecast provider (Pirate Weather, WeatherFlow Better Forecast, ...) coexist against the same `location` without colliding on the same row/topic; see `migrations/20260713_add_forecast_provider.sql`.
 
-> These tables previously held WeatherFlow Better Forecast data, sourced from a forecast thread that used to live in `tempest_datalogger.py`. They were replaced outright (not extended) when the forecast source moved to Visual Crossing, which covers the same ground plus more (`feels_like_c`, `cloud_cover_pct`, `wind_gust_ms`, `uv_index`, and later `snow_cm`/`precipitation_type`/`solar_energy_mjm2`/`severe_risk`/`sunrise`/`sunset`/`moon_phase` once `pyVisualCrossing` 1.0.2 started exposing them — see `migrations/20260708_add_visualcrossing_extra_fields.sql`).
+> These tables previously held WeatherFlow Better Forecast data, sourced from a forecast thread that used to live in `tempest_datalogger.py`. They were replaced outright (not extended) when the forecast source moved to Visual Crossing, which covers the same ground plus more (`feels_like_c`, `cloud_cover_pct`, `wind_gust_ms`, `uv_index`, and later `snow_cm`/`precipitation_type`/`solar_energy_mjm2`/`severe_risk`/`sunrise`/`sunset`/`moon_phase` once `pyVisualCrossing` 1.0.2 started exposing them — see `migrations/20260708_add_visualcrossing_extra_fields.sql`). At that point they were still keyed on `location` alone, since Visual Crossing was assumed to be the only forecast source; `provider` was added later once that assumption needed to change.
 
 | Table | Key | Refresh behavior |
 |---|---|---|
-| `forecast_current` | `location` (PK) | Upserted every fetch, like `realtime` |
-| `forecast_hourly` | `(location, forecast_time)` unique | Each fetch upserts every hour still in the forecast window and deletes any row whose `forecast_time` fell out of it — so the table always mirrors exactly the latest fetch, nothing more |
-| `forecast_daily` | `(location, forecast_time)` unique | Same replace-on-fetch behavior as `forecast_hourly` |
+| `forecast_current` | `(provider, location)` (PK) | Upserted every fetch, like `realtime` |
+| `forecast_hourly` | `(provider, location, forecast_time)` unique | Each fetch upserts every hour still in the forecast window and deletes any row whose `forecast_time` fell out of it — so the table always mirrors exactly the latest fetch, nothing more |
+| `forecast_daily` | `(provider, location, forecast_time)` unique | Same replace-on-fetch behavior as `forecast_hourly` |
 
 | Column | Description |
 |---|---|
+| `provider` | Forecast provider slug, e.g. `visualcrossing` — matches the MQTT topic segment `forecast-<provider>-<location>`. All three tables |
 | `weather_condition` | HA weather condition string, e.g. `partlycloudy`, `rainy` — mapped from Visual Crossing's `icons2` icon set; see `_VC_ICON_TO_HA` in `visualcrossing_datalogger.py`. Named `weather_condition`, not `condition` — the latter is a reserved word in MariaDB (used for `DECLARE ... CONDITION FOR`) and can't be used as a bare column name |
 | `temperature_c` | `forecast_current`/`forecast_hourly`: forecast temperature. `forecast_daily`: use `temperature_high_c` instead |
 | `temperature_high_c`, `temperature_low_c` | `forecast_daily`: the day's forecast high/low. `forecast_current`: also present — today's high/low, sourced from `forecast_daily[0]` since Visual Crossing's `currentConditions` doesn't report one itself. Not on `forecast_hourly` |

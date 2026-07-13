@@ -17,7 +17,7 @@ weatherdatalogger/
     lightning
     device_status
     hub_status
-  forecast-<location>/     ← Visual Crossing Weather API (Python service, optional, lat/lon-based)
+  forecast-<provider>-<location>/  ← forecast provider(s), e.g. forecast-visualcrossing-home (Python service, optional, lat/lon-based)
     current                — current conditions JSON object
     forecast_hourly        — hourly forecast JSON array
     forecast_daily         — daily forecast JSON array (up to `days`, default/max 14)
@@ -151,7 +151,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - Exposes a local REST template API (`cgi-bin/template.cgi?template=...`) where `[bracket]` macros are substituted server-side — see the [Meteobridge Templates wiki](https://www.meteobridge.com/wiki/index.php?title=Templates)
 - `meteobridge_datalogger.py` polls it every 60s (configurable) and publishes a **full observation** (wind, pressure + trend, temp/humidity, solar/UV, rain, indoor, lightning summary) to `weatherdatalogger/meteobridge-<mac>/observation` — a full station integration with its own database rows, like Tempest/AirLink. Earlier versions of this service only pushed rain corrections into the Davis receiver's own MQTT control topics; that correction was never depended on (Davis's rain fields are self-sufficient) and has been retired
 - Since its fields overlap with Davis/Tempest (same physical ISS, or independently-derived equivalents), which station actually feeds `combined_realtime` for a given role is a `station_roles` table update, not a code change: `UPDATE station_roles SET station_type = 'meteobridge' WHERE role = '...'`
-- **Status: active, optional** — the service idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured
+- **Status: active, optional** — off by default (`[meteobridge] enabled = false`); also idles (doesn't crash-loop) if `host` is left unconfigured while enabled
 
 ---
 
@@ -277,19 +277,20 @@ WeatherDatalogger/                   ← repo root
 - **Proxmox** hypervisor running **Debian Bookworm LXC containers**
 - Production Python: **3.13** (the system `python3` on the LXC)
 - All services installed under `/opt/weatherdatalogger/` as the `tempest` unprivileged user:
-  - `tempest-datalogger` — files at `/opt/weatherdatalogger/tempest/`, venv at `.../tempest/venv`
-  - `airlink-datalogger` — files at `/opt/weatherdatalogger/airlink/`, venv at `.../airlink/venv`
+  - `tempest-datalogger` — files at `/opt/weatherdatalogger/tempest/`, venv at `.../tempest/venv` (off by default — idles if `[tempest] enabled = false`)
+  - `airlink-datalogger` — files at `/opt/weatherdatalogger/airlink/`, venv at `.../airlink/venv` (off by default — idles if `[airlink] enabled = false`)
   - `weatherdb-writer` — files at `/opt/weatherdatalogger/database/`, venv at `.../database/venv`
-  - `meteobridge-datalogger` — files at `/opt/weatherdatalogger/meteobridge/`, venv at `.../meteobridge/venv` (optional — idles if `[meteobridge] host` is unset)
+  - `meteobridge-datalogger` — files at `/opt/weatherdatalogger/meteobridge/`, venv at `.../meteobridge/venv` (optional — idles if `[meteobridge] enabled = false`)
   - `visualcrossing-datalogger` — files at `/opt/weatherdatalogger/visualcrossing/`, venv at `.../visualcrossing/venv` (optional — idles if `[visualcrossing] enabled = false`)
 - **Single shared config** at `/opt/weatherdatalogger/config.ini` — all five services read from this one file; never overwritten by the deploy script
 - **MariaDB** running on the same LXC, bound to `0.0.0.0:3306` for network access
   - `db.cnf` (MySQL client format, `chmod 600`) auto-generated at `/opt/weatherdatalogger/db.cnf` by the deploy script from the shared `config.ini`
 - Deploy script: `sudo bash /opt/weatherdatalogger/scripts/deploy.sh`
   - Installs all production files for all services
+  - Records the installed version (repo-root `VERSION` file + deployed commit's short SHA) to `/opt/weatherdatalogger/VERSION` — `cat` it to check what's installed; bump `VERSION` on any change worth telling deployments apart by
   - Applies pending SQL migrations from `database/migrations/`
   - Updates Python dependencies in each venv
-  - Restarts each service if it was already enabled (skips on first deploy before config is set)
+  - Restarts each service only if it's systemd-enabled *and* (for station/forecast services) `[section] enabled = true` in `config.ini` — a config-disabled service is skipped since it would just idle back down
 - The LXC must be on the **same L2 network segment** as the Tempest Hub (UDP broadcast does not cross routed boundaries)
 
 ---
@@ -372,6 +373,7 @@ Each service uses only the sections relevant to it — extra sections are ignore
 
 | Section | Key settings |
 |---|---|
+| `[tempest]` | `enabled` (default `false` — service idles until set `true`) |
 | `[udp]` | `listen_address`, `listen_port` |
 | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
 
@@ -383,7 +385,7 @@ Each service uses only the sections relevant to it — extra sections are ignore
 
 | Section | Key settings |
 |---|---|
-| `[airlink]` | `host` (**REQUIRED**), `port` (80), `interval_s` (60), `timeout_s` (10) |
+| `[airlink]` | `enabled` (default `false`), `host` (**REQUIRED** if enabled), `port` (80), `interval_s` (60), `timeout_s` (10) |
 
 ### db_writer.py
 
@@ -395,13 +397,19 @@ Each service uses only the sections relevant to it — extra sections are ignore
 
 | Section | Key settings |
 |---|---|
-| `[meteobridge]` | `host` (optional — service idles rather than crash-loops if unset), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — HTTP basic auth; empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10), `language` (en/da), `data_dir` (lightning-window state file) |
+| `[meteobridge]` | `enabled` (default `false`), `host` (**REQUIRED** if enabled — service idles rather than crash-loops if unset), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — HTTP basic auth; empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10), `language` (en/da), `data_dir` (lightning-window state file) |
 
 ### visualcrossing_datalogger.py
 
 | Section | Key settings |
 |---|---|
-| `[visualcrossing]` | `enabled` (optional — service idles rather than crash-loops if false), `api_key`/`latitude`/`longitude` (**REQUIRED** if enabled), `days` (14, free-tier max), `language` (en), `location` (home), `interval_min` (60) |
+| `[visualcrossing]` | `enabled` (default `false` — service idles rather than crash-loops if false), `api_key`/`latitude`/`longitude` (**REQUIRED** if enabled), `days` (14, free-tier max), `language` (en), `location` (home), `interval_min` (60) |
+
+All four services above share the same pattern: `enabled` defaults to
+`false`, checked first in `run()` before connecting to MQTT. If a
+service's section has no `enabled` key at all (a `config.ini` predating
+this flag), a one-time `WARNING` is logged instead of silently idling —
+see `_enabled_key_present()` in each `*_datalogger.py`.
 
 ---
 
@@ -454,7 +462,9 @@ When `[homeassistant] discovery = true`, the service publishes **retained** conf
 
 Discovery is published once per device per run (tracked with an in-memory set). The `lightning_last_detected` sensor uses `device_class: timestamp` so HA displays it natively as "2 hours ago".
 
-> **Forecast has no HA discovery.** `visualcrossing_datalogger.py` publishes plain data topics only (`forecast-<location>/{current,forecast_hourly,forecast_daily}`), unlike the WeatherFlow forecast poller it replaced (which auto-discovered 9 sensors plus a logged `template: weather:` YAML snippet — HA MQTT discovery doesn't support `weather` entities directly). Forecast data is intended to feed a future DB-driven Home Assistant custom integration instead, reading `forecast_current`/`forecast_hourly`/`forecast_daily` directly from MariaDB.
+> **Forecast has no HA discovery.** `visualcrossing_datalogger.py` publishes plain data topics only (`forecast-<provider>-<location>/{current,forecast_hourly,forecast_daily}`), unlike the WeatherFlow forecast poller it replaced (which auto-discovered 9 sensors plus a logged `template: weather:` YAML snippet — HA MQTT discovery doesn't support `weather` entities directly). Forecast data is intended to feed a future DB-driven Home Assistant custom integration instead, reading `forecast_current`/`forecast_hourly`/`forecast_daily` directly from MariaDB.
+>
+> The `<provider>` segment (e.g. `visualcrossing`) and the `forecast_*` tables' `(provider, location[, forecast_time])` keys exist so a second forecast provider can run alongside Visual Crossing without colliding on the same location — see `database/README.md` and `database/migrations/20260713_add_forecast_provider.sql`. The `weatherdatalogger-ha` companion repo's `db.py` still filters `forecast_*` queries by `location` only — safe today since exactly one provider exists, but it needs a matching `provider` filter added before a second provider is ever configured for the same location.
 
 ---
 

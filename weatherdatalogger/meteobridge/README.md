@@ -89,14 +89,15 @@ cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
 nano /opt/weatherdatalogger/config.ini
 ```
 
-**Required before first start** — the service will log an error and idle (not crash-loop) until this is set:
+**Required before first start** — this service is off by default:
 
 | Key | Section | What to set |
 |---|---|---|
+| `enabled` | `[meteobridge]` | `true` |
 | `host` | `[meteobridge]` | IP address or hostname of the Meteobridge (e.g. `192.168.1.252`) |
 | `broker` | `[mqtt]` | Hostname or IP of your MQTT broker |
 
-Everything else has sensible defaults and can be left as-is. This service is entirely optional — leave `host` empty if you don't have a Meteobridge.
+Everything else has sensible defaults and can be left as-is. This service is entirely optional — leave `enabled = false` (the default) if you don't have a Meteobridge.
 
 ### 3. Enable and start
 
@@ -121,7 +122,8 @@ Settings live in the shared `/opt/weatherdatalogger/config.ini`. Meteobridge-spe
 
 ```ini
 [meteobridge]
-host       =               # REQUIRED — Meteobridge IP address or hostname
+enabled    = false         # REQUIRED — set true to enable this service
+host       =               # REQUIRED if enabled — Meteobridge IP address or hostname
 port       = 80            # HTTP port (default 80)
 username   = meteobridge   # HTTP basic auth username — Meteobridge's own factory default; empty = no auth header sent
 password   =

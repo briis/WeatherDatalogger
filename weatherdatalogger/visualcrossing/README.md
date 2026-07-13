@@ -10,12 +10,12 @@ This replaces the WeatherFlow Better Forecast poller that used to live in `tempe
 
 ## What it publishes
 
-Same topic shape the WeatherFlow forecast used to publish, so [`weatherdb-writer`](../database/) needs no changes beyond the column set it already expects:
+`visualcrossing` here is this service's `FORECAST_PROVIDER` slug — hardcoded, not configurable — so a second forecast provider (Pirate Weather, WeatherFlow Better Forecast, ...) can publish alongside this one without colliding on the same topic/DB row; see [`database/README.md`](../database/README.md#forecast_current-forecast_hourly-forecast_daily) for how [`weatherdb-writer`](../database/) parses and stores it:
 
 ```
-weatherdatalogger/forecast-<location>/current
-weatherdatalogger/forecast-<location>/forecast_hourly
-weatherdatalogger/forecast-<location>/forecast_daily
+weatherdatalogger/forecast-visualcrossing-<location>/current
+weatherdatalogger/forecast-visualcrossing-<location>/forecast_hourly
+weatherdatalogger/forecast-visualcrossing-<location>/forecast_daily
 ```
 
 | Subtopic | Payload | Content |
@@ -114,7 +114,7 @@ systemctl enable --now visualcrossing-datalogger
 journalctl -u visualcrossing-datalogger -f
 ```
 
-You should see a `Forecast published → forecast-<location>` line every `interval_min` minutes.
+You should see a `Forecast published → forecast-visualcrossing-<location>` line every `interval_min` minutes.
 
 ---
 
@@ -130,7 +130,7 @@ latitude     =         # REQUIRED — decimal latitude, e.g. 55.6761
 longitude    =         # REQUIRED — decimal longitude, e.g. 12.5683
 days         = 14      # Forecast days to request (today + next N); free tier max
 language     = en      # Native condition text language — see pyVisualCrossing.const.SUPPORTED_LANGUAGES (includes da)
-location     = home    # Slug used in MQTT topic: forecast-<location>
+location     = home    # Slug used in MQTT topic: forecast-visualcrossing-<location>
 interval_min = 60      # Poll interval in minutes — 60 min = 24 calls/day
 ```
 

@@ -29,6 +29,8 @@ A fifth, non-Python component handles Davis Vantage Vue via ESP32 + CC1101, runn
 - **`logging`** (stdlib) for all output — no `print()` in production code
 - Field names in MQTT JSON payloads: **descriptive snake_case with unit suffix** (`air_temperature_c`, `station_pressure_mb`, `wind_avg_ms`, `relative_humidity_pct`)
 - Each service stays as a **single self-contained file** with its own `requirements.txt`
+- **`VERSION`** (repo root, plain `X.Y.Z`) — bump it whenever you make a change worth telling users/operators apart by (new feature, schema/topic change, breaking config change, notable bug fix). `deploy.sh` reads it plus the deployed commit's short SHA and writes both to `/opt/weatherdatalogger/VERSION` on every deploy — that's what a user reports back when asking for a change or filing an issue, so keep it current rather than batching bumps
+- **`CHANGELOG.md`** (repo root, [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-ish) — add an entry under `## [Unreleased]` for anything that also earns a `VERSION` bump; when you bump `VERSION`, retitle `[Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and start a fresh empty `[Unreleased]` above it. Group entries under `### Added`/`### Changed`/`### Fixed` as needed; call out breaking changes explicitly (bold `**Breaking:**` prefix, see the `0.1.0` entry for the pattern) — this is the thing to check before assuming you know what's already deployed
 
 ---
 
@@ -47,7 +49,7 @@ production before. Always run `scripts/lint` after editing and check that
 
 ```
 weatherdatalogger/tempest-<serial>/<message_type>
-weatherdatalogger/forecast-<location>/current|forecast_hourly|forecast_daily  (Visual Crossing, not Tempest)
+weatherdatalogger/forecast-<provider>-<location>/current|forecast_hourly|forecast_daily  (e.g. forecast-visualcrossing-home)
 weatherdatalogger/davis-<station_id>/<sensor>
 ```
 
@@ -190,12 +192,20 @@ All five services (tempest, airlink, db_writer, meteobridge, visualcrossing) sha
 
 | Service | Section | Notable keys |
 |---|---|---|
-| `tempest_datalogger.py` | `[udp]` | `listen_address`, `listen_port` |
+| `tempest_datalogger.py` | `[tempest]` | `enabled` (**default false** — service idles until set true) |
+| | `[udp]` | `listen_address`, `listen_port` |
 | | `[station]` | `elevation_m`, `height_above_ground_m`, `data_dir` |
-| `airlink_datalogger.py` | `[airlink]` | `host` (**REQUIRED**), `port` (80), `interval_s` (60), `timeout_s` (10) |
+| `airlink_datalogger.py` | `[airlink]` | `enabled` (**default false**), `host` (**REQUIRED** if enabled), `port` (80), `interval_s` (60), `timeout_s` (10) |
 | `db_writer.py` | `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
-| `meteobridge_datalogger.py` | `[meteobridge]` | `host` (optional — service idles if unset), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10), `language` (en/da, for `wind_beaufort_description`), `data_dir` (lightning-window state file) |
-| `visualcrossing_datalogger.py` | `[visualcrossing]` | `enabled` (optional — service idles if false), `api_key`/`latitude`/`longitude` (**REQUIRED** if enabled), `days` (14), `language` (en), `location` (home), `interval_min` (60) |
+| `meteobridge_datalogger.py` | `[meteobridge]` | `enabled` (**default false**), `host` (**REQUIRED** if enabled), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10), `language` (en/da, for `wind_beaufort_description`), `data_dir` (lightning-window state file) |
+| `visualcrossing_datalogger.py` | `[visualcrossing]` | `enabled` (**default false** — service idles if false), `api_key`/`latitude`/`longitude` (**REQUIRED** if enabled), `days` (14), `language` (en), `location` (home), `interval_min` (60) |
+
+All four services now share the same `enabled` gate (checked first in `run()`,
+before connecting to MQTT), defaulting to `false` so a fresh install doesn't
+try to log hardware/APIs it doesn't have. If `config.ini` predates this flag
+(no explicit `enabled` key for that section), the service logs a one-time
+`WARNING` explaining the new default instead of silently idling — see
+`_enabled_key_present()` in each `*_datalogger.py`.
 
 `data_dir` (tempest) defaults to `/opt/weatherdatalogger/tempest`. That is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 
@@ -217,7 +227,7 @@ Both services use `paho.mqtt.client` with `loop_forever()` or `loop_start()`:
 - Device info (`_device_info()`) distinguishes hub (`HB-`) from sensor (`ST-`)
 - `_HA_DISCOVERY_MAP` maps UDP type → (subtopic, sensor_list)
 
-**Forecast has no HA discovery.** `visualcrossing_datalogger.py` publishes plain data topics only (`forecast-<location>/{current,forecast_hourly,forecast_daily}`) — no MQTT discovery sensors, unlike the old WeatherFlow forecast thread this replaced (which published 9 auto-discovered sensors plus a `template: weather:` YAML snippet). Forecast consumption is moving to a DB-driven Home Assistant custom integration reading `forecast_current`/`forecast_hourly`/`forecast_daily` directly (see `database/README.md`) rather than MQTT discovery, so that layer was deliberately not rebuilt for Visual Crossing.
+**Forecast has no HA discovery.** `visualcrossing_datalogger.py` publishes plain data topics only (`forecast-<provider>-<location>/{current,forecast_hourly,forecast_daily}`) — no MQTT discovery sensors, unlike the old WeatherFlow forecast thread this replaced (which published 9 auto-discovered sensors plus a `template: weather:` YAML snippet). Forecast consumption is moving to a DB-driven Home Assistant custom integration reading `forecast_current`/`forecast_hourly`/`forecast_daily` directly (see `database/README.md`) rather than MQTT discovery, so that layer was deliberately not rebuilt for Visual Crossing.
 
 ---
 
@@ -288,7 +298,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ### Visual Crossing forecast datalogger
 - [x] New service `weatherdatalogger/visualcrossing/visualcrossing_datalogger.py` — replaces the WeatherFlow Better Forecast poller that used to live in `tempest_datalogger.py`. Lat/lon-based (via the `pyVisualCrossing` wrapper), so it has no dependency on a registered Tempest station or WeatherFlow account at all
-- [x] Publishes to the same topic shape the WeatherFlow forecast used (`forecast-<location>/{current,forecast_hourly,forecast_daily}`) so `db_writer.py`'s existing subscription needed no routing changes — only the field/column set changed
+- [x] Originally published to the same topic shape the WeatherFlow forecast used (`forecast-<location>/{current,forecast_hourly,forecast_daily}`) so `db_writer.py`'s existing subscription needed no routing changes at the time — only the field/column set changed. Later widened to `forecast-<provider>-<location>/...` (see below) once a second forecast provider became a real possibility
 - [x] Richer field set than WeatherFlow's forecast: adds `feels_like_c`, `cloud_cover_pct`, `wind_gust_ms`, `uv_index` (plus `visibility_km`/`solar_radiation_wm2` on current conditions only)
 - [x] `_VC_ICON_TO_HA` maps Visual Crossing's `icons2` icon set to HA weather conditions — a different vocabulary from WeatherFlow's own icon set, same role as the old `_WF_ICON_TO_HA`
 - [x] No MQTT HA discovery (deliberate) — forecast consumption is moving to a DB-driven HA custom integration instead; see `database/README.md`
@@ -296,6 +306,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] Full service scaffold: `config.example.ini`, `requirements.txt`, `systemd/visualcrossing-datalogger.service`, `README.md`
 - [x] `[visualcrossing]` section added to the shared `weatherdatalogger/config.example.ini`
 - [x] `forecast_current`/`forecast_hourly`/`forecast_daily` DB tables replaced outright (not extended) for the new field set — `database/migrations/20260707_add_forecast_tables.sql`
+- [x] `provider` dimension added later — MQTT topic became `forecast-<provider>-<location>/...` and the three tables' keys became `(provider, location[, forecast_time])`, so a second forecast provider (Pirate Weather, WeatherFlow Better Forecast, ...) can run alongside Visual Crossing without colliding on the same location. `visualcrossing_datalogger.py`'s `FORECAST_PROVIDER = "visualcrossing"` constant is the slug; `db_writer.py` parses it by partitioning the topic segment on the first `-` — see `database/migrations/20260713_add_forecast_provider.sql`
 - [x] Note for future maintainers: `pyVisualCrossing` 0.1.16 imports `aiohttp` unconditionally at module load (for its unused async path) but doesn't declare it as a dependency — listed explicitly in `visualcrossing/requirements.txt`
 
 ### Database
