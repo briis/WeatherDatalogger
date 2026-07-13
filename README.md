@@ -1,5 +1,7 @@
 # WeatherDatalogger
 
+> **⚠️ Active development:** This repository is under active development. Breaking changes — to schemas, MQTT topics/payloads, configuration, or service behavior — may occur without notice until a stable release is tagged.
+
 A unified weather data pipeline that collects data from multiple weather station brands and publishes everything to a single MQTT broker under a common topic namespace (`weatherdatalogger/`). Downstream consumers — Home Assistant, databases, dashboards — subscribe to MQTT and are completely decoupled from the hardware.
 
 ---
@@ -74,17 +76,13 @@ useradd -r -s /usr/sbin/nologin weatherdatalogger
 
 ### 3. Bootstrap the deploy script
 
-The deploy script is the only file needed to bootstrap. Clone the repo temporarily to get it on disk (SSH key required while the repo is private):
+The deploy script is the only file needed to bootstrap:
 
 ```bash
-git clone --depth 1 git@github.com:briis/WeatherDatalogger.git /tmp/wdl-bootstrap
 mkdir -p /opt/weatherdatalogger/scripts
-cp /tmp/wdl-bootstrap/weatherdatalogger/scripts/deploy.sh /opt/weatherdatalogger/scripts/deploy.sh
+curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/main/weatherdatalogger/scripts/deploy.sh -o /opt/weatherdatalogger/scripts/deploy.sh
 chmod +x /opt/weatherdatalogger/scripts/deploy.sh
-rm -rf /tmp/wdl-bootstrap
 ```
-
-> Once the repository is made public this can be replaced with a single `curl` command.
 
 ### 4. Run the deploy script (first time)
 

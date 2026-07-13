@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-REPO_URL="git@github.com:briis/WeatherDatalogger.git"
+REPO_URL="https://github.com/briis/WeatherDatalogger.git"
 
 INSTALL_ROOT="/opt/weatherdatalogger"
 SHARED_CONFIG="$INSTALL_ROOT/config.ini"
