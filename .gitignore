@@ -228,3 +228,6 @@ tempest_pressure.json
 .claude/
 .claude.json
 weatherdatalogger/config.test.ini
+
+# Local-only working notes — not meant to be published
+docs/weatherdatalogger-ha-upstream-changes.md
