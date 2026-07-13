@@ -231,3 +231,7 @@ weatherdatalogger/config.test.ini
 
 # Local-only working notes — not meant to be published
 docs/weatherdatalogger-ha-upstream-changes.md
+
+images/.DS_Store
+*/.DS_Store
+.DS_Store
