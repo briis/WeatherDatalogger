@@ -12,6 +12,22 @@ earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-13
+
+### Added
+- `scripts/create_ha_readonly_user.sh` + `database/03_create_readonly_user.sql` — creates a `SELECT`-only `weatherdatalogger_ha` MariaDB user for the separate [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA) Home Assistant integration, which reads this database directly. The script is idempotent (leaves an existing user's password alone) and prompts for the password rather than generating one, since it has to be re-entered into the other project's config flow anyway. `install.sh`'s setup wizard offers to run it once, at first-time setup, if you say you're using that integration; otherwise it's runnable standalone anytime later
+- `install.sh`'s secret-valued prompts (MQTT password, Visual Crossing API key) now use hidden input (`read -s`) instead of echoing what you type
+
+## [0.2.0] - 2026-07-13
+
+### Added
+- `scripts/install.sh` — one-time (but safely re-runnable) fresh-host bootstrap: OS packages, service user, MariaDB (network access + event scheduler), database + application user (password auto-generated), schema creation, and a short interactive setup wizard (MQTT broker, which stations/forecast provider you have) that writes `config.ini` for you. Skipped entirely if `config.ini` already exists, so a re-run never overwrites your settings
+- `## Overview` section in `README.md` — system requirements and a supported-stations/forecast-providers summary, up front before the detailed service tables
+
+### Changed
+- `deploy.sh`'s service restart step is now config-driven instead of systemd-driven: a service whose `config.ini` section says `enabled = true` (or, for `weatherdb-writer`, just `config.ini` existing) gets `systemctl enable`d automatically if it wasn't already, then restarted — no more manual `systemctl enable --now` per service after editing `config.ini`. It never works the other way: a running service whose config now says `false` is left alone, not stopped
+- `README.md`'s Installation section now leads with the one-command `install.sh` flow; the previous 10 manual steps are kept as a collapsed "Manual installation (troubleshooting / customizing)" reference rather than the primary path
+
 ## [0.1.0] - 2026-07-13
 
 ### Added

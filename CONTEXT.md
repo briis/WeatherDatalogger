@@ -230,6 +230,8 @@ WeatherDatalogger/                   ← repo root
 │   │   ├── requirements.txt        ← Runtime deps: paho-mqtt, PyMySQL
 │   │   ├── 01_create_database.sql  ← One-time: create DB + user
 │   │   ├── 02_create_tables.sql    ← One-time: create all tables
+│   │   ├── 03_create_readonly_user.sql ← One-time (optional): SELECT-only user for
+│   │   │                                  the WeatherDatalogger-HA integration repo
 │   │   ├── migrations/             ← Numbered ALTER TABLE scripts (applied by deploy)
 │   │   ├── systemd/
 │   │   │   └── weatherdb-writer.service
@@ -251,7 +253,15 @@ WeatherDatalogger/                   ← repo root
 │   │   │   └── visualcrossing-datalogger.service
 │   │   └── README.md
 │   ├── scripts/
-│   │   └── deploy.sh               ← Pull from GitHub, install all services, run migrations
+│   │   ├── deploy.sh               ← Pull from GitHub, install all services, run
+│   │   │                              migrations, enable+restart per config.ini
+│   │   ├── install.sh              ← One-time (re-runnable) fresh-host bootstrap:
+│   │   │                              OS packages, service user, MariaDB, DB/tables,
+│   │   │                              config wizard, then calls deploy.sh
+│   │   └── create_ha_readonly_user.sh ← Creates the SELECT-only 'weatherdatalogger_ha'
+│   │                                     user the WeatherDatalogger-HA integration
+│   │                                     needs; called from install.sh's wizard or
+│   │                                     standalone, idempotent either way
 │   └── config.example.ini          ← Shared config template for all five services
 ├── davis/                           ← Davis Vantage Vue (ESPHome receiver)
 │   ├── davis-vantage-receiver.yaml ← ESPHome firmware (CC1101 RF → MQTT); flashed
@@ -276,7 +286,7 @@ WeatherDatalogger/                   ← repo root
 
 - **Proxmox** hypervisor running **Debian Bookworm LXC containers**
 - Production Python: **3.13** (the system `python3` on the LXC)
-- All services installed under `/opt/weatherdatalogger/` as the `tempest` unprivileged user:
+- All services installed under `/opt/weatherdatalogger/` as the `weatherdatalogger` unprivileged user:
   - `tempest-datalogger` — files at `/opt/weatherdatalogger/tempest/`, venv at `.../tempest/venv` (off by default — idles if `[tempest] enabled = false`)
   - `airlink-datalogger` — files at `/opt/weatherdatalogger/airlink/`, venv at `.../airlink/venv` (off by default — idles if `[airlink] enabled = false`)
   - `weatherdb-writer` — files at `/opt/weatherdatalogger/database/`, venv at `.../database/venv`
@@ -285,12 +295,30 @@ WeatherDatalogger/                   ← repo root
 - **Single shared config** at `/opt/weatherdatalogger/config.ini` — all five services read from this one file; never overwritten by the deploy script
 - **MariaDB** running on the same LXC, bound to `0.0.0.0:3306` for network access
   - `db.cnf` (MySQL client format, `chmod 600`) auto-generated at `/opt/weatherdatalogger/db.cnf` by the deploy script from the shared `config.ini`
+- Install script: `sudo bash /opt/weatherdatalogger/scripts/install.sh` — one-time (but
+  safely re-runnable) fresh-host bootstrap: OS packages, service user, MariaDB
+  (network bind-address + event scheduler, each idempotent), database + app user
+  (password auto-generated, only if the app user doesn't exist yet), schema
+  creation, then an interactive wizard that writes `config.ini` (skipped if
+  `config.ini` already exists). Calls `deploy.sh` before the wizard (to get
+  `01_create_database.sql`/`02_create_tables.sql` on disk) and again after (so
+  migrations apply and services enable+start against the now-real `config.ini`).
+  The wizard also offers, once, to run `create_ha_readonly_user.sh` (creates the
+  `SELECT`-only `weatherdatalogger_ha` user the separate WeatherDatalogger-HA
+  integration needs) — that script can also be run standalone anytime later
 - Deploy script: `sudo bash /opt/weatherdatalogger/scripts/deploy.sh`
   - Installs all production files for all services
   - Records the installed version (repo-root `VERSION` file + deployed commit's short SHA) to `/opt/weatherdatalogger/VERSION` — `cat` it to check what's installed; bump `VERSION` on any change worth telling deployments apart by
   - Applies pending SQL migrations from `database/migrations/`
   - Updates Python dependencies in each venv
-  - Restarts each service only if it's systemd-enabled *and* (for station/forecast services) `[section] enabled = true` in `config.ini` — a config-disabled service is skipped since it would just idle back down
+  - Config-driven enable/restart: for each service, computes whether it *should*
+    run from `config.ini` (`[section] enabled = true` for station/forecast
+    services; "`config.ini` exists at all" for `weatherdb-writer`, which has no
+    `enabled` flag) and, if so, `systemctl enable`s it (if not already) then
+    restarts — regardless of prior systemd state. Never the reverse: if config
+    says it shouldn't run, an already-running service is left alone (warned
+    about, not stopped) — turning one off is always a manual `systemctl disable
+    --now`
 - The LXC must be on the **same L2 network segment** as the Tempest Hub (UDP broadcast does not cross routed boundaries)
 
 ---

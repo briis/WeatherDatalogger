@@ -16,9 +16,12 @@
 #   6. Applies any pending SQL migration scripts to the database
 #   7. Updates Python dependencies in each virtual environment
 #   8. Restores ownership to the 'weatherdatalogger' service user
-#   9. Restarts each service — only if it's systemd-enabled AND (for
-#      station/forecast services) its own [section] enabled = true in
-#      config.ini, since a config-disabled service would just idle back down
+#   9. Enables (if needed) and restarts each service whose config.ini says
+#      it should run — [section] enabled = true for station/forecast
+#      services, or "config.ini exists at all" for weatherdb-writer (which
+#      has no enabled flag of its own). Never auto-disables/stops a
+#      service just because config now says false — that stays a manual
+#      `systemctl disable --now`
 #
 # Files never touched:
 #   /opt/weatherdatalogger/config.ini  — your local configuration is preserved
@@ -109,13 +112,16 @@ install -m 755 "$STAGING_WDL/visualcrossing/visualcrossing_datalogger.py" "$VISU
 install -m 644 "$STAGING_WDL/visualcrossing/requirements.txt"             "$VISUALCROSSING_DIR/requirements.txt"
 
 # Database SQL scripts — kept on disk for manual re-runs and reference
-install -m 644 "$STAGING_WDL/database/01_create_database.sql" "$WRITER_DIR/01_create_database.sql"
-install -m 644 "$STAGING_WDL/database/02_create_tables.sql"   "$WRITER_DIR/02_create_tables.sql"
+install -m 644 "$STAGING_WDL/database/01_create_database.sql"    "$WRITER_DIR/01_create_database.sql"
+install -m 644 "$STAGING_WDL/database/02_create_tables.sql"      "$WRITER_DIR/02_create_tables.sql"
+install -m 644 "$STAGING_WDL/database/03_create_readonly_user.sql" "$WRITER_DIR/03_create_readonly_user.sql"
 cp -a "$STAGING_WDL/database/migrations/." "$WRITER_DIR/migrations/"
 
-# Shared config example and deploy script
-install -m 644 "$STAGING_WDL/config.example.ini"       "$INSTALL_ROOT/config.example.ini"
-install -m 755 "$STAGING_WDL/scripts/deploy.sh"        "$INSTALL_ROOT/scripts/deploy.sh"
+# Shared config example and scripts
+install -m 644 "$STAGING_WDL/config.example.ini"                 "$INSTALL_ROOT/config.example.ini"
+install -m 755 "$STAGING_WDL/scripts/deploy.sh"                  "$INSTALL_ROOT/scripts/deploy.sh"
+install -m 755 "$STAGING_WDL/scripts/install.sh"                 "$INSTALL_ROOT/scripts/install.sh"
+install -m 755 "$STAGING_WDL/scripts/create_ha_readonly_user.sh" "$INSTALL_ROOT/scripts/create_ha_readonly_user.sh"
 
 # Installed version — persisted so it can be checked anytime later without
 # re-running deploy.sh: `cat /opt/weatherdatalogger/VERSION`. Report this
@@ -257,12 +263,14 @@ echo "==> Setting ownership (weatherdatalogger:weatherdatalogger)…"
 chown -R weatherdatalogger:weatherdatalogger "$INSTALL_ROOT"
 
 # ---------------------------------------------------------------------------
-# Restart services — only if systemd-enabled AND (for station/forecast
-# services) config-enabled. A service that's systemd-enabled but has
-# [section] enabled = false in config.ini would just idle back down
-# immediately (see each *_datalogger.py's enabled gate), so restarting it
-# would be pointless churn — skip it instead, same as the systemd-disabled
-# case below.
+# Enable/restart services — config-driven. [section] enabled = true means
+# "this should be running", so make it so: systemctl-enable it if it isn't
+# already, then restart, regardless of prior systemd state. Never the
+# reverse — if config says false (or, for weatherdb-writer, config.ini
+# doesn't exist yet), a currently-running service is left alone rather than
+# stopped. That keeps this script from ever surprising anyone by taking
+# something down; turning a service off is a deliberate manual
+# `systemctl disable --now`.
 # ---------------------------------------------------------------------------
 
 # Mirrors the db.cnf generation above: shells out to Python/configparser
@@ -285,8 +293,11 @@ PYEOF
     [[ "$value" == "True" ]]
 }
 
-# service:config-section pairs — empty section (weatherdb-writer) means "no
-# config-level gate, systemd enablement alone decides".
+# service:config-section pairs — empty section (weatherdb-writer) has no
+# `enabled` flag of its own; "config.ini exists at all" is its readiness
+# gate instead (it needs [database] credentials to do anything useful, and
+# db_writer.py exits cleanly if --config doesn't exist, but there's no
+# reason to hit that path on a fresh install before config.ini is set up).
 for service_section in \
     "$TEMPEST_SERVICE:tempest" \
     "$WRITER_SERVICE:" \
@@ -296,15 +307,27 @@ for service_section in \
 
     IFS=: read -r service section <<< "$service_section"
 
-    if ! systemctl is-enabled --quiet "$service" 2>/dev/null; then
-        echo "==> $service not yet enabled — skipping restart."
-        echo "    To enable: systemctl enable --now $service"
+    should_run=false
+    if [[ -n "$section" ]]; then
+        _config_enabled "$section" && should_run=true
+        reason="[$section] enabled is not true in config.ini"
+    else
+        [[ -f "$SHARED_CONFIG" ]] && should_run=true
+        reason="config.ini does not exist yet"
+    fi
+
+    if [[ "$should_run" != "true" ]]; then
+        if systemctl is-enabled --quiet "$service" 2>/dev/null; then
+            echo "==> $service is systemd-enabled but $reason — leaving it running as-is (not auto-stopping). Run 'systemctl disable --now $service' if that's not intended."
+        else
+            echo "==> $service not enabled ($reason) — skipping."
+        fi
         continue
     fi
 
-    if [[ -n "$section" ]] && ! _config_enabled "$section"; then
-        echo "==> $service is systemd-enabled but [$section] enabled is not true in config.ini — skipping restart (it would just idle)."
-        continue
+    if ! systemctl is-enabled --quiet "$service" 2>/dev/null; then
+        echo "==> Enabling $service…"
+        systemctl enable --quiet "$service"
     fi
 
     echo "==> Restarting $service…"
