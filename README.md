@@ -1,4 +1,4 @@
-# ![logo](images/weatherdatalogger_icon64x64.png) WeatherDatalogger
+# ![logo](images/weatherdatalogger_icon72x72.png) WeatherDatalogger
 
 > **⚠️ Active development:** This repository is under active development. Breaking changes — to schemas, MQTT topics/payloads, configuration, or service behavior — may occur without notice until a stable release is tagged.
 
