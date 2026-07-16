@@ -4,76 +4,77 @@ Receives 868 MHz ISM band transmissions from a **Davis Vantage Vue** weather sta
 
 > **Installation:** Follow the [server installation guide](../README.md#installation) first. The ESPHome firmware is flashed independently — see [Setup](#setup) below.
 
+> **Hardware revision (2026-07-16):** the receiver was rebuilt on an **M5Stack Basic Core** (`davisnet-weatherlogger.yaml`) — a sturdier, case-enclosed build with a built-in color display and an external-antenna CC1101 module for better range. RF decoding, MQTT topics, and all published fields are unchanged from the original breadboard build — see [Field conventions](#field-conventions). The original ESP32-WROOM-32 + breakout-board build (`davis-vantage-receiver.yaml`) is superseded; this README now documents the M5Stack build only. See git history for the old wiring if you still have one of those units deployed.
+
 ---
 
 ## Hardware
 
-### Receiver board — ESP32-WROOM-32 (30-pin devkit)
+### Receiver board — M5Stack Basic Core (ESP32)
 
 | Spec | Value |
 |---|---|
 | SoC | ESP32 (Xtensa LX6 dual-core) |
-| Flash | 4 MB |
+| Flash | 16 MB |
 | PSRAM | None |
-| RF module | CC1101 (868 MHz ISM, EU) |
+| Built-in display | 2" MIPI SPI LCD (`M5CORE` model — see [Display](#display--built-in-m5stack-core-lcd)) |
+| Built-in buttons | 3× physical (A / B / C) |
+| Built-in speaker | PWM-driven, GPIO 25 |
+| Power management | IP5306 (I2C, `0x75`) — battery charging status only, polled every 30 s |
+| RF module | CC1101, external antenna (see below) |
 | Indoor sensor | BME280 (I2C, barometer/temp/humidity) |
 
-### RF module — GERUI CC1101 868 MHz
+`esphome:`/`esp32:` board id: `m5stack-core-esp32-16M`, `esp-idf` framework (the original build used `arduino`).
 
-A dedicated CC1101 breakout board with integrated antenna. The GERUI board labels its SPI data pins `SI` (MOSI) and `SO` (MISO).
+### RF module — M5Stack CC1101 Module (E07-900M10S / EBYTE, external antenna)
 
-### Wiring — GERUI CC1101 → ESP32-WROOM-32
+Stacks onto the Core via M5Stack's M-Bus connector — no manual SPI wiring. SCK/MISO/MOSI are the M-Bus's fixed SPI pins; CSN and GDO0 are selected via two onboard DIP-switch blocks. The external antenna (vs. the GERUI board's integrated antenna on the previous build) gives noticeably better range.
 
-| GERUI CC1101 pin | ESP32 GPIO | Board label |
+| Function | Pin | How it's selected |
+|---|---|---|
+| SCK | GPIO 18 | Fixed (M-Bus) |
+| MOSI | GPIO 23 | Fixed (M-Bus) |
+| MISO | GPIO 19 | Fixed (M-Bus) |
+| CS (CSN) | GPIO 15 | DIP switch — **CSN block** (top, 4 switches): #2 ON, all others OFF |
+| GDO0 | GPIO 35 | DIP switch — **GDO block** (bottom, 6 switches): #4 ON, all others OFF |
+| GDO2 | — | Not connected — not required for Davis packet reception |
+
+> The DIP-switch mapping above is specific to stacking on a "Core" host (M5Stack's module supports several host boards, each with a different pin mapping). Reception confirmed via CRC-validated Davis packets (packet types 3, 5, 8, 10, 14, correct `unit_id`) on 2026-07-16.
+
+### Indoor sensor — BME280 (barometer / indoor temperature / indoor humidity)
+
+A BME280 breakout wired to the Core's I2C bus (Grove Port A), co-located with the receiver itself — not part of the outdoor ISS. Provides a barometer reading plus indoor temperature/humidity for wherever the receiver is installed. Shares the bus with the Core's onboard IP5306 (`0x75`) — no address conflict.
+
+| BME280 pin | ESP32 GPIO | Board label |
 |---|---|---|
 | VCC | 3.3 V | 3V3 |
 | GND | GND | GND |
-| SCK | GPIO 18 | 18 / SCK |
-| SI (MOSI) | GPIO 23 | 23 / MOSI |
-| SO (MISO) | GPIO 19 | 19 / MISO |
-| CS (CSN) | GPIO 5 | 5 / SS |
-| GDO0 | GPIO 4 | 4 |
-| GDO2 | — | not connected |
+| SCL | GPIO 22 | 22 (Grove Port A) |
+| SDA | GPIO 21 | 21 (Grove Port A) |
 
-> **Important:** GPIO 6–11 are reserved for internal flash on the WROOM-32 and must not be used.
+Address `0x76` (update the `address:` key in the yaml if a different breakout ties SDO to 3.3V for `0x77` instead).
 
-### Indoor sensor — GY-BME280 (barometer / indoor temperature / indoor humidity)
+### Display — built-in M5Stack Core LCD
 
-A BME280 breakout soldered directly to the ESP32, co-located with the receiver itself — not part of the outdoor ISS. Provides a barometer reading plus indoor temperature/humidity for wherever the receiver is installed.
+The Core's built-in 2" color LCD (`display: platform: mipi_spi`, `model: M5CORE`) replaces the previous build's separate I2C OLED — no extra wiring, it's part of the module. `cs_pin: 14`, `dc_pin: 27`, `reset_pin: 33`; backlight is a switchable GPIO (`pin: 32`, exposed as a "Backlight" switch, defaults `ALWAYS_ON`).
 
-### Wiring — GY-BME280 → ESP32-WROOM-32
+Unlike the old OLED's time-based auto-cycle, paging is now **button-driven**, using the Core's 3 physical buttons:
 
-| GY-BME280 pin | ESP32 GPIO | Board label |
+| Button | GPIO | Action |
 |---|---|---|
-| VCC | 3.3 V | 3V3 |
-| GND | GND | GND |
-| SCL | GPIO 22 | 22 |
-| SDA | GPIO 21 | 21 |
-| CSB | not connected | internal pull-up selects I2C mode |
-| SDO | GND | selects I2C address `0x76` (tie to 3.3V instead for `0x77`, and update the `address:` key in the yaml if changed) |
+| A (left) | 39 | Previous page (wraps) |
+| B (center) | 38 | Toggle backlight |
+| C (right) | 37 | Next page (wraps) |
 
-### Display — 0.98" OLED (SSD1306 driver, 128x64)
+Every page shares the same header — synced clock, title, and a WiFi-connectivity icon:
 
-Local at-a-glance display, co-located with the receiver. Shares the I2C bus with the BME280 — no extra wiring beyond power/SCL/SDA. Originally a 1.3" SH1106 (JMD1.3A) board; swapped after that unit was physically damaged. Same 128x64 resolution and wiring, just a different driver (`ssd1306_i2c`/`SSD1306 128x64` instead of `sh1106_i2c`/`SH1106 128x64`). This panel is also two-tone — the top 16 rows render yellow, the remaining 48 blue — even though it's still a single 1-bit monochrome framebuffer; the split is physical (a two-phosphor panel), not something ESPHome addresses directly, so it's used as a fixed on-screen "band" for a header.
+1. **Date & time** — synced clock, date, and the device's IP address
+2. **Temperature / Humidity** — temperature/humidity, feels-like, dew point, indoor temp/humidity
+3. **Wind** — wind speed/cardinal, gust, lull, Beaufort description
+4. **Rain** — daily rain total and rain rate
+5. **Pressure** — sea-level pressure, its trend, and station pressure
 
-| OLED pin | ESP32 GPIO | Board label |
-|---|---|---|
-| VCC | 3.3 V | 3V3 |
-| GND | GND | GND |
-| SCL | GPIO 22 | 22 (shared with BME280) |
-| SDA | GPIO 21 | 21 (shared with BME280) |
-
-> Address: the board silkscreen's `ADD_SELECT` 0x78/0x7A are 8-bit write addresses, i.e. 0x3C/0x3D in ESPHome's 7-bit notation. The yaml defaults to `0x3C`; if the display doesn't come up, check the boot log's I2C scan result (`i2c: scan: true`) and switch to `0x3D`.
-
-Auto-cycles through 5 pages every 7 s each (no touch controller on this board, so switching is time-based, not interactive). Every page shares the same header — its title inverted into the panel's yellow top strip (filled bar in `COLOR_ON`, text in `COLOR_OFF`):
-
-1. **Davis Receiver** — synced clock, date, and the device's IP address
-2. **Temp / Humidity** — temperature/humidity, feels-like, dew point
-3. **Rain** — daily rain total and rain rate
-4. **Pressure** — sea-level pressure, its trend, and station pressure
-5. **Wind** — wind speed/cardinal, gust, lull
-
-> See the `display: platform: ssd1306_i2c` lambda in `davis-vantage-receiver.yaml` to change what's shown.
+> See the `display: platform: mipi_spi` lambda in `davisnet-weatherlogger.yaml` to change what's shown.
 
 ### Davis Vantage Vue
 
@@ -112,11 +113,11 @@ Auto-cycles through 5 pages every 7 s each (no touch controller on this board, s
 10. **Sea-level pressure & trend** — sea-level pressure is recomputed on-device every time the BME280 reports a new station pressure (every 60s), using the same barometric formula as `tempest_datalogger.py`, so it tracks station pressure without lag. The `elevation_m`/`height_above_ground_m` substitutions at the top of the yaml feed the conversion — adjust them for your install. The trend (±1 mb Rising/Falling threshold, also matching `tempest_datalogger.py`) is sampled separately every 15 min and needs 3h of on-device history (12 samples, 15 min apart, tracked with no wall-clock dependency — see the `pressure_hist_*` globals). The history buffer is flash-persisted (`restore_value: yes`), so it's only unavailable for ~3h15m after the very first boot or a full erase-reflash, not after every routine reboot/OTA update. The trend description (`Rising`/`Steady`/`Falling`) is localized per the `language` substitution, same as Beaufort
 11. **Wet bulb, delta T, air density** — computed on-device alongside the other comfort metrics (step 7 above), same formulas as `tempest_datalogger.py`. Wet bulb uses a 50-iteration bisection solver and, like sea-level pressure, needs the BME280's station pressure — so it's only computed once a barometer reading is available
 12. **Publishing** — consolidated `observation` payload published on every packet using the latest known values for all fields
-13. **Local display** — the OLED (see [Hardware](#display--098-oled-ssd1306-driver-128x64)) redraws every 1s and auto-cycles through 5 pages (Davis Receiver, Temp/Humidity, Rain, Pressure, Wind) every 7s each, independent of MQTT/RF timing
+13. **Local display** — the built-in LCD (see [Display](#display--built-in-m5stack-core-lcd)) redraws every 1s and shows 5 pages (Date/Time, Temp/Humidity, Wind, Rain, Pressure), switched with the physical A/C buttons rather than auto-cycling, independent of MQTT/RF timing
 
 ### Localization
 
-The `language` substitution at the top of `davis-vantage-receiver.yaml` controls the language of three derived text fields: the Beaufort description (`wind_beaufort_description`), the pressure trend descriptions (`pressure_trend`/`sea_level_pressure_trend`), and the 16-point Wind Cardinal (e.g. `WSW` → `VSV` in Danish, using Ø/Nord/Syd/Vest compass points). Supported values: `"en"` (English, default) and `"da"` (Danish). The underlying numeric values (`wind_beaufort`, `pressure_trend_mb`, `wind_direction_deg`, etc.) are unaffected — only the human-readable text changes. To add another language, extend the lookup tables in the packet lambda (Beaufort, Wind Cardinal) and the 15-min interval lambda (pressure trend).
+The `language` substitution at the top of `davisnet-weatherlogger.yaml` controls the language of three derived text fields: the Beaufort description (`wind_beaufort_description`), the pressure trend descriptions (`pressure_trend`/`sea_level_pressure_trend`), and the 16-point Wind Cardinal (e.g. `WSW` → `VSV` in Danish, using Ø/Nord/Syd/Vest compass points). Supported values: `"en"` (English, default) and `"da"` (Danish). The underlying numeric values (`wind_beaufort`, `pressure_trend_mb`, `wind_direction_deg`, etc.) are unaffected — only the human-readable text changes. To add another language, extend the lookup tables in the packet lambda (Beaufort, Wind Cardinal) and the 15-min interval lambda (pressure trend).
 
 ---
 
@@ -130,7 +131,7 @@ All topics are under `weatherdatalogger/davis-<id>/` where `<id>` is the locked 
 | `.../rapid_wind` | Every packet | `wind_avg_ms`, `wind_direction_deg` |
 | `.../device_status` | Every packet | `rssi`, `lqi`, `battery_low` |
 
-The one exception is the daily rain correction control topic (`weatherdatalogger/davis-vantage-receiver/set_daily_rain`), which uses the device's static name instead of the dynamic `davis-<id>` prefix, since the transmitter ID auto-locks at runtime and isn't known ahead of time — see [Manual Daily Rain Correction](#manual-daily-rain-correction).
+The one exception is the daily rain correction control topic (`weatherdatalogger/davisnet-datalogger/set_daily_rain`), which uses the device's static name instead of the dynamic `davis-<id>` prefix, since the transmitter ID auto-locks at runtime and isn't known ahead of time — see [Manual Daily Rain Correction](#manual-daily-rain-correction).
 
 ### Example `observation` payload
 
@@ -201,11 +202,11 @@ All field names follow the project standard — descriptive snake_case with SI u
 
 `Daily Rain` and `Rain Rate` are computed standalone on-device from the ISS's own RF tip counter (packet type 14) — see [How it works](#how-it-works). No external station is required for normal operation.
 
-The MQTT topics below remain available as an **optional** manual/automated correction — e.g. to punch in the console's displayed value after a reflash/reboot that landed between tips (losing sync with the physical tip counter), or as a periodic cross-check if you happen to have an independent source like a Meteobridge. Both are fixed control topics (not the dynamic `weatherdatalogger/davis-<id>` observation prefix, since the transmitter ID auto-locks at runtime and isn't known at compile time) — see the `mqtt: on_message:` block in `davis-vantage-receiver.yaml`:
+The MQTT topics below remain available as an **optional** manual/automated correction — e.g. to punch in the console's displayed value after a reflash/reboot that landed between tips (losing sync with the physical tip counter), or as a periodic cross-check if you happen to have an independent source like a Meteobridge. Both are fixed control topics (not the dynamic `weatherdatalogger/davis-<id>` observation prefix, since the transmitter ID auto-locks at runtime and isn't known at compile time) — see the `mqtt: on_message:` block in `davisnet-weatherlogger.yaml`:
 
 ```bash
-mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_daily_rain -m "5.4"
-mosquitto_pub -h <broker> -t weatherdatalogger/davis-vantage-receiver/set_rain_rate -m "2.3"
+mosquitto_pub -h <broker> -t weatherdatalogger/davisnet-datalogger/set_daily_rain -m "5.4"
+mosquitto_pub -h <broker> -t weatherdatalogger/davisnet-datalogger/set_rain_rate -m "2.3"
 ```
 
 Or on the server, for the daily total, using the shared config for broker/credentials (installed by `deploy.sh` alongside its own script):
@@ -224,25 +225,33 @@ By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_I
 
 ### 0. Set elevation (optional)
 
-The `substitutions:` block at the top of `davis-vantage-receiver.yaml` has `elevation_m`/`height_above_ground_m`, used only for the Sea Level Pressure conversion. Defaults to `0`/`0` (station pressure = sea level pressure) if left unset — fine for testing, but adjust to your actual install for a meaningful reading.
+The `substitutions:` block at the top of `davisnet-weatherlogger.yaml` has `elevation_m`/`height_above_ground_m`, used only for the Sea Level Pressure conversion. Defaults to `0`/`0` (station pressure = sea level pressure) if left unset — fine for testing, but adjust to your actual install for a meaningful reading.
 
 The same block also has `language` (`"en"` or `"da"`), controlling the Beaufort and pressure trend description text — see [Localization](#localization).
 
-### 1. Create `secrets.yaml`
+### 1. Set the CC1101 module's DIP switches
+
+Before stacking the CC1101 module onto the Core, set its two DIP-switch blocks for a "Core" host — see the [RF module](#rf-module--m5stack-cc1101-module-e07-900m10s--ebyte-external-antenna) table above (CSN block #2 ON, GDO block #4 ON, all other switches OFF). Wrong switches show up as "CC1101 isn't receiving RF frames at all" — see [Debugging this file](../AGENT.md#debugging-this-file) in AGENT.md.
+
+### 2. Create `secrets.yaml`
 
 In the same directory as the YAML file (or your ESPHome config directory), create `secrets.yaml`:
 
 ```yaml
 wifi_ssid: "YourWiFiSSID"
 wifi_password: "YourWiFiPassword"
+fallback_ap_password: "YourFallbackAPPassword"
 mqtt_broker: "192.168.1.10"
 mqtt_username: "your_mqtt_user"
 mqtt_password: "your_mqtt_password"
-ha_api_key: "your_32_byte_base64_key"   # generate: openssl rand -base64 32
 ota_password: "your_ota_password"
+# api_encryption_key: "your_32_byte_base64_key"   # generate: openssl rand -base64 32
+# only needed if you uncomment `api:` in the yaml — see below
 ```
 
-### 2. Flash the firmware
+> Like the previous build, `api:` (native API, used for remote `esphome logs`/OTA) is **commented out by default** — uncomment it (and provide `api_encryption_key` above) only if you need remote logs/OTA over the native API. If you do, see [Home Assistant Integration](#home-assistant-integration) below for why you should still avoid adding this node a second time via HA's "ESPHome" integration UI.
+
+### 3. Flash the firmware
 
 Install the ESPHome CLI if not already installed:
 
@@ -253,21 +262,21 @@ pip install esphome
 Flash for the first time over USB:
 
 ```bash
-esphome run davis/davis-vantage-receiver.yaml
+esphome run davis/davisnet-weatherlogger.yaml
 ```
 
 Subsequent updates can be flashed over Wi-Fi (OTA):
 
 ```bash
-esphome run davis/davis-vantage-receiver.yaml
+esphome run davis/davisnet-weatherlogger.yaml
 ```
 
-### 3. Verify
+### 4. Verify
 
 Check ESPHome logs:
 
 ```bash
-esphome logs davis/davis-vantage-receiver.yaml
+esphome logs davis/davisnet-weatherlogger.yaml
 ```
 
 You should see `Auto-locked to station ID: X` on the first valid packet, then wind readings every ~2.5 s. Verify MQTT output:
@@ -280,9 +289,9 @@ mosquitto_sub -h <broker> -t "weatherdatalogger/davis-#" -v
 
 ## Home Assistant Integration
 
-The ESPHome firmware connects to HA via **MQTT discovery** (`mqtt: discovery: true`), grouping all entities under one "Davis Vantage Receiver" device — same as how the Tempest/AirLink Python services register their devices. The `api:` block in the YAML is commented out; it exists only for remote `esphome logs`/OTA over the native API if you choose to enable it. If you do, **do not** also add this node through Home Assistant's "ESPHome" integration UI, or entities would be duplicated (once via native API, once via MQTT discovery).
+The ESPHome firmware connects to HA via **MQTT discovery** (`mqtt: discovery: true`), grouping all entities under one "Davisnet Datalogger" device — same as how the Tempest/AirLink Python services register their devices. Unlike the previous build, the `api:` block in the YAML is **active by default** here (needed for the built-in display's remote logging convenience) — it still exists only for remote `esphome logs`/OTA over the native API. **Do not** also add this node through Home Assistant's "ESPHome" integration UI, or entities would be duplicated (once via native API, once via MQTT discovery).
 
-Entity names no longer repeat "Davis" (the device name already provides that context) — HA shows the short name on the device's own page and the full "Davis Vantage Receiver <name>" combination in out-of-context views like the global entity picker:
+Entity names no longer repeat "Davis" (the device name already provides that context) — HA shows the short name on the device's own page and the full "Davisnet Datalogger <name>" combination in out-of-context views like the global entity picker:
 
 | Entity | Type | Unit | Notes |
 |---|---|---|---|
@@ -315,7 +324,10 @@ Entity names no longer repeat "Davis" (the device name already provides that con
 | Sea Level Pressure Trend Description | Text sensor | e.g. `Falling` | Same thresholding, for Sea Level Pressure |
 | Indoor Temperature | Sensor | °C | BME280, local to the receiver |
 | Indoor Humidity | Sensor | % | BME280, local to the receiver |
-| Battery Low | Binary sensor | on/off | |
+| Battery Low | Binary sensor | on/off | Davis transmitter battery, not the M5Stack's own power |
+| Charging | Binary sensor | on/off | M5Stack Core's onboard IP5306, polled over I2C every 30s — reflects USB power connected, not a fuel gauge |
+| Backlight | Switch | on/off | Built-in LCD backlight; also toggled by the physical B button — defaults `ALWAYS_ON` |
+| Speaker Test Beep | Button | — | Plays a short beep on the Core's onboard speaker (PWM/`rtttl:`), useful to confirm the module is alive |
 | RSSI | Sensor (diagnostic) | dBm | |
 | LQI | Sensor (diagnostic) | — | |
 | Restart | Button (diagnostic) | — | Also available on the local web UI (`http://<device-ip>/`, port 80) |

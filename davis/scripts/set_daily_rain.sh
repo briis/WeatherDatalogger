@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # set_daily_rain.sh — Manually correct the Davis receiver's daily rain total
 # by publishing to its MQTT correction topic (see the `mqtt: on_message:`
-# block in davis-vantage-receiver.yaml). Useful after a reflash/reboot that
+# block in davisnet-weatherlogger.yaml). Useful after a reflash/reboot that
 # landed between tips and lost sync with the physical tip counter, or if the
 # running total has simply drifted from the console's own reading — read the
 # correct value off the console and pass it here.
@@ -19,11 +19,13 @@
 set -euo pipefail
 
 CONFIG_INI="${CONFIG_INI:-/opt/weatherdatalogger/config.ini}"
-# Must match the `name:` substitution in davis-vantage-receiver.yaml — the
+# Must match the `device:` substitution in davisnet-weatherlogger.yaml — the
 # control topic uses the device's static name, not the dynamic
 # weatherdatalogger/davis-<id> observation prefix (the transmitter ID
-# auto-locks at runtime and isn't known ahead of time).
-DEVICE_TOPIC_SEGMENT="davis-vantage-receiver"
+# auto-locks at runtime and isn't known ahead of time). If your unit still
+# runs the superseded davis-vantage-receiver.yaml, change this back to
+# "davis-vantage-receiver".
+DEVICE_TOPIC_SEGMENT="davisnet-datalogger"
 FIRMWARE_MAX_MM=500 # must match the clamp in the yaml's on_message handler
 
 if [[ $# -ne 1 ]]; then
@@ -91,4 +93,4 @@ ARGS=(-h "$MQTT_BROKER" -p "$MQTT_PORT" -t "$TOPIC" -m "$VALUE")
 
 echo "==> Publishing daily rain correction: ${VALUE} mm -> ${TOPIC} (broker ${MQTT_BROKER}:${MQTT_PORT})"
 mosquitto_pub "${ARGS[@]}"
-echo "==> Sent. Check 'esphome logs davis/davis-vantage-receiver.yaml' or the Home Assistant entity to confirm it was accepted."
+echo "==> Sent. Check 'esphome logs davis/davisnet-weatherlogger.yaml' or the Home Assistant entity to confirm it was accepted."

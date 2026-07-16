@@ -1,0 +1,1185 @@
+substitutions:
+  name: "Davisnet Datalogger"
+  device: davisnet-datalogger
+  version: 0.1.0
+  created_by: "Bjarne Riis"
+
+  # Used only for the sea-level pressure conversion below — adjust to the
+  # receiver's actual install (barometer height above ground can normally
+  # be left at 0 if unsure; elevation matters far more).
+  elevation_m: "12"
+  height_above_ground_m: "0.9"
+
+  # Language for derived text descriptions (Beaufort wind scale, pressure
+  # trend). Supported: "en" (English), "da" (Danish).
+  language: "da"
+
+esphome:
+  name: "${device}"
+  friendly_name: "${name}"
+  on_boot:
+    then:
+      - lambda: |-
+          // Rain entities (davis_rain / davis_rain_rate) are computed
+          // entirely from the ISS's own RF tip counter (see ptype==14
+          // below) — standalone, no external station required.
+          // set_daily_rain / set_rain_rate (mqtt: on_message: below)
+          // remain available as an OPTIONAL manual correction.
+
+# M5Stack Basic Core V2.6 — RF Module CC1101 stacked via M-Bus.
+esp32:
+  board: m5stack-core-esp32-16M
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      minimum_chip_revision: "3.0"
+      sram1_as_iram: true
+
+logger:
+  level: INFO
+
+# api: kept solely for remote `esphome logs`/OTA — do NOT also add this
+# node via Home Assistant's "ESPHome" integration UI, or entities would be
+# duplicated (once via native API, once via MQTT discovery below).
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${name} Hotspot
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+# Web UI for diagnostics (optional — can be removed)
+web_server:
+  port: 80
+
+# ─────────────────────────────────────────────────────────────
+# Time — SNTP (not Home Assistant), so this device's data path
+# stays independent of whether it's ever added via HA's ESPHome
+# integration — see the api: comment above. Used both for the 24h
+# clock in the display header and for the daily rain reset.
+# ─────────────────────────────────────────────────────────────
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Copenhagen  # adjust if the receiver isn't in Denmark
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - lambda: |-
+              // Daily rain reset at local midnight, mirroring the console's
+              // own reset behavior.
+              id(rain_total_mm) = 0.0f;
+              id(davis_rain).publish_state(0.0f);
+
+# ─────────────────────────────────────────────────────────────
+# MQTT — set credentials in secrets.yaml
+# discovery: true — publishes ESPHome's built-in HA MQTT discovery config,
+# grouping all sensors under one device in HA. api: above is kept solely
+# for remote logs/OTA — do NOT also add this node via HA's ESPHome
+# integration UI, or entities would be duplicated.
+# ─────────────────────────────────────────────────────────────
+mqtt:
+  id: mqtt_client
+  broker: !secret mqtt_broker
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  client_id: davisnet-datalogger
+  discovery: true
+  skip_cert_cn_check: true
+  reboot_timeout: 0s
+  # OPTIONAL manual correction for the daily rain total and rain rate — NOT
+  # required for normal operation, since davis_rain/davis_rain_rate are
+  # computed standalone from the RF tip counter (ptype==14 below).
+  #   mosquitto_pub -h <broker> -t weatherdatalogger/davisnet-datalogger/set_daily_rain -m "5.4"
+  #   mosquitto_pub -h <broker> -t weatherdatalogger/davisnet-datalogger/set_rain_rate -m "2.3"
+  on_message:
+    - topic: weatherdatalogger/davisnet-datalogger/set_daily_rain
+      then:
+        - lambda: |-
+            float new_total = atof(x.c_str());
+            if (new_total >= 0.0f && new_total < 500.0f) {
+              id(rain_total_mm) = new_total;
+              id(davis_rain).publish_state(new_total);
+              ESP_LOGI("davis", "Daily rain manually corrected to %.1f mm via MQTT", new_total);
+            } else {
+              ESP_LOGW("davis", "Ignored implausible daily-rain correction: %s", x.c_str());
+            }
+    - topic: weatherdatalogger/davisnet-datalogger/set_rain_rate
+      then:
+        - lambda: |-
+            float new_rate = atof(x.c_str());
+            if (new_rate >= 0.0f && new_rate < 500.0f) {
+              id(davis_rain_rate).publish_state(new_rate);
+              id(rain_last_tip_ms) = millis();
+              id(rain_tip_seen) = true;
+              ESP_LOGI("davis", "Rain rate corrected to %.1f mm/h via MQTT", new_rate);
+            } else {
+              ESP_LOGW("davis", "Ignored implausible rain-rate correction: %s", x.c_str());
+            }
+
+# ─────────────────────────────────────────────────────────────
+# WiFi signal — used for the connectivity icon in the display
+# header. NAN state (before first WiFi connection) is treated as
+# "disconnected" in the display lambda below.
+# ─────────────────────────────────────────────────────────────
+color:
+  - id: color_red
+    red: 100%
+    green: 3%
+    blue: 5%
+  - id: color_green
+    red: 10%
+    green: 90%
+    blue: 20%
+  - id: color_amber
+    hex: FFC109
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_roboto_medium22
+    size: 22
+    glyphs: '!"%()+,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz/³µØÆÅøæå'
+  - file: "gfonts://Roboto"
+    id: font_header
+    size: 18
+    glyphs: '!"%()+,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz/³µ'
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+    glyphs: '!"%()+,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz/³µØÆÅøæå'
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: font_wifi_icon
+    size: 20
+    glyphs: ["\U000F05A9", "\U000F05AA"]
+  - file: "gfonts://Roboto"
+    id: font_page_label
+    size: 36
+    glyphs: '0123456789Side '
+
+# ─────────────────────────────────────────────────────────────
+# Global state variables
+# ─────────────────────────────────────────────────────────────
+globals:
+  # Display page navigation — M5_BtnA (left) goes back a page,
+  # M5_BtnC (right) goes forward. Wraps around at both ends.
+  - id: current_page
+    type: int
+    initial_value: '0'
+  - id: total_pages
+    type: int
+    initial_value: '5'
+
+  - id: rain_count_prev
+    type: int
+    restore_value: yes
+    initial_value: '-1'
+  - id: rain_total_mm
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: rain_last_tip_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: rain_tip_seen
+    type: bool
+    initial_value: 'false'
+  - id: raw_wind_dir
+    type: float
+    initial_value: '0.0'
+  - id: wind_lull_min_ms
+    type: float
+    initial_value: '999.0'
+  - id: wind_gust_max_ms
+    type: float
+    initial_value: '-1.0'
+  - id: known_unit_id
+    type: int
+    # -1 = auto-lock on first valid station.
+    initial_value: '-1'
+  - id: pressure_hist_stn
+    type: float[12]
+    restore_value: yes
+    initial_value: '{0,0,0,0,0,0,0,0,0,0,0,0}'
+  - id: pressure_hist_slp
+    type: float[12]
+    restore_value: yes
+    initial_value: '{0,0,0,0,0,0,0,0,0,0,0,0}'
+  - id: pressure_hist_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+# ─────────────────────────────────────────────────────────────
+# SPI bus — fixed M-Bus pins shared by CC1101 and the MIPI display.
+# ─────────────────────────────────────────────────────────────
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+# ─────────────────────────────────────────────────────────────
+# CC1101 — M5Stack RF Module (E07-900M10S, genuine EBYTE chip).
+# Stacked onto the Core via M-Bus. SCK/MISO/MOSI are fixed M-Bus
+# pins (match the spi: block above). CSN and GDO0 are selected via
+# the module's onboard DIP switches, set as follows for "Core":
+#
+#   CSN block  (top,    4 switches): #2 ON  → GPIO15
+#   GDO block  (bottom, 6 switches): #4 ON  → GPIO35 (GDO0)
+#   All other switches in both blocks: OFF
+#   (GDO2 unused — not required for Davis packet reception)
+#
+# Reception CONFIRMED via CRC-validated Davis packets (2026-07-16) —
+# types 3, 5, 8, 10, 14 all seen with correct unit_id. Full decode
+# logic below is carried over verbatim from davis-vantage-receiver.yaml.
+# ─────────────────────────────────────────────────────────────
+cc1101:
+  id: my_cc1101
+  cs_pin:
+    number: GPIO15
+    ignore_strapping_warning: true
+  gdo0_pin: GPIO35
+  frequency: 868.35MHz
+  modulation_type: GFSK
+  symbol_rate: 19200
+  fsk_deviation: 9.5kHz
+  filter_bandwidth: 650kHz
+  magn_target: 33dB
+  packet_mode: true
+  packet_length: 8
+  sync_mode: 16/16
+  sync1: 0xCB
+  sync0: 0x89
+  crc_enable: false
+  whitening: false
+  num_preamble: 2
+
+  on_packet:
+    then:
+      - lambda: |-
+          ESP_LOGD("davis", "Raw packet received: %d bytes", x.size());
+          if (x.size() < 8) return;
+
+          // ── 1. Bit-reversal (LSB→MSB) ──────────────────────────────
+          std::vector<uint8_t> d(8);
+          for (int i = 0; i < 8; i++) {
+            uint8_t b = x[i];
+            b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+            b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+            b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+            d[i] = b;
+          }
+
+          // ── 2. CRC-16/CCITT validation with bit-shift fallback ──────
+          bool crc_ok = false;
+          for (int shift = 0; shift < 3; shift++) {
+            uint16_t crc = 0;
+            for (int i = 0; i < 6; i++) {
+              crc ^= (uint16_t)d[i] << 8;
+              for (int j = 0; j < 8; j++) {
+                crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+              }
+            }
+            uint16_t recv_crc_1 = ((uint16_t)d[6] << 8) | d[7];
+            uint16_t recv_crc_2 = ((uint16_t)d[7] << 8) | d[6];
+            if (crc == recv_crc_1 || crc == recv_crc_2) {
+              crc_ok = true;
+              break;
+            }
+            uint8_t carry = 0;
+            for (int i = 0; i < 8; i++) {
+              uint8_t next_carry = (d[i] & 0x01) << 7;
+              d[i] = (d[i] >> 1) | carry;
+              carry = next_carry;
+            }
+          }
+          if (!crc_ok) return;
+
+          uint8_t ptype = d[0] >> 4;
+
+          // ── 3. Station-ID lock ──────────────────────────────────────
+          uint8_t unit_id = d[0] & 0x07;
+          bool battery_low = (d[0] & 0x08) != 0;
+
+          ESP_LOGI("davis", "Packet type: %d (0x%X), unit_id: %d", ptype, ptype, unit_id);
+
+          if (id(known_unit_id) < 0) {
+            id(known_unit_id) = unit_id;
+            ESP_LOGI("davis", "Auto-locked to station ID: %d", unit_id);
+          } else if (unit_id != id(known_unit_id)) {
+            return; // Ignore neighbouring station
+          }
+
+          // Build base topic: weatherdatalogger/davis-<id>
+          char base_topic[48];
+          snprintf(base_topic, sizeof(base_topic),
+            "weatherdatalogger/davis-%d", (int)id(known_unit_id));
+
+          // ── 4. Device status ────────────────────────────────────────
+          id(davis_battery_low).publish_state(battery_low);
+          id(davis_rssi).publish_state(rssi);
+          id(davis_lqi).publish_state(lqi);
+
+          char topic[80];
+          char buf[1024];
+          snprintf(topic, sizeof(topic), "%s/device_status", base_topic);
+          snprintf(buf, sizeof(buf),
+            "{\"rssi\":%.1f,\"lqi\":%d,\"battery_low\":%s}",
+            (float)rssi, (int)lqi, battery_low ? "true" : "false");
+          id(mqtt_client).publish(topic, buf);
+
+          // ── 5. Wind (present in every packet) ──────────────────────
+          float wind_avg_ms  = d[1] * 0.44704f;
+          float wind_dir_deg = d[2] * (360.0f / 255.0f);
+
+          if (wind_avg_ms >= 0.0f && wind_avg_ms < 90.0f) {
+            id(davis_wind_speed).publish_state(wind_avg_ms);
+            if (std::isnan(id(davis_windgust).state)) {
+              id(davis_windgust).publish_state(wind_avg_ms);
+            }
+            if (wind_avg_ms < id(wind_lull_min_ms)) {
+              id(wind_lull_min_ms) = wind_avg_ms;
+            }
+            if (wind_avg_ms > id(wind_gust_max_ms)) {
+              id(wind_gust_max_ms) = wind_avg_ms;
+            }
+            snprintf(topic, sizeof(topic), "%s/rapid_wind", base_topic);
+            snprintf(buf, sizeof(buf),
+              "{\"wind_avg_ms\":%.2f,\"wind_direction_deg\":%.1f}",
+              wind_avg_ms, wind_dir_deg);
+            id(mqtt_client).publish(topic, buf);
+          }
+          if (wind_dir_deg >= 0.0f && wind_dir_deg <= 360.0f) {
+            id(raw_wind_dir) = wind_dir_deg;
+            id(davis_wind_dir).publish_state(wind_dir_deg);
+            id(davis_wind_cardinal).update();
+          }
+
+          if (!std::isnan(id(davis_wind_speed).state)) {
+            float v = id(davis_wind_speed).state;
+            uint8_t bft;
+            if      (v <  0.5f) bft = 0;
+            else if (v <  1.6f) bft = 1;
+            else if (v <  3.4f) bft = 2;
+            else if (v <  5.5f) bft = 3;
+            else if (v <  8.0f) bft = 4;
+            else if (v < 10.8f) bft = 5;
+            else if (v < 13.9f) bft = 6;
+            else if (v < 17.2f) bft = 7;
+            else if (v < 20.8f) bft = 8;
+            else if (v < 24.5f) bft = 9;
+            else if (v < 28.5f) bft = 10;
+            else if (v < 32.7f) bft = 11;
+            else                bft = 12;
+
+            static const char* const beaufort_en[] = {
+              "Calm", "Light air", "Light breeze", "Gentle breeze",
+              "Moderate breeze", "Fresh breeze", "Strong breeze",
+              "Near gale", "Gale", "Strong gale", "Storm", "Violent storm",
+              "Hurricane"
+            };
+            static const char* const beaufort_da[] = {
+              "Stille", "Næsten stille", "Svag vind", "Let vind",
+              "Jævn vind", "Frisk vind", "Hård vind", "Stiv kuling",
+              "Hård kuling", "Stormende kuling", "Storm", "Voldsom storm",
+              "Orkan"
+            };
+            bool danish = (std::string("${language}") == "da");
+            id(davis_beaufort).publish_state(bft);
+            id(davis_beaufort_desc).publish_state(danish ? beaufort_da[bft] : beaufort_en[bft]);
+          }
+
+          // ── 6. Packet-type-specific data ────────────────────────────
+          if (ptype == 8) {
+            uint16_t raw = ((uint16_t)d[3] << 8) | d[4];
+            float temp_c = (raw / 160.0f - 32.0f) * 5.0f / 9.0f;
+            if (temp_c > -30.0f && temp_c < 60.0f) {
+              id(davis_temp).publish_state(temp_c);
+              ESP_LOGI("davis", "Temperature: %.1f°C", temp_c);
+            }
+
+          } else if (ptype == 9) {
+            float gust_ms = d[3] * 0.44704f;
+            if (gust_ms >= 0.0f && gust_ms < 90.0f) {
+              id(davis_windgust).publish_state(gust_ms);
+            }
+
+          } else if (ptype == 10) {
+            uint16_t raw = (((uint16_t)(d[4] >> 4) & 0x03) << 8) | d[3];
+            float hum = raw / 10.0f;
+            if (hum > 0.0f && hum <= 100.0f) {
+              id(davis_hum).publish_state(hum);
+              ESP_LOGI("davis", "Humidity: %.0f%%", hum);
+            }
+
+          } else if (ptype == 3) {
+            if (d[3] == 0xFF) {
+              ESP_LOGI("davis", "UV: no sensor attached (raw=0xFF)");
+            } else {
+              float uv = d[3] / 10.0f;
+              if (uv >= 0.0f && uv < 20.0f) {
+                id(davis_uv_index).publish_state(uv);
+                ESP_LOGI("davis", "UV Index: %.1f", uv);
+              }
+            }
+
+          } else if (ptype == 5) {
+            // No solar sensor fitted on this ISS — publishing intentionally
+            // disabled (RF noise made the "no sensor" sentinel unreliable
+            // on this 10-bit field), leaving the entity as "Unavailable".
+            uint16_t raw = ((uint16_t)d[3] << 2) | (d[4] >> 6);
+            ESP_LOGD("davis", "Solar radiation raw=%u (publishing disabled — no sensor fitted)", raw);
+
+          } else if (ptype == 14) {
+            int tips = ((int)d[3] + (((int)d[4] >> 7) << 8)) & 0x7F;
+
+            if (id(rain_count_prev) >= 0) {
+              int delta = tips - id(rain_count_prev);
+              if (delta < 0) delta += 128;
+
+              if (delta > 0 && delta < 60) {
+                if (delta >= 20) {
+                  ESP_LOGW("davis", "Large rain tip delta accepted: %d tips (%.1f mm)",
+                    delta, delta * 0.2f);
+                }
+                id(rain_total_mm) += delta * 0.2f;
+                id(davis_rain).publish_state(id(rain_total_mm));
+
+                uint32_t now_ms = millis();
+                if (id(rain_tip_seen)) {
+                  uint32_t elapsed_ms = now_ms - id(rain_last_tip_ms);
+                  if (elapsed_ms > 0) {
+                    float rate_mmh = (delta * 0.2f / (float)elapsed_ms) * 3600000.0f;
+                    if (rate_mmh >= 0.0f && rate_mmh < 500.0f) {
+                      id(davis_rain_rate).publish_state(rate_mmh);
+                    }
+                  }
+                }
+                id(rain_last_tip_ms) = now_ms;
+                id(rain_tip_seen) = true;
+              } else if (delta >= 60) {
+                ESP_LOGW("davis", "Ignored implausible rain tip delta: %d tips since last packet", delta);
+              }
+            }
+            id(rain_count_prev) = tips;
+
+          }
+
+          // ── 7. Comfort metrics (same formulas as tempest_datalogger.py) ──
+          float t_c = id(davis_temp).state;
+          float rh  = id(davis_hum).state;
+
+          if (!std::isnan(t_c) && !std::isnan(rh)) {
+            float t_f = t_c * 9.0f / 5.0f + 32.0f;
+            float v_mph = wind_avg_ms * 2.23694f;
+
+            float gamma = std::log(rh / 100.0f) + 17.625f * t_c / (243.04f + t_c);
+            id(davis_dew_point).publish_state(243.04f * gamma / (17.625f - gamma));
+
+            id(davis_vapor_pressure).publish_state(
+              (rh / 100.0f) * 6.112f * std::exp(17.67f * t_c / (t_c + 243.5f)));
+
+            float heat_index_c = t_c;
+            if (t_f >= 80.0f && rh >= 40.0f) {
+              float hi_f = -42.379f + 2.04901523f * t_f + 10.14333127f * rh
+                - 0.22475541f * t_f * rh - 6.83783e-3f * t_f * t_f
+                - 5.481717e-2f * rh * rh + 1.22874e-3f * t_f * t_f * rh
+                + 8.5282e-4f * t_f * rh * rh - 1.99e-6f * t_f * t_f * rh * rh;
+              heat_index_c = (hi_f - 32.0f) * 5.0f / 9.0f;
+            }
+            id(davis_heat_index).publish_state(heat_index_c);
+
+            float wind_chill_c = t_c;
+            if (t_f <= 50.0f && v_mph > 3.0f) {
+              float wc_f = 35.74f + 0.6215f * t_f - 35.75f * std::pow(v_mph, 0.16f)
+                + 0.4275f * t_f * std::pow(v_mph, 0.16f);
+              wind_chill_c = (wc_f - 32.0f) * 5.0f / 9.0f;
+            }
+            id(davis_wind_chill).publish_state(wind_chill_c);
+
+            if (t_f >= 80.0f && rh >= 40.0f) {
+              id(davis_feels_like).publish_state(heat_index_c);
+            } else if (t_f <= 50.0f && v_mph > 3.0f) {
+              id(davis_feels_like).publish_state(wind_chill_c);
+            } else {
+              id(davis_feels_like).publish_state(t_c);
+            }
+
+            if (!std::isnan(id(davis_baro).state)) {
+              float p_mb = id(davis_baro).state;
+              float pv = (rh / 100.0f) * 6.112f * std::exp(17.67f * t_c / (t_c + 243.5f));
+              float lo = -50.0f, hi = t_c;
+              for (int i = 0; i < 50; i++) {
+                float mid = (lo + hi) / 2.0f;
+                float pv_wb = 6.112f * std::exp(17.67f * mid / (mid + 243.5f));
+                float residual = pv_wb - p_mb * (t_c - mid) * 0.00066f * (1.0f + 0.00115f * mid) - pv;
+                if (residual < 0.0f) lo = mid; else hi = mid;
+              }
+              float wet_bulb_c = (lo + hi) / 2.0f;
+              id(davis_wet_bulb).publish_state(wet_bulb_c);
+              id(davis_delta_t).publish_state(t_c - wet_bulb_c);
+              id(davis_air_density).publish_state(p_mb * 100.0f / (287.058f * (t_c + 273.15f)));
+            }
+          }
+
+          // ── 8. Consolidated observation ─────────────────────────────
+          snprintf(topic, sizeof(topic), "%s/observation", base_topic);
+
+          int pos = snprintf(buf, sizeof(buf),
+            "{\"wind_avg_ms\":%.2f,\"wind_direction_deg\":%.1f",
+            wind_avg_ms, wind_dir_deg);
+
+          if (!std::isnan(id(davis_windgust).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_gust_ms\":%.2f", id(davis_windgust).state);
+
+          if (!std::isnan(id(davis_temp).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"air_temperature_c\":%.1f", id(davis_temp).state);
+
+          if (!std::isnan(id(davis_hum).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"relative_humidity_pct\":%.1f", id(davis_hum).state);
+
+          pos += snprintf(buf + pos, sizeof(buf) - pos,
+            ",\"rain_accumulation_mm\":%.1f", id(rain_total_mm));
+
+          if (!std::isnan(id(davis_rain_rate).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"rain_rate_mmh\":%.1f", id(davis_rain_rate).state);
+
+          if (!std::isnan(id(davis_wind_lull).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_lull_ms\":%.2f", id(davis_wind_lull).state);
+
+          if (!std::isnan(id(davis_beaufort).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_beaufort\":%.0f", id(davis_beaufort).state);
+
+          if (id(davis_beaufort_desc).has_state())
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_beaufort_description\":\"%s\"", id(davis_beaufort_desc).state.c_str());
+
+          if (!std::isnan(id(davis_dew_point).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"dew_point_c\":%.1f", id(davis_dew_point).state);
+
+          if (!std::isnan(id(davis_vapor_pressure).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"vapor_pressure_mb\":%.2f", id(davis_vapor_pressure).state);
+
+          if (!std::isnan(id(davis_heat_index).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"heat_index_c\":%.1f", id(davis_heat_index).state);
+
+          if (!std::isnan(id(davis_wind_chill).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wind_chill_c\":%.1f", id(davis_wind_chill).state);
+
+          if (!std::isnan(id(davis_feels_like).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"feels_like_c\":%.1f", id(davis_feels_like).state);
+
+          if (!std::isnan(id(davis_uv_index).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"uv_index\":%.1f", id(davis_uv_index).state);
+
+          if (!std::isnan(id(davis_solar_radiation).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"solar_radiation_wm2\":%.0f", id(davis_solar_radiation).state);
+
+          if (!std::isnan(id(davis_baro).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"station_pressure_mb\":%.1f", id(davis_baro).state);
+
+          if (!std::isnan(id(baro_temp).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"indoor_temperature_c\":%.1f", id(baro_temp).state);
+
+          if (!std::isnan(id(baro_hum).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"indoor_humidity_pct\":%.0f", id(baro_hum).state);
+
+          if (!std::isnan(id(davis_wet_bulb).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"wet_bulb_c\":%.1f", id(davis_wet_bulb).state);
+
+          if (!std::isnan(id(davis_delta_t).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"delta_t_c\":%.1f", id(davis_delta_t).state);
+
+          if (!std::isnan(id(davis_air_density).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"air_density_kgm3\":%.3f", id(davis_air_density).state);
+
+          if (!std::isnan(id(davis_slp).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"sea_level_pressure_mb\":%.1f", id(davis_slp).state);
+
+          if (!std::isnan(id(davis_pressure_trend_mb).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"pressure_trend_mb\":%.1f", id(davis_pressure_trend_mb).state);
+
+          if (id(davis_pressure_trend_desc).has_state())
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"pressure_trend\":\"%s\"", id(davis_pressure_trend_desc).state.c_str());
+
+          if (!std::isnan(id(davis_slp_trend_mb).state))
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"sea_level_pressure_trend_mb\":%.1f", id(davis_slp_trend_mb).state);
+
+          if (id(davis_slp_trend_desc).has_state())
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              ",\"sea_level_pressure_trend\":\"%s\"", id(davis_slp_trend_desc).state.c_str());
+
+          snprintf(buf + pos, sizeof(buf) - pos,
+            ",\"battery_low\":%s}", battery_low ? "true" : "false");
+
+          id(mqtt_client).publish(topic, buf);
+
+# ─────────────────────────────────────────────────────────────
+# I2C bus — shared by the IP5306 (battery, 0x75) and BME280
+# (barometer, 0x76). No address conflict.
+# ─────────────────────────────────────────────────────────────
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  id: bus_a
+  scan: true
+
+# ─────────────────────────────────────────────────────────────
+# Periodic tasks: IP5306 charging poll (30s), 3h pressure trend
+# (15min), and wind-lull/gust/rain-rate staleness handling (60s).
+# ─────────────────────────────────────────────────────────────
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          // CONFIRMED via empirical USB plug/unplug test (2026-07-14):
+          // reg 0x71 goes cleanly 0x70 → 0x00 when USB is disconnected.
+          uint8_t reg71 = 0x71;
+          uint8_t data71 = 0;
+          id(bus_a).write(0x75, &reg71, 1, true);
+          id(bus_a).read(0x75, &data71, 1);
+          id(m5_charging).publish_state(data71 != 0);
+
+  - interval: 15min
+    then:
+      - lambda: |-
+          if (!std::isnan(id(davis_baro).state) && !std::isnan(id(davis_slp).state)) {
+            float p_sta = id(davis_baro).state;
+            float p_slp = id(davis_slp).state;
+
+            if (id(pressure_hist_count) >= 12) {
+              float stn_delta = p_sta - id(pressure_hist_stn)[0];
+              float slp_delta = p_slp - id(pressure_hist_slp)[0];
+              id(davis_pressure_trend_mb).publish_state(stn_delta);
+              id(davis_slp_trend_mb).publish_state(slp_delta);
+
+              bool danish = (std::string("${language}") == "da");
+              auto trend_desc = [danish](float delta) -> std::string {
+                if (delta <= -1.0f) return danish ? "Faldende" : "Falling";
+                if (delta >=  1.0f) return danish ? "Stigende" : "Rising";
+                return danish ? "Stabil" : "Steady";
+              };
+              id(davis_pressure_trend_desc).publish_state(trend_desc(stn_delta));
+              id(davis_slp_trend_desc).publish_state(trend_desc(slp_delta));
+            }
+
+            for (int i = 0; i < 11; i++) {
+              id(pressure_hist_stn)[i] = id(pressure_hist_stn)[i + 1];
+              id(pressure_hist_slp)[i] = id(pressure_hist_slp)[i + 1];
+            }
+            id(pressure_hist_stn)[11] = p_sta;
+            id(pressure_hist_slp)[11] = p_slp;
+            if (id(pressure_hist_count) < 12) id(pressure_hist_count) += 1;
+          }
+
+  - interval: 60s
+    then:
+      - lambda: |-
+          if (id(rain_tip_seen) && (millis() - id(rain_last_tip_ms) > 300000UL)) {
+            id(davis_rain_rate).publish_state(0.0f);
+            id(rain_tip_seen) = false;
+          }
+
+          if (id(wind_lull_min_ms) < 900.0f) {
+            id(davis_wind_lull).publish_state(id(wind_lull_min_ms));
+          }
+          id(wind_lull_min_ms) = 999.0f;
+
+          if (id(wind_gust_max_ms) >= 0.0f) {
+            id(davis_windgust).publish_state(id(wind_gust_max_ms));
+          }
+          id(wind_gust_max_ms) = -1.0f;
+
+# ─────────────────────────────────────────────────────────────
+# MIPI_SPI Display Configuration — Model: M5CORE
+#
+# Header (unchanged): time / title / WiFi icon.
+# Page content: 5 rotating pages of live Davis data, switched via
+# M5_BtnA (back) / M5_BtnC (forward) — see binary_sensor section.
+# ─────────────────────────────────────────────────────────────
+display:
+  - platform: mipi_spi
+    id: m5stack_display
+    model: M5CORE
+    cs_pin: 14
+    dc_pin: 27
+    reset_pin: 33
+    rotation: 0
+    invert_colors: true
+    lambda: |-
+      // ── Header bar ──────────────────────────────────────────────
+      it.horizontal_line(0, 28, it.get_width());
+
+      auto now = id(sntp_time).now();
+      if (now.is_valid()) {
+        it.strftime(4, 4, id(font_header), id(color_amber), "%H:%M", now);
+      } else {
+        it.print(4, 4, id(font_header), "--:--");
+      }
+
+      it.printf(it.get_width() / 2, 4, id(font_header), TextAlign::TOP_CENTER,
+        "Davisnet Weatherlogger");
+
+      float rssi = id(wifi_rssi).state;
+      if (std::isnan(rssi)) {
+        it.print(it.get_width() - 4, 2, id(font_wifi_icon), id(color_red),
+          TextAlign::TOP_RIGHT, "\U000F05AA");
+      } else {
+        it.print(it.get_width() - 4, 2, id(font_wifi_icon), id(color_green),
+          TextAlign::TOP_RIGHT, "\U000F05A9");
+      }
+
+      // ── Page content ─────────────────────────────────────────────
+      int y0 = 40;
+
+      switch (id(current_page)) {
+        case 0:
+          // ── Page 1: Date & time ───────────────────────────────────
+          it.print(10, y0, id(font_small), "Dato / Klokkeslæt");
+          if (now.is_valid()) {
+            it.strftime(10, y0 + 24, id(font_roboto_medium22), "%H:%M:%S", now);
+            it.strftime(10, y0 + 56, id(font_small), "%A %d-%m-%Y", now);
+          } else {
+            it.print(10, y0 + 24, id(font_small), "Tid ikke synkroniseret endnu");
+          }
+          it.printf(10, y0 + 84, id(font_small), "IP: %s",
+            id(davis_ip_address).state.c_str());
+          break;
+
+        case 1:
+          // ── Page 2: Temperature & humidity ────────────────────────
+          it.print(10, y0, id(font_small), "Temperatur / Fugtighed");
+          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.1f°C   %.0f%%",
+            id(davis_temp).state, id(davis_hum).state);
+          it.printf(10, y0 + 56, id(font_small), "Føles som: %.1f°C",
+            id(davis_feels_like).state);
+          it.printf(10, y0 + 76, id(font_small), "Dugpunkt: %.1f°C",
+            id(davis_dew_point).state);
+          it.printf(10, y0 + 96, id(font_small), "Inde: %.1f°C  %.0f%%",
+            id(baro_temp).state, id(baro_hum).state);
+          break;
+
+        case 2:
+          // ── Page 3: Wind ───────────────────────────────────────────
+          it.print(10, y0, id(font_small), "Vind");
+          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.1f m/s %s",
+            id(davis_wind_speed).state, id(davis_wind_cardinal).state.c_str());
+          it.printf(10, y0 + 56, id(font_small), "Vindstød: %.1f m/s",
+            id(davis_windgust).state);
+          it.printf(10, y0 + 76, id(font_small), "Vindstille: %.1f m/s",
+            id(davis_wind_lull).state);
+          it.printf(10, y0 + 96, id(font_small), "%s (%.0f)",
+            id(davis_beaufort_desc).state.c_str(), id(davis_beaufort).state);
+          break;
+
+        case 3:
+          // ── Page 4: Rain ───────────────────────────────────────────
+          it.print(10, y0, id(font_small), "Regn");
+          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.1f mm",
+            id(davis_rain).state);
+          it.printf(10, y0 + 56, id(font_small), "Intensitet: %.1f mm/t",
+            id(davis_rain_rate).state);
+          break;
+
+        case 4:
+          // ── Page 5: Pressure ─────────────────────────────────────
+          it.print(10, y0, id(font_small), "Lufttryk");
+          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.0f hPa",
+            id(davis_slp).state);
+          it.printf(10, y0 + 56, id(font_small), "Tendens: %.1f hPa (%s)",
+            id(davis_slp_trend_mb).state, id(davis_slp_trend_desc).state.c_str());
+          it.printf(10, y0 + 76, id(font_small), "Ved station: %.0f hPa",
+            id(davis_baro).state);
+          break;
+      }
+
+# ─────────────────────────────────────────────────────────────
+# Speaker — M5Stack Basic Core drives its onboard speaker via PWM
+# on GPIO25 (not I2S — that's only used on newer M5Stack products
+# like Core2/CoreS3/Tab5). The rtttl: component plays simple
+# monophonic tunes/beeps over a ledc (PWM) output.
+# ─────────────────────────────────────────────────────────────
+output:
+  - platform: ledc
+    pin: GPIO25
+    id: m5_speaker_output
+
+rtttl:
+  id: m5_rtttl
+  output: m5_speaker_output
+
+# ─────────────────────────────────────────────────────────────
+# SWITCH pin of the display backlight
+# ─────────────────────────────────────────────────────────────
+switch:
+  - platform: gpio
+    pin: 32
+    name: "Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+
+button:
+  - platform: template
+    name: "Speaker Test Beep"
+    on_press:
+      - rtttl.play:
+          rtttl: "beep:d=4,o=5,b=100:16e6"
+
+  - platform: restart
+    name: "Restart"
+    entity_category: diagnostic
+
+# ─────────────────────────────────────────────────────────────
+# BINARY_SENSOR — physical buttons + status flags
+# ─────────────────────────────────────────────────────────────
+binary_sensor:
+  - platform: gpio
+    id: M5_BtnA
+    pin:
+      number: 39
+      inverted: true
+    on_click:
+      then:
+        - lambda: |-
+            id(current_page) = (id(current_page) - 1 + id(total_pages)) % id(total_pages);
+  - platform: gpio
+    id: M5_BtnB
+    pin:
+      number: 38
+      inverted: true
+    on_click:
+      then:
+        - switch.toggle: backlight
+  - platform: gpio
+    id: M5_BtnC
+    pin:
+      number: 37
+      inverted: true
+    on_click:
+      then:
+        - lambda: |-
+            id(current_page) = (id(current_page) + 1) % id(total_pages);
+
+  - platform: template
+    name: "Charging"
+    id: m5_charging
+    device_class: battery_charging
+
+  - platform: template
+    name: "Davis Battery Low"
+    id: davis_battery_low
+    device_class: battery
+
+# ─────────────────────────────────────────────────────────────
+# Sensors — exposed to both HA (native API) and MQTT
+# ─────────────────────────────────────────────────────────────
+sensor:
+  - platform: wifi_signal
+    id: wifi_rssi
+    update_interval: 30s
+
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: 60s
+    temperature:
+      name: "Indoor Temperature"
+      id: baro_temp
+      accuracy_decimals: 1
+    pressure:
+      name: "Barometer"
+      id: davis_baro
+      unit_of_measurement: "hPa"
+      device_class: pressure
+      state_class: measurement
+      accuracy_decimals: 1
+      on_value:
+        then:
+          - lambda: |-
+              if (!std::isnan(x)) {
+                const float p0 = 1013.25f, Rd = 287.05f, gamma_s = 0.0065f,
+                            g = 9.80665f, T0 = 288.15f;
+                const float h = ${elevation_m} + ${height_above_ground_m};
+                float inner = std::pow(p0 / x, Rd * gamma_s / g) * gamma_s * h / T0;
+                float p_slp = x * std::pow(1.0f + inner, g / (Rd * gamma_s));
+                id(davis_slp).publish_state(p_slp);
+              }
+    humidity:
+      name: "Indoor Humidity"
+      id: baro_hum
+      device_class: humidity
+      state_class: measurement
+      accuracy_decimals: 0
+
+  - platform: template
+    name: "Sea Level Pressure"
+    id: davis_slp
+    unit_of_measurement: "hPa"
+    device_class: pressure
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Pressure Trend"
+    id: davis_pressure_trend_mb
+    unit_of_measurement: "hPa"
+    icon: "mdi:arrow-collapse"
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Sea Level Pressure Trend"
+    id: davis_slp_trend_mb
+    unit_of_measurement: "hPa"
+    icon: "mdi:arrow-collapse"
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Temperature"
+    id: davis_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Humidity"
+    id: davis_hum
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "UV Index"
+    id: davis_uv_index
+    unit_of_measurement: "UV Index"
+    icon: "mdi:emoticon-cool-outline"
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Solar Radiation"
+    id: davis_solar_radiation
+    unit_of_measurement: "W/m²"
+    device_class: irradiance
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Wind Speed"
+    id: davis_wind_speed
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 1
+
+  - platform: template
+    name: "Wind Gust"
+    id: davis_windgust
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "Daily Rain"
+    id: davis_rain
+    unit_of_measurement: "mm"
+    device_class: precipitation
+    state_class: total_increasing
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Rain Rate"
+    id: davis_rain_rate
+    unit_of_measurement: "mm/h"
+    device_class: precipitation_intensity
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Wind Lull"
+    id: davis_wind_lull
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "Beaufort Scale"
+    id: davis_beaufort
+    icon: "mdi:weather-windy"
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Wind Direction"
+    id: davis_wind_dir
+    unit_of_measurement: "°"
+    device_class: wind_direction
+    state_class: measurement_angle
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Dew Point"
+    id: davis_dew_point
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Vapor Pressure"
+    id: davis_vapor_pressure
+    unit_of_measurement: "hPa"
+    device_class: atmospheric_pressure
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "Heat Index"
+    id: davis_heat_index
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Wind Chill"
+    id: davis_wind_chill
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Feels Like"
+    id: davis_feels_like
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Wet Bulb Temperature"
+    id: davis_wet_bulb
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Delta T"
+    id: davis_delta_t
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Air Density"
+    id: davis_air_density
+    unit_of_measurement: "kg/m³"
+    icon: "mdi:weight-kilogram"
+    state_class: measurement
+    accuracy_decimals: 3
+
+  - platform: template
+    name: "RSSI"
+    id: davis_rssi
+    unit_of_measurement: "dBm"
+    state_class: measurement
+    device_class: signal_strength
+    entity_category: diagnostic
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "LQI"
+    id: davis_lqi
+    icon: "mdi:signal"
+    state_class: measurement
+    entity_category: diagnostic
+    accuracy_decimals: 0
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      id: davis_ip_address
+
+  - platform: template
+    name: "Pressure Trend Description"
+    id: davis_pressure_trend_desc
+    icon: "mdi:trending-up"
+
+  - platform: template
+    name: "Sea Level Pressure Trend Description"
+    id: davis_slp_trend_desc
+    icon: "mdi:trending-up"
+
+  - platform: template
+    name: "Beaufort Description"
+    id: davis_beaufort_desc
+    icon: "mdi:weather-windy"
+
+  - platform: template
+    name: "Wind Cardinal"
+    id: davis_wind_cardinal
+    icon: "mdi:compass-outline"
+    lambda: |-
+      float deg = id(raw_wind_dir);
+      int index = int((deg + 11.25f) / 22.5f) % 16;
+      static const char* const pts_en[] = {
+        "N","NNE","NE","ENE","E","ESE","SE","SSE",
+        "S","SSW","SW","WSW","W","WNW","NW","NNW"
+      };
+      static const char* const pts_da[] = {
+        "N","NNØ","NØ","ØNØ","Ø","ØSØ","SØ","SSØ",
+        "S","SSV","SV","VSV","V","VNV","NV","NNV"
+      };
+      bool danish = (std::string("${language}") == "da");
+      return std::string(danish ? pts_da[index] : pts_en[index]);

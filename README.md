@@ -42,7 +42,7 @@ Ready to set it up? Jump to [Installation](#installation-debian--proxmox-lxc).
 | Directory | Hardware | Status |
 |---|---|---|
 | [`weatherdatalogger/tempest/`](weatherdatalogger/tempest/) | WeatherFlow Tempest (UDP → MQTT) | Active |
-| [`davis/`](davis/) | Davis Vantage Vue (ESP32-WROOM-32 + CC1101, ESPHome) | Active — field-tested |
+| [`davis/`](davis/) | Davis Vantage Vue (M5Stack Core + CC1101, ESPHome) | Active — field-tested |
 | [`weatherdatalogger/airlink/`](weatherdatalogger/airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
 | [`weatherdatalogger/meteobridge/`](weatherdatalogger/meteobridge/) | Meteobridge (HTTP polling → MQTT full observation) | Active, optional |
 | [`weatherdatalogger/visualcrossing/`](weatherdatalogger/visualcrossing/) | Visual Crossing Weather API forecast (HTTP polling → MQTT) | Active, optional — lat/lon-based, no station hardware required |
@@ -74,7 +74,7 @@ weatherdatalogger/
     observation
     rapid_wind
     device_status
-  davis-vantage-receiver/   ← Static control topics — OPTIONAL manual rain correction
+  davisnet-datalogger/      ← Static control topics — OPTIONAL manual rain correction
     set_daily_rain            (Davis's own rain fields are computed standalone
     set_rain_rate              from its RF tip counter; nothing depends on these)
   airlink-<did>/            ← Davis AirLink air quality sensor

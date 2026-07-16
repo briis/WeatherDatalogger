@@ -45,7 +45,7 @@ weatherdatalogger/
                               boot until enough on-device history accumulates
     rapid_wind
     device_status
-  davis-vantage-receiver/  ← Static control topics (device name, not station
+  davisnet-datalogger/     ← Static control topics (device name, not station
     set_daily_rain             ID — not known at compile time): OPTIONAL
     set_rain_rate                manual/cross-check correction only. The
                                   rain fields above are computed standalone
@@ -78,18 +78,28 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 ### Davis Vantage Vue
 - 868 MHz ISM band wireless sensor suite (EU frequency plan)
 - Protocol is community-reverse-engineered (not officially documented)
-- Receiver: **ESP32-WROOM-32** (30-pin devkit) + **GERUI CC1101** — currently
-  `frequency: 868.35MHz`, `filter_bandwidth: 650kHz` (narrowed from an original
-  325kHz; this transmitter doesn't hop, so a tighter filter cuts noise without
-  losing signal), CRC-16/CCITT with a 3-position bit-shift fallback
-- Runs **ESPHome** firmware (`davis/davis-vantage-receiver.yaml`) which handles RF decoding and MQTT publishing
+- Receiver: **M5Stack Basic Core** (ESP32, `m5stack-core-esp32-16M`, esp-idf
+  framework) + **M5Stack CC1101 module** (E07-900M10S/EBYTE, external antenna,
+  stacked via M-Bus, CS/GDO0 selected via onboard DIP switches — see
+  `davis/README.md`) — currently `frequency: 868.35MHz`,
+  `filter_bandwidth: 650kHz` (narrowed from an original 325kHz; this
+  transmitter doesn't hop, so a tighter filter cuts noise without losing
+  signal), CRC-16/CCITT with a 3-position bit-shift fallback. Supersedes an
+  earlier ESP32-WROOM-32 + GERUI CC1101 breadboard build — RF decoding, MQTT
+  topics, and published fields are unchanged; only the physical build and
+  local display changed (see below)
+- Runs **ESPHome** firmware (`davis/davisnet-weatherlogger.yaml`) which handles RF decoding and MQTT publishing
 - HA entities come from ESPHome's own MQTT discovery (`mqtt: discovery: true`), grouped
-  under one "Davis Vantage Receiver" device — same visual result as Tempest/AirLink's
+  under one "Davisnet Datalogger" device — same visual result as Tempest/AirLink's
   hand-rolled discovery, just via ESPHome's built-in mechanism instead. Entity names
   no longer repeat "Davis" (the device grouping already provides that context)
-- `api:` is commented out by default — only needed for remote `esphome logs`/OTA over
-  the native API; if enabled, this node must NOT also be added via Home Assistant's
-  "ESPHome" integration UI, or entities would duplicate
+- `api:` is **active by default** (unlike the previous build, where it was commented
+  out) — only needed for remote `esphome logs`/OTA over the native API; this node
+  must NOT also be added via Home Assistant's "ESPHome" integration UI, or entities
+  would duplicate
+- Local display: the Core's built-in MIPI SPI LCD (`model: M5CORE`), 5 pages switched
+  by the Core's physical A/C buttons (button-driven, not the previous OLED build's
+  time-based auto-cycle); B button toggles the backlight (also an HA switch)
 - Local web dashboard at `http://<device-ip>/` (`web_server: port: 80`), including a
   diagnostic **Restart** button also discovered into HA
 - **Status: active and field-tested — temperature/wind/humidity/gust/lull all
@@ -101,7 +111,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   derives rain — no external station required. The `set_daily_rain`/
   `set_rain_rate` MQTT control topics remain available as an optional
   manual/cross-check correction, but nothing depends on them**
-- A **BME280** is soldered directly to the receiver's ESP32 (I2C, `0x76`) —
+- A **BME280** is wired to the receiver's I2C bus (Grove Port A, `0x76`) —
   provides `Barometer`/`Indoor Temperature`/`Indoor Humidity`, polled locally
   every 60s, not RF-decoded and not part of the outdoor ISS. Published in the
   `observation` payload as `station_pressure_mb`/`indoor_temperature_c`/
@@ -185,9 +195,11 @@ on that tick (mirroring how wind lull is already the rolling min). The
 `ptype == 9` handling is left in place and still takes priority if a real
 gust packet is ever observed on different hardware. Confirmed working via
 field testing. The on-device packet-type histogram/`CAL` logging used to
-diagnose this is still in the yaml, commented out for quick re-enabling
-(search `CALIBRATION (disabled)` in `davis-vantage-receiver.yaml`), useful if
-this or the humidity/solar decoding ever needs re-validating on new hardware.
+diagnose this is preserved, commented out for quick re-enabling, only in the
+superseded `davis-vantage-receiver.yaml` (search `CALIBRATION (disabled)`) —
+it was not carried over into `davisnet-weatherlogger.yaml`. If this or the
+humidity/solar decoding ever needs re-validating on the current hardware,
+either port that block over or temporarily flash the old yaml for the test.
 
 ### MQTT `reboot_timeout` can mask its own diagnostics
 
@@ -264,8 +276,11 @@ WeatherDatalogger/                   ← repo root
 │   │                                     standalone, idempotent either way
 │   └── config.example.ini          ← Shared config template for all five services
 ├── davis/                           ← Davis Vantage Vue (ESPHome receiver)
-│   ├── davis-vantage-receiver.yaml ← ESPHome firmware (CC1101 RF → MQTT); flashed
-│   │                                  independently, not part of the LXC deploy
+│   ├── davisnet-weatherlogger.yaml ← ESPHome firmware (CC1101 RF → MQTT); flashed
+│   │                                  independently, not part of the LXC deploy.
+│   │                                  M5Stack Core build — current/supported
+│   ├── davis-vantage-receiver.yaml ← Superseded ESP32-WROOM-32 breadboard build;
+│   │                                  same RF decode/MQTT topics, kept for reference
 │   ├── scripts/
 │   │   └── set_daily_rain.sh       ← Manual daily-rain correction helper; this one
 │   │                                  IS deployed — installed by deploy.sh to
