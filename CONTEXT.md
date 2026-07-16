@@ -93,10 +93,9 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
   under one "Davisnet Datalogger" device — same visual result as Tempest/AirLink's
   hand-rolled discovery, just via ESPHome's built-in mechanism instead. Entity names
   no longer repeat "Davis" (the device grouping already provides that context)
-- `api:` is **active by default** (unlike the previous build, where it was commented
-  out) — only needed for remote `esphome logs`/OTA over the native API; this node
-  must NOT also be added via Home Assistant's "ESPHome" integration UI, or entities
-  would duplicate
+- `api:` is commented out by default — only needed for remote `esphome logs`/OTA over
+  the native API; if enabled, this node must NOT also be added via Home Assistant's
+  "ESPHome" integration UI, or entities would duplicate
 - Local display: the Core's built-in MIPI SPI LCD (`model: M5CORE`), 5 pages switched
   by the Core's physical A/C buttons (button-driven, not the previous OLED build's
   time-based auto-cycle); B button toggles the backlight (also an HA switch)

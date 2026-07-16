@@ -289,7 +289,7 @@ mosquitto_sub -h <broker> -t "weatherdatalogger/davis-#" -v
 
 ## Home Assistant Integration
 
-The ESPHome firmware connects to HA via **MQTT discovery** (`mqtt: discovery: true`), grouping all entities under one "Davisnet Datalogger" device — same as how the Tempest/AirLink Python services register their devices. Unlike the previous build, the `api:` block in the YAML is **active by default** here (needed for the built-in display's remote logging convenience) — it still exists only for remote `esphome logs`/OTA over the native API. **Do not** also add this node through Home Assistant's "ESPHome" integration UI, or entities would be duplicated (once via native API, once via MQTT discovery).
+The ESPHome firmware connects to HA via **MQTT discovery** (`mqtt: discovery: true`), grouping all entities under one "Davisnet Datalogger" device — same as how the Tempest/AirLink Python services register their devices. The `api:` block in the YAML is commented out by default; it exists only for remote `esphome logs`/OTA over the native API if you choose to enable it. If you do, **do not** also add this node through Home Assistant's "ESPHome" integration UI, or entities would be duplicated (once via native API, once via MQTT discovery).
 
 Entity names no longer repeat "Davis" (the device name already provides that context) — HA shows the short name on the device's own page and the full "Davisnet Datalogger <name>" combination in out-of-context views like the global entity picker:
 
