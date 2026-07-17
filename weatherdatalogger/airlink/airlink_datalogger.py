@@ -70,6 +70,7 @@ def setup_logging(level_str: str, log_file: str) -> logging.Logger:
     level = getattr(logging, level_str.upper(), logging.INFO)
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(log_file))
     logging.basicConfig(
         level=level,

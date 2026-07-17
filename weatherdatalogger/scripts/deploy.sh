@@ -33,6 +33,7 @@ REPO_URL="https://github.com/briis/WeatherDatalogger.git"
 INSTALL_ROOT="/opt/weatherdatalogger"
 SHARED_CONFIG="$INSTALL_ROOT/config.ini"
 DB_CNF="$INSTALL_ROOT/db.cnf"
+LOG_DIR="/var/log/weatherdatalogger"
 
 TEMPEST_DIR="$INSTALL_ROOT/tempest"
 AIRLINK_DIR="$INSTALL_ROOT/airlink"
@@ -87,6 +88,13 @@ mkdir -p \
     "$METEOBRIDGE_DIR" \
     "$VISUALCROSSING_DIR" \
     "$INSTALL_ROOT/scripts"
+
+# Persistent log directory — outside INSTALL_ROOT (survives /tmp being
+# cleared on reboot or by systemd-tmpfiles-clean) for services whose
+# config.ini points [logging] file at it.
+echo "==> Creating persistent log directory $LOG_DIR…"
+mkdir -p "$LOG_DIR"
+chown weatherdatalogger:weatherdatalogger "$LOG_DIR"
 
 # ---------------------------------------------------------------------------
 # Install service files
