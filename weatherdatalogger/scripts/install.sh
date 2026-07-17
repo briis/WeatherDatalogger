@@ -16,8 +16,9 @@
 #   4. Configures MariaDB for network access and enables its event scheduler
 #   5. Creates the database and application user (password auto-generated)
 #   6. Creates/verifies the database schema
-#   7. Runs a short setup wizard — MQTT broker, which stations/forecast
-#      provider you have — and writes config.ini for you
+#   7. Runs a short setup wizard — MQTT broker (installs Mosquitto with a
+#      random password if you don't have one already), which stations/
+#      forecast provider you have — and writes config.ini for you
 #   8. Re-runs deploy.sh, which now applies migrations and enables+starts
 #      whichever services config.ini says should run
 #
@@ -38,6 +39,7 @@ DEPLOY_SCRIPT="$INSTALL_ROOT/scripts/deploy.sh"
 SERVICE_USER="weatherdatalogger"
 DB_NAME="weatherdatalogger"
 DB_APP_USER="weatherlogger"
+MQTT_INSTALL_USER="weatherdatalogger"
 
 # ---------------------------------------------------------------------------
 # Preflight
@@ -249,6 +251,43 @@ _ask_secret() {
     echo "$reply"
 }
 
+_install_mosquitto() {
+    # Installs and configures a local Mosquitto broker with password auth
+    # for a single 'weatherdatalogger' user, then prints the generated
+    # password on stdout (everything else here goes to stderr, same
+    # convention as _ask/_ask_secret, so it's safe to capture with $(...)).
+    echo "==> Installing Mosquitto MQTT broker…" >&2
+    apt-get install -y -qq mosquitto >&2
+
+    local passwd_file="/etc/mosquitto/passwd"
+    local mqtt_conf="/etc/mosquitto/conf.d/weatherdatalogger.conf"
+    local mqtt_password
+    # `|| true`: see the DB_PASSWORD generation above — same SIGPIPE/pipefail reasoning.
+    mqtt_password=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true)
+
+    if [[ -f "$passwd_file" ]]; then
+        mosquitto_passwd -b "$passwd_file" "$MQTT_INSTALL_USER" "$mqtt_password" >&2
+    else
+        mosquitto_passwd -c -b "$passwd_file" "$MQTT_INSTALL_USER" "$mqtt_password" >&2
+    fi
+    chown mosquitto:mosquitto "$passwd_file"
+    chmod 640 "$passwd_file"
+
+    if [[ ! -f "$mqtt_conf" ]]; then
+        cat > "$mqtt_conf" <<CONF
+listener 1883
+allow_anonymous false
+password_file $passwd_file
+CONF
+    fi
+
+    echo "==> Enabling and starting Mosquitto…" >&2
+    systemctl enable --now mosquitto >&2
+    systemctl restart mosquitto >&2
+
+    echo "$mqtt_password"
+}
+
 if [[ -f "$SHARED_CONFIG" ]]; then
     echo "==> $SHARED_CONFIG already exists — skipping setup wizard."
     echo "    Edit it directly, then re-run this script (or deploy.sh) to apply changes."
@@ -258,13 +297,22 @@ else
 
     echo ""
     echo "── MQTT broker ─────────────────────────────────────────────────"
-    MQTT_BROKER=""
-    while [[ -z "$MQTT_BROKER" ]]; do
-        MQTT_BROKER=$(_ask "MQTT broker hostname or IP")
-        [[ -z "$MQTT_BROKER" ]] && echo "    Required — please enter a value."
-    done
-    MQTT_USERNAME=$(_ask "MQTT username (leave blank if none)")
-    MQTT_PASSWORD=$(_ask_secret "MQTT password (leave blank if none)")
+    INSTALL_MQTT=$(_ask_yn "Install an MQTT broker (Mosquitto) on this machine? (choose N if you already have one to point at)")
+    if [[ "$INSTALL_MQTT" == "true" ]]; then
+        MQTT_BROKER="localhost"
+        MQTT_USERNAME="$MQTT_INSTALL_USER"
+        MQTT_PASSWORD=$(_install_mosquitto)
+        echo "==> Mosquitto installed — broker=localhost, username=$MQTT_USERNAME"
+        echo "    Password generated and recorded in $SHARED_CONFIG."
+    else
+        MQTT_BROKER=""
+        while [[ -z "$MQTT_BROKER" ]]; do
+            MQTT_BROKER=$(_ask "MQTT broker hostname or IP")
+            [[ -z "$MQTT_BROKER" ]] && echo "    Required — please enter a value."
+        done
+        MQTT_USERNAME=$(_ask "MQTT username (leave blank if none)")
+        MQTT_PASSWORD=$(_ask_secret "MQTT password (leave blank if none)")
+    fi
 
     echo ""
     HA=$(_ask_yn "Are you using Home Assistant?")
