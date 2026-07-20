@@ -93,4 +93,4 @@ ARGS=(-h "$MQTT_BROKER" -p "$MQTT_PORT" -t "$TOPIC" -m "$VALUE")
 
 echo "==> Publishing daily rain correction: ${VALUE} mm -> ${TOPIC} (broker ${MQTT_BROKER}:${MQTT_PORT})"
 mosquitto_pub "${ARGS[@]}"
-echo "==> Sent. Check 'esphome logs davis/davisnet-weatherlogger.yaml' or the Home Assistant entity to confirm it was accepted."
+echo "==> Sent. Check 'esphome logs ESPHome/davis/davisnet-weatherlogger.yaml' or the Home Assistant entity to confirm it was accepted."

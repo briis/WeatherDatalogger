@@ -16,7 +16,12 @@ A weather data pipeline with five active Python services:
 4. **Meteobridge datalogger** (`meteobridge/meteobridge_datalogger.py`) — optional; polls a Meteobridge's local REST template API and publishes a full observation to MQTT (wind, pressure, temperature/humidity, solar/UV, rain, indoor, lightning) — a full station integration with its own database rows, not just a correction feed (see "Meteobridge datalogger" below)
 5. **Visual Crossing forecast datalogger** (`visualcrossing/visualcrossing_datalogger.py`) — optional; lat/lon-based, polls the Visual Crossing Weather API via the `pyVisualCrossing` wrapper and publishes current/hourly/daily forecast to MQTT (no station hardware required — see "Visual Crossing forecast datalogger" below)
 
-A fifth, non-Python component handles Davis Vantage Vue via an M5Stack Core (ESP32) + CC1101 module, running ESPHome firmware (`davis/davisnet-weatherlogger.yaml`) rather than a Python service — see "Davis Vantage Vue (ESPHome firmware)" below. All station services/firmware publish under `weatherdatalogger/` so Home Assistant (or any MQTT subscriber) gets a unified feed.
+Two further, non-Python components live under `ESPHome/` (a sibling of `weatherdatalogger/` at the repo root) rather than as Python services:
+
+- Davis Vantage Vue via an M5Stack Core (ESP32) + CC1101 module, running ESPHome firmware (`ESPHome/davis/davisnet-weatherlogger.yaml`) — see "Davis Vantage Vue (ESPHome firmware)" below
+- A custom air quality monitor (ESP32-C6 + SDS011 + BME280), running ESPHome firmware (`ESPHome/airquality/air-quality-monitor.yaml`) — see "Air Quality Monitor (ESPHome firmware)" below
+
+All station services/firmware publish under `weatherdatalogger/` so Home Assistant (or any MQTT subscriber) gets a unified feed.
 
 ---
 
@@ -51,6 +56,7 @@ production before. Always run `scripts/lint` after editing and check that
 weatherdatalogger/tempest-<serial>/<message_type>
 weatherdatalogger/forecast-<provider>-<location>/current|forecast_hourly|forecast_daily  (e.g. forecast-visualcrossing-home)
 weatherdatalogger/davis-<station_id>/<sensor>
+weatherdatalogger/aqmonitor-<id>/observation
 ```
 
 - `<serial>` comes from the `serial_number` field in the UDP broadcast (`ST-00209955`, `HB-00013030`, etc.) with `:` replaced by `-`
@@ -117,7 +123,7 @@ MQTT on_message() → _payload_to_row() → DbWriter.write_observation()
 
 ## Davis Vantage Vue (ESPHome firmware)
 
-Unlike Tempest/AirLink, this is **not a Python service** — it's ESPHome YAML + inline C++ lambdas (`davis/davisnet-weatherlogger.yaml`) flashed to an M5Stack Core (ESP32) + CC1101 radio module. This supersedes an earlier ESP32-WROOM-32 + breakout-board build (`davis/davis-vantage-receiver.yaml`, kept for reference) — the RF decode/MQTT logic below is unchanged between the two; only the physical hardware and local display differ. Read `davis/README.md` for hardware/wiring and CONTEXT.md's "Known Issues" section before touching this file — several non-obvious RF findings are documented there and are expensive to re-derive.
+Unlike Tempest/AirLink, this is **not a Python service** — it's ESPHome YAML + inline C++ lambdas (`ESPHome/davis/davisnet-weatherlogger.yaml`) flashed to an M5Stack Core (ESP32) + CC1101 radio module. This supersedes an earlier ESP32-WROOM-32 + breakout-board build (`ESPHome/davis/davis-vantage-receiver.yaml`, kept for reference) — the RF decode/MQTT logic below is unchanged between the two; only the physical hardware and local display differ. Read `ESPHome/davis/README.md` for hardware/wiring and CONTEXT.md's "Known Issues" section before touching this file — several non-obvious RF findings are documented there and are expensive to re-derive.
 
 ### Packet flow
 ```
@@ -149,7 +155,7 @@ Packet type 9 (gust) has never been observed on this hardware (confirmed by a 40
 ### Rain accumulation & rate
 `davis_rain`/`davis_rain_rate` are computed **standalone from the ISS's own RF tip counter** (`ptype == 14`, 0.2mm/tip) — the same way the Davis console itself derives rain, no external station required. Rate is derived from the actual gap since the previous tip (not a fixed 60s bucket), decays to `0` if no tip has been seen for 5+ minutes (60s `interval:` block), and the daily total resets at local midnight via the `time:` (sntp) `on_time` trigger. `rain_total_mm`/`rain_count_prev` use `restore_value: yes` so a reboot doesn't lose the day's total or desync from the physical tip counter.
 
-The `set_daily_rain`/`set_rain_rate` MQTT control topics (`mqtt: on_message:`) remain available as an **optional** manual/cross-check correction — e.g. to punch in the console's displayed value after a reflash/reboot that landed between tips, or via `davis/scripts/set_daily_rain.sh <mm>` — but nothing here depends on them. `meteobridge_datalogger.py` used to push automatic corrections into these same topics on a timer; it's since been rewritten into a full station integration (see "Meteobridge datalogger" below) and no longer touches them — Davis's own RF-tip-derived rain fields are unaffected either way. If you'd rather source `combined_realtime`'s `rain` role from Meteobridge's own reading instead of Davis's, that's a `station_roles` update (see below), not a firmware change.
+The `set_daily_rain`/`set_rain_rate` MQTT control topics (`mqtt: on_message:`) remain available as an **optional** manual/cross-check correction — e.g. to punch in the console's displayed value after a reflash/reboot that landed between tips, or via `ESPHome/davis/scripts/set_daily_rain.sh <mm>` — but nothing here depends on them. `meteobridge_datalogger.py` used to push automatic corrections into these same topics on a timer; it's since been rewritten into a full station integration (see "Meteobridge datalogger" below) and no longer touches them — Davis's own RF-tip-derived rain fields are unaffected either way. If you'd rather source `combined_realtime`'s `rain` role from Meteobridge's own reading instead of Davis's, that's a `station_roles` update (see below), not a firmware change.
 
 ### Solar radiation
 No sensor is fitted on this Vantage Vue ISS. The `raw == 0x3FF` "no sensor" sentinel (and later a `raw >= 1000` tolerance band) both proved unreliable against RF noise on this 10-bit field — occasional noise landed low enough to slip through as a bogus reading (e.g. raw≈1021 decoding as a fake ~1795 W/m²). Publishing is now disabled entirely in the `ptype == 5` handler; the entity correctly reads "Unavailable" in HA. Raw values are still logged at `ESP_LOGD` for reference if a real sensor is ever fitted (search for `davis_solar_radiation` to re-enable).
@@ -166,9 +172,44 @@ Requests use a single quote-free comma-separated template (`MB_TEMPLATE` — 30 
 Optional: the service logs an error and idles (doesn't crash-loop) if `[meteobridge] host` is left unconfigured. Sends preemptive HTTP Basic Auth (`[meteobridge] username`/`password`, default username `meteobridge` — Meteobridge's own factory default) unless username is blank. Assumes Meteobridge is configured for metric units. See `weatherdatalogger/meteobridge/README.md`.
 
 ### Debugging this file
-- Diagnostic/calibration logging used to investigate the packet-type histogram is **only present in the superseded `davis/davis-vantage-receiver.yaml`**, commented out (search `CALIBRATION (disabled)`) — it was not carried over into `davisnet-weatherlogger.yaml`. Port it over (or temporarily flash the old yaml) to re-run the same test against different CC1101 hardware, rather than re-deriving the approach from scratch.
+- Diagnostic/calibration logging used to investigate the packet-type histogram is **only present in the superseded `ESPHome/davis/davis-vantage-receiver.yaml`**, commented out (search `CALIBRATION (disabled)`) — it was not carried over into `davisnet-weatherlogger.yaml`. Port it over (or temporarily flash the old yaml) to re-run the same test against different CC1101 hardware, rather than re-deriving the approach from scratch.
 - A raw-packet-arrival log (`ESP_LOGD("davis", "Raw packet received: ...")`, silent at the default `INFO` level) sits right before the CRC check. Set `logger: level: DEBUG` and reflash if packets ever stop being logged, to distinguish "CC1101 isn't receiving RF frames at all" (this line never appears — hardware/RF issue, check the CC1101 module's DIP switches first) from "frames arrive but fail CRC" (this line appears but no `Packet type: ...` ever follows — decode-side issue). Revert to `INFO` afterward — `DEBUG` logs a line per packet (~every 2.5s) indefinitely otherwise.
-- `esphome logs davis/davisnet-weatherlogger.yaml` for remote logs requires the native API — the `api:` block in the YAML is commented out by default; uncomment it (and provide `api_encryption_key` in `secrets.yaml`) temporarily if you need this. Do **not** also add this node via Home Assistant's "ESPHome" integration UI if you do, since HA entities come from `mqtt: discovery: true` instead, and having both would duplicate every entity.
+- `esphome logs ESPHome/davis/davisnet-weatherlogger.yaml` for remote logs requires the native API — the `api:` block in the YAML is commented out by default; uncomment it (and provide `api_encryption_key` in `secrets.yaml`) temporarily if you need this. Do **not** also add this node via Home Assistant's "ESPHome" integration UI if you do, since HA entities come from `mqtt: discovery: true` instead, and having both would duplicate every entity.
+
+---
+
+## Air Quality Monitor (ESPHome firmware)
+
+Also **not a Python service** — ESPHome YAML + inline C++ lambdas (`ESPHome/airquality/air-quality-monitor.yaml`) flashed to an ESP32-C6-DevKitC-1 with an SDS011 (PM2.5/PM10, UART) and a BME280 (temperature/humidity/pressure, I2C). Read `ESPHome/airquality/README.md` for hardware/wiring and field conventions before touching this file.
+
+Unlike the Davis receiver, this device uses the **native ESPHome API** (`api:`) for its Home Assistant entities (not `mqtt: discovery:`) — `mqtt:` is present purely to publish the `weatherdatalogger/aqmonitor-<id>/observation` topic for `db_writer.py`, with `discovery: false` so entities aren't registered twice via both paths. `reboot_timeout: 0s` is set explicitly from the start, learning from the Davis `reboot_timeout` incident below.
+
+### Data flow
+```
+SDS011 on_value (~every 5 min, sensor's own duty cycle)
+  → publish PM2.5/PM10, persist to flash-backed globals (boot restore)
+  → recompute AQI/CAQI sub-index sensors immediately (id(...).update()),
+    rather than waiting for their own update_interval to drift out of
+    phase with the SDS011's timing
+BME280 (every 60s)
+  → temperature/humidity/pressure published directly
+  → dew point recomputed (Magnus formula, same as davisnet-weatherlogger.yaml)
+interval: (every 60s)
+  → consolidated `observation` JSON published to
+    weatherdatalogger/aqmonitor-<id>/observation, using the latest known
+    value of every field (same "publish latest known state" convention as
+    the Davis receiver's per-packet observation)
+```
+
+### AQI/CAQI — field-compatible with AirLink, not bit-identical
+`aqi_pm2p5`/`aqi_pm10`/`caqi_pm2p5`/`caqi_pm10` are published so `db_writer.py` stores them in the same `_OBS_FIELDS` columns AirLink uses — same scale/definition, but **not** numerically identical at the same concentration:
+- AQI here uses the EPA's May-2024-updated breakpoint table (matching the pre-existing single "AQI" display sensor already in this file) computed from the SDS011's **instantaneous** reading; `airlink_datalogger.py` uses an older breakpoint table computed from a 12h **NowCast**-smoothed concentration. This device has no on-device rolling-average buffer to replicate NowCast — see `ESPHome/airquality/README.md`'s "Field conventions" for the full caveat.
+- CAQI uses the same breakpoint tables and current-concentration convention as `airlink_datalogger.py`'s `_caqi_pm2p5`/`_caqi_pm10` (duplicated, not imported — same self-contained-service principle as every other station integration in this project).
+
+There's no PM1.0 and no 1h/3h/24h averages on this hardware (SDS011 only reports instantaneous PM2.5/PM10) — those `_OBS_FIELDS` columns simply stay `NULL` for `station_type = 'aqmonitor'` rows.
+
+### `air_quality` role
+This device registers as its own `station_type` (`aqmonitor`, from the `aqmonitor-<id>` topic segment) — a separate station from `airlink`. `station_roles`' `air_quality` role still defaults to `airlink`; reassign it (`UPDATE station_roles SET station_type = 'aqmonitor' WHERE role = 'air_quality';`) to make `combined_realtime`/`history_charting` read from this device instead — see `ESPHome/airquality/README.md`.
 - Repeating `[I][safe_mode:142]: Boot seems successful` lines in the log are the tell for a reboot loop, even when nothing else looks wrong — check `reboot_timeout` settings (`mqtt:`, `api:`, `wifi:`) if this shows up more than once per intentional flash. A single occurrence right after a flash/reboot is normal.
 - A local web dashboard is available at `http://<device-ip>/` (`web_server: port: 80`), including a diagnostic **Restart** button (`button: platform: restart`) — also discovered into HA as a diagnostic entity.
 
@@ -325,8 +366,8 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] MariaDB event scheduler enabled via `/etc/mysql/mariadb.conf.d/99-local.cnf`
 
 ### Davis Vantage Vue (ESPHome)
-- [x] ESPHome firmware (`davis/davisnet-weatherlogger.yaml`) — CC1101 packet decode, CRC validation, station-ID lock
-- [x] Rebuilt on an M5Stack Basic Core + M5Stack CC1101 module (external antenna) — superseding the original ESP32-WROOM-32 + GERUI CC1101 breadboard build (`davis/davis-vantage-receiver.yaml`, kept for reference). RF decode/MQTT topics/fields unchanged; local display switched from a time-cycled I2C OLED to the Core's built-in MIPI SPI LCD with button-driven paging. Device name for HA grouping and the static rain-correction MQTT topic changed from `davis-vantage-receiver` to `davisnet-datalogger`
+- [x] ESPHome firmware (`ESPHome/davis/davisnet-weatherlogger.yaml`) — CC1101 packet decode, CRC validation, station-ID lock
+- [x] Rebuilt on an M5Stack Basic Core + M5Stack CC1101 module (external antenna) — superseding the original ESP32-WROOM-32 + GERUI CC1101 breadboard build (`ESPHome/davis/davis-vantage-receiver.yaml`, kept for reference). RF decode/MQTT topics/fields unchanged; local display switched from a time-cycled I2C OLED to the Core's built-in MIPI SPI LCD with button-driven paging. Device name for HA grouping and the static rain-correction MQTT topic changed from `davis-vantage-receiver` to `davisnet-datalogger`
 - [x] Field-tested against real hardware — temperature/wind speed+direction/rain(+rate)/wind lull/gust/battery-low all reliable
 - [x] Derived comfort metrics computed on-device (dew point, vapor pressure, heat index, wind chill, feels like) — same formulas as `tempest_datalogger.py`
 - [x] `battery_low` DB column added (`database/migrations/20260701_add_battery_low.sql`)
@@ -338,9 +379,18 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] Wind gust and lull both locally-derived — packet type 9 (Davis' own gust broadcast) is never sent by this ISS; gust is computed as the rolling max (lull as rolling min) of the ordinary wind samples present in every packet, over each 60s interval. Confirmed working. If a real ptype-9 packet is ever observed, it still takes priority. See CONTEXT.md "Known Issues".
 - [x] Rain rate switched from a fixed 60s bucket-sum to per-tip tip-interval calculation (mirrors the console's own algorithm) — updates immediately per tip instead of quantizing to arbitrary clock windows; decays to 0 after 5 minutes without a tip (tunable, was 20 minutes initially); also explicitly zeroed on boot (see "Rain accumulation & rate" above — without this a stale pre-reboot value would persist in HA indefinitely if it doesn't rain again after a reboot).
 - [x] Daily rain total (`rain_total_mm`) persisted across reboots via `restore_value: yes` (paired with the `rain_count_prev` tip-counter baseline), published immediately on boot via `esphome: on_boot:` so it reads 0/actual instead of "Unknown", and reset to 0 once daily at local midnight via a `time: (sntp)` component.
-- [x] Manual daily-rain and rain-rate correction — publish to the static MQTT control topics `weatherdatalogger/davisnet-datalogger/set_daily_rain` / `set_rain_rate`, or run `davis/scripts/set_daily_rain.sh <mm>` (installed by `deploy.sh` to `/opt/weatherdatalogger/scripts/`).
+- [x] Manual daily-rain and rain-rate correction — publish to the static MQTT control topics `weatherdatalogger/davisnet-datalogger/set_daily_rain` / `set_rain_rate`, or run `ESPHome/davis/scripts/set_daily_rain.sh <mm>` (installed by `deploy.sh` to `/opt/weatherdatalogger/scripts/`).
 - [x] Solar radiation publishing disabled entirely — no sensor is fitted on this Vue, and RF noise on the 10-bit field made every "no sensor" sentinel check tried (exact `raw == 0x3FF` match, then a `raw >= 1000` tolerance band) unreliable enough that occasional garbage still got published as a fake reading. Entity now correctly reads "Unavailable"; raw values still logged at DEBUG for reference.
 - [x] Diagnostic "Restart" button (`button: platform: restart`) — available on the local web UI (`web_server: port: 80`) and as a diagnostic entity in HA.
+
+### Air Quality Monitor (ESPHome)
+- [x] ESPHome firmware (`ESPHome/airquality/air-quality-monitor.yaml`) — ESP32-C6 + SDS011 (PM2.5/PM10) + BME280 (temperature/humidity/pressure)
+- [x] `mqtt:` block added, `discovery: false` (entities come from the native API instead — see `api:`), `reboot_timeout: 0s` set from the start (learned from the Davis `reboot_timeout` incident, see "Known Issues")
+- [x] Consolidated `observation` JSON published every 60s to `weatherdatalogger/aqmonitor-<id>/observation`, latest-known-value convention like Davis's per-packet publish
+- [x] Dew point computed on-device (Magnus formula, same as `davisnet-weatherlogger.yaml`/`tempest_datalogger.py`)
+- [x] `AQI PM2.5`/`AQI PM10`/`CAQI PM2.5`/`CAQI PM10` sensors added — publish as `aqi_pm2p5`/`aqi_pm10`/`caqi_pm2p5`/`caqi_pm10`, same DB columns as AirLink, not bit-identical values (see "Air Quality Monitor (ESPHome firmware)" above for why)
+- [x] No code/schema changes needed — reuses `db_writer.py`'s existing `_OBS_FIELDS` PM/AQI/CAQI columns and generic topic-segment station-type parsing (`aqmonitor-<id>` → `station_type = 'aqmonitor'`)
+- [x] `ESPHome/airquality/README.md` — hardware, MQTT topics, field conventions, HA integration, `station_roles` reassignment instructions
 
 ### Meteobridge datalogger
 - [x] ~~New service polling a Meteobridge Pro's REST template API and republishing rain_today/rain_rate as corrections to the Davis receiver's own MQTT control topics; not a full station integration — no observation topic, no database rows~~ — **superseded**, see below.
@@ -360,7 +410,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] `systemctl status` in deploy uses `--lines=20 || true` — avoids hanging and tolerates services still in "activating" state
 - [x] Single shared config at `/opt/weatherdatalogger/config.ini` — all services read from one file; auto-generates `db.cnf` for MySQL client
 - [x] Ruff linting (`scripts/lint`, `.ruff.toml`)
-- [x] `deploy.sh` also installs `davis/scripts/set_daily_rain.sh` to `/opt/weatherdatalogger/scripts/` — `davis/` sits at the repo root as a sibling of `weatherdatalogger/`, not inside it, so this needed an explicit install step (`$STAGING/davis/...`, not `$STAGING_WDL/...`) even though the Davis ESPHome firmware itself is flashed independently and isn't otherwise part of the server deploy
+- [x] `deploy.sh` also installs `ESPHome/davis/scripts/set_daily_rain.sh` to `/opt/weatherdatalogger/scripts/` — `ESPHome/` sits at the repo root as a sibling of `weatherdatalogger/`, not inside it, so this needed an explicit install step (`$STAGING/ESPHome/davis/...`, not `$STAGING_WDL/...`) even though the Davis ESPHome firmware itself is flashed independently and isn't otherwise part of the server deploy. The Air Quality Monitor (`ESPHome/airquality/`) needs no such step — it has no server-side helper script, unlike Davis's rain-correction one
 - [x] `deploy.sh`'s restart loop is config-driven, not just systemd-driven: for each service it computes `should_run` from `config.ini` (`[section] enabled` for station/forecast services; "`config.ini` exists at all" for `weatherdb-writer`, which has no `enabled` flag of its own) and, if true, `systemctl enable`s it (if not already) then restarts — regardless of prior systemd state. If `should_run` is false it only ever skips/warns, **never** auto-disables or stops an already-running service; turning one off is always a manual `systemctl disable --now`. The `_config_enabled()` helper shells out to Python/`configparser` (same pattern as the `db.cnf` generator above it), with `fallback=False` covering both "no `config.ini` yet" and "config predates the `enabled` flag"
 - [x] `scripts/install.sh` — one-time (but safely re-runnable) bootstrap for a fresh Debian host: OS packages, service user, MariaDB (network bind-address + event scheduler, each guarded so re-running is a no-op once already set), database + app user (password auto-generated only if the app user doesn't exist yet), schema creation, then a short interactive wizard (MQTT broker, which stations/forecast provider you have) that writes `config.ini` for you — skipped entirely if `config.ini` already exists, so it never clobbers a configured install. Calls `deploy.sh` twice: once before the wizard (installs files so `01_create_database.sql`/`02_create_tables.sql` exist on disk), once after (`config.ini` now has real values, so migrations apply and services enable+start per the point above). Writes `config.ini` via a comment-preserving line-based Python helper (`_set_config_values()`), not `configparser` — `configparser` would silently strip every comment in the template on write. Secret-valued prompts (`MQTT_PASSWORD`, `VC_API_KEY`) use `_ask_secret()` (`read -s`, hidden input) rather than `_ask()`
 - [x] `database/03_create_readonly_user.sql` + `scripts/create_ha_readonly_user.sh` — creates a `SELECT`-only `weatherdatalogger_ha` MariaDB user for the separate [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA) Home Assistant integration repo, which reads this database directly rather than over MQTT. The `.sh` script is the one to actually use (idempotent — skips and tells you how to rotate the password instead if the user already exists; prompts for the password rather than generating one, since the human has to manually re-enter it into the other project's config flow UI anyway); the `.sql` file is kept only as a manual-run reference matching `01_create_database.sql`'s style. `install.sh`'s wizard offers to run this script once, at first-time setup, gated behind "will you be installing that integration?" — declining there (or adding the integration later) means running `create_ha_readonly_user.sh` standalone instead, which is why it's a separate script rather than inlined wizard logic

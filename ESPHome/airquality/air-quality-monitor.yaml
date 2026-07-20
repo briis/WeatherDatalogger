@@ -1,0 +1,529 @@
+substitutions:
+  device: air-quality-monitor
+  # Fast station-id-suffix for MQTT (weatherdatalogger/aqmonitor-<device_id>/...).
+  # Der er kun én af disse enheder på nettet i dag — bump dette tal hvis der
+  # nogensinde tilføjes en enhed nummer to, så de ikke kolliderer på samme topic.
+  device_id: "01"
+
+esphome:
+  name: "${device}"
+  friendly_name: "Air Quality Monitor"
+  on_boot:
+    # Genopretter de sidst kendte PM-værdier fra flash, så AQI ikke
+    # står tom/NaN i op til 5 minutter efter en genstart. Kører sent
+    # i boot-processen (efter komponenter er sat op), så id()-referencer
+    # og .update()-kald er gyldige.
+    priority: -10
+    then:
+      - lambda: |-
+          if (!isnan(id(last_pm25))) {
+            id(pm_2_5).publish_state(id(last_pm25));
+          }
+          if (!isnan(id(last_pm10))) {
+            id(pm_10_0).publish_state(id(last_pm10));
+          }
+          // Tving AQI/CAQI og kategori-teksten til at genberegne med det
+          // samme ud fra de genoprettede PM-værdier, i stedet for at
+          // vente på deres egne 5-minutters update_interval.
+          id(aqi_index).update();
+          id(aqi_kategori).update();
+          id(aqi_pm25_index).update();
+          id(aqi_pm10_index).update();
+          id(caqi_pm25_index).update();
+          id(caqi_pm10_index).update();
+
+globals:
+  - id: last_pm25
+    type: float
+    restore_value: true
+    initial_value: 'NAN'
+  - id: last_pm10
+    type: float
+    restore_value: true
+    initial_value: 'NAN'
+
+esp32:
+  board: esp32-c6-devkitc-1
+  variant: esp32c6
+  framework:
+    type: esp-idf
+    # ESP-IDF anbefales til C6 - Arduino-core-understøttelsen er nyere
+    # og mindre moden for denne chip end for klassisk ESP32/S3.
+
+# --- Netværk ---
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "AQM Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# --- Tid (bruges til tidsstempling af "Sidst Opdateret") ---
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# --- MQTT — udelukkende til weatherdatalogger-observationstopic'et.
+# discovery: false, fordi HA allerede får alle sensorer via den native API
+# ovenfor (api:) — med mqtt discovery: true samtidig ville hver sensor blive
+# dubleret (samme faldgrube som beskrevet i ESPHome/davis/README.md).
+# reboot_timeout: 0s er sat eksplicit — se AGENT.md/CONTEXT.md "Known Issues":
+# et kort reboot_timeout på Davis-modtageren fik den til at reboote hver
+# 10.-25. minut ved almindelige MQTT-udsving.
+# ---------------------------------------------------------------------------
+mqtt:
+  id: mqtt_client
+  broker: !secret mqtt_broker
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  client_id: ${device}
+  discovery: false
+  skip_cert_cn_check: true
+  reboot_timeout: 0s
+
+# --- UART til SDS011 ---
+# SDS011 kommunikerer på 9600 baud.
+# Sensorens TX -> ESP32-C6 RX, Sensorens RX -> ESP32-C6 TX
+# GPIO16/17 er almindelige GPIO'er på C6-DevKitC-1 - ikke strapping,
+# ikke reserveret til USB-JTAG (GPIO12/13) eller flash (GPIO24-30).
+uart:
+ id: sds011_uart
+ tx_pin: GPIO19
+ rx_pin: GPIO18
+ baud_rate: 9600
+
+# --- I2C til BME280 ---
+# GPIO21/22 er ligeledes fri, almindelig GPIO på dette board.
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+  id: bus_a
+
+sensor:
+#  --- SDS011 PM-sensor ---
+  - platform: sds011
+    uart_id: sds011_uart
+    pm_2_5:
+      name: "PM2.5"
+      id: pm_2_5
+      accuracy_decimals: 1
+      device_class: pm25
+      state_class: measurement
+      on_value:
+        then:
+          - globals.set:
+              id: last_pm25
+              value: !lambda 'return x;'
+          # Genberegn AQI/CAQI med det samme fremfor at vente på deres egne
+          # 5-minutters update_interval, som ellers let kan glide ud af
+          # fase med SDS011's egen måletiming.
+          - lambda: |-
+              id(aqi_index).update();
+              id(aqi_kategori).update();
+              id(aqi_pm25_index).update();
+              id(caqi_pm25_index).update();
+          - text_sensor.template.publish:
+              id: sidst_opdateret
+              state: !lambda 'return id(ha_time).now().strftime("%Y-%m-%d %H:%M:%S");'
+    pm_10_0:
+      name: "PM10"
+      id: pm_10_0
+      accuracy_decimals: 1
+      device_class: pm10
+      state_class: measurement
+      on_value:
+        then:
+          - globals.set:
+              id: last_pm10
+              value: !lambda 'return x;'
+          - lambda: |-
+              id(aqi_index).update();
+              id(aqi_kategori).update();
+              id(aqi_pm10_index).update();
+              id(caqi_pm10_index).update();
+    update_interval: 5min
+    # Duty-cycle: SDS011'en gemmer selv denne værdi i sin flash og styrer
+    # ON/OFF internt i firmwaren (laser+blæser). Ved 1-30 min tænder den
+    # ca. 30 sekunder før hver måling og er slukket resten af tiden.
+    # Sæt update_interval: 0min for konstant måling (ikke anbefalet for
+    # laserens levetid). Kræver at ESP32 TX -> sensor RX er forbundet
+    # (rx_only skal IKKE være sat/true).
+
+#  --- BME280 temperatur/luftfugtighed/tryk ---
+  - platform: bme280_i2c
+    i2c_id: bus_a
+    address: 0x76   # brug 0x77 hvis 0x76 ikke findes ved i2c-scan
+    update_interval: 60s
+    temperature:
+      name: "Temperatur"
+      id: temperature
+      accuracy_decimals: 1
+      device_class: temperature
+      state_class: measurement
+    humidity:
+      name: "Luftfugtighed"
+      id: humidity
+      accuracy_decimals: 1
+      device_class: humidity
+      state_class: measurement
+    pressure:
+      name: "Lufttryk"
+      id: pressure
+      accuracy_decimals: 1
+      device_class: pressure
+      state_class: measurement
+
+  # --- Dugpunkt — beregnet fra BME280 temperatur/luftfugtighed (Magnus-
+  # formlen), samme formel som ESPHome/davis/davisnet-weatherlogger.yaml og
+  # tempest_datalogger.py bruger, for konsistens på tværs af stationerne. ---
+  - platform: template
+    name: "Dugpunkt"
+    id: dew_point
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    update_interval: 60s
+    lambda: |-
+      float t = id(temperature).state;
+      float rh = id(humidity).state;
+      if (isnan(t) || isnan(rh)) {
+        return {};
+      }
+      float gamma = log(rh / 100.0f) + 17.625f * t / (243.04f + t);
+      return 243.04f * gamma / (17.625f - gamma);
+
+  # --- Beregnet AQI (US EPA Air Quality Index) ---
+  # Bruger EPA's officielle breakpoint-tabel (PM2.5-breakpoints opdateret
+  # maj 2024, PM10-breakpoints uændrede). AQI er defineret som den højeste
+  # af de to del-indekser - ikke et gennemsnit - da luften kun er så ren
+  # som den værste forurener.
+  # OBS: EPA's tabel er beregnet til 24-timers gennemsnit. Her bruges
+  # SDS011's øjebliksmålinger direkte, så værdien er en tilnærmelse og
+  # kan svinge mere end en "officiel" AQI ville gøre.
+  - platform: template
+    name: "AQI"
+    id: aqi_index
+    icon: "mdi:air-filter"
+    accuracy_decimals: 0
+    device_class: aqi
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      float pm25 = id(pm_2_5).state;
+      float pm10 = id(pm_10_0).state;
+      if (isnan(pm25) || isnan(pm10)) {
+        return {};
+      }
+
+      // --- PM2.5 del-indeks (EPA-breakpoints, opdateret maj 2024) ---
+      float aqi_pm25;
+      if (pm25 <= 9.0) {
+        aqi_pm25 = (50.0 / 9.0) * pm25;
+      } else if (pm25 <= 35.4) {
+        aqi_pm25 = ((100.0 - 51.0) / (35.4 - 9.1)) * (pm25 - 9.1) + 51.0;
+      } else if (pm25 <= 55.4) {
+        aqi_pm25 = ((150.0 - 101.0) / (55.4 - 35.5)) * (pm25 - 35.5) + 101.0;
+      } else if (pm25 <= 125.4) {
+        aqi_pm25 = ((200.0 - 151.0) / (125.4 - 55.5)) * (pm25 - 55.5) + 151.0;
+      } else if (pm25 <= 225.4) {
+        aqi_pm25 = ((300.0 - 201.0) / (225.4 - 125.5)) * (pm25 - 125.5) + 201.0;
+      } else if (pm25 <= 325.4) {
+        aqi_pm25 = ((500.0 - 301.0) / (325.4 - 225.5)) * (pm25 - 225.5) + 301.0;
+      } else {
+        aqi_pm25 = 500.0;
+      }
+
+      // --- PM10 del-indeks (uændrede EPA-breakpoints) ---
+      float aqi_pm10;
+      if (pm10 <= 54.0) {
+        aqi_pm10 = (50.0 / 54.0) * pm10;
+      } else if (pm10 <= 154.0) {
+        aqi_pm10 = ((100.0 - 51.0) / (154.0 - 55.0)) * (pm10 - 55.0) + 51.0;
+      } else if (pm10 <= 254.0) {
+        aqi_pm10 = ((150.0 - 101.0) / (254.0 - 155.0)) * (pm10 - 155.0) + 101.0;
+      } else if (pm10 <= 354.0) {
+        aqi_pm10 = ((200.0 - 151.0) / (354.0 - 255.0)) * (pm10 - 255.0) + 151.0;
+      } else if (pm10 <= 424.0) {
+        aqi_pm10 = ((300.0 - 201.0) / (424.0 - 355.0)) * (pm10 - 355.0) + 201.0;
+      } else if (pm10 <= 504.0) {
+        aqi_pm10 = ((400.0 - 301.0) / (504.0 - 425.0)) * (pm10 - 425.0) + 301.0;
+      } else if (pm10 <= 604.0) {
+        aqi_pm10 = ((500.0 - 401.0) / (604.0 - 505.0)) * (pm10 - 505.0) + 401.0;
+      } else {
+        aqi_pm10 = 500.0;
+      }
+
+      return std::max(aqi_pm25, aqi_pm10);
+
+  # --- AQI del-indeks, PM2.5 og PM10 hver for sig — samme kolonner
+  # (aqi_pm2p5/aqi_pm10) som Davis AirLink bruger (airlink_datalogger.py),
+  # så db_writer.py gemmer dem i samme felter. Bruger samme (opdaterede
+  # maj 2024) EPA-breakpoints som "AQI" ovenfor, IKKE airlink_datalogger.py's
+  # ældre breakpoint-tabel — de to stationers aqi_pm2p5/aqi_pm10-værdier er
+  # derfor ikke bit-for-bit identiske ved samme koncentration, kun samme
+  # skala/definition (US EPA AQI, 0-500). Duplikeret bevidst fremfor delt
+  # kode — samme princip som airlink_datalogger.py/meteobridge_datalogger.py,
+  # der hver holder deres egne kopier af breakpoint-tabellerne (se AGENT.md). ---
+  - platform: template
+    name: "AQI PM2.5"
+    id: aqi_pm25_index
+    icon: "mdi:air-filter"
+    accuracy_decimals: 0
+    device_class: aqi
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      float pm25 = id(pm_2_5).state;
+      if (isnan(pm25)) {
+        return {};
+      }
+      if (pm25 <= 9.0) {
+        return (50.0 / 9.0) * pm25;
+      } else if (pm25 <= 35.4) {
+        return ((100.0 - 51.0) / (35.4 - 9.1)) * (pm25 - 9.1) + 51.0;
+      } else if (pm25 <= 55.4) {
+        return ((150.0 - 101.0) / (55.4 - 35.5)) * (pm25 - 35.5) + 101.0;
+      } else if (pm25 <= 125.4) {
+        return ((200.0 - 151.0) / (125.4 - 55.5)) * (pm25 - 55.5) + 151.0;
+      } else if (pm25 <= 225.4) {
+        return ((300.0 - 201.0) / (225.4 - 125.5)) * (pm25 - 125.5) + 201.0;
+      } else if (pm25 <= 325.4) {
+        return ((500.0 - 301.0) / (325.4 - 225.5)) * (pm25 - 225.5) + 301.0;
+      } else {
+        return 500.0;
+      }
+
+  - platform: template
+    name: "AQI PM10"
+    id: aqi_pm10_index
+    icon: "mdi:air-filter"
+    accuracy_decimals: 0
+    device_class: aqi
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      float pm10 = id(pm_10_0).state;
+      if (isnan(pm10)) {
+        return {};
+      }
+      if (pm10 <= 54.0) {
+        return (50.0 / 54.0) * pm10;
+      } else if (pm10 <= 154.0) {
+        return ((100.0 - 51.0) / (154.0 - 55.0)) * (pm10 - 55.0) + 51.0;
+      } else if (pm10 <= 254.0) {
+        return ((150.0 - 101.0) / (254.0 - 155.0)) * (pm10 - 155.0) + 101.0;
+      } else if (pm10 <= 354.0) {
+        return ((200.0 - 151.0) / (354.0 - 255.0)) * (pm10 - 255.0) + 151.0;
+      } else if (pm10 <= 424.0) {
+        return ((300.0 - 201.0) / (424.0 - 355.0)) * (pm10 - 355.0) + 201.0;
+      } else if (pm10 <= 504.0) {
+        return ((400.0 - 301.0) / (504.0 - 425.0)) * (pm10 - 425.0) + 301.0;
+      } else if (pm10 <= 604.0) {
+        return ((500.0 - 401.0) / (604.0 - 505.0)) * (pm10 - 505.0) + 401.0;
+      } else {
+        return 500.0;
+      }
+
+  # --- CAQI (EU CITEAIR Common Air Quality Index) — samme breakpoints som
+  # airlink_datalogger.py's _CAQI_PM25_BREAKPOINTS/_CAQI_PM10_BREAKPOINTS.
+  # Beregnet fra den aktuelle (øjebliks-) koncentration, ikke et rullende
+  # gennemsnit — CAQI er designet som et realtids-indeks, modsat US AQI's
+  # NowCast-konvention. Officielle bånd går kun til 100 ("Very High"); over
+  # det ekstrapoleres med samme hældning og caps ved 200 i stedet for at
+  # returnere tom, samme konvention som AirLink. ---
+  - platform: template
+    name: "CAQI PM2.5"
+    id: caqi_pm25_index
+    icon: "mdi:air-filter"
+    accuracy_decimals: 0
+    device_class: aqi
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      float pm25 = id(pm_2_5).state;
+      if (isnan(pm25)) {
+        return {};
+      }
+      if (pm25 <= 15.0) {
+        return (25.0 / 15.0) * pm25;
+      } else if (pm25 <= 30.0) {
+        return ((50.0 - 25.0) / (30.0 - 15.0)) * (pm25 - 15.0) + 25.0;
+      } else if (pm25 <= 55.0) {
+        return ((75.0 - 50.0) / (55.0 - 30.0)) * (pm25 - 30.0) + 50.0;
+      } else if (pm25 <= 110.0) {
+        return ((100.0 - 75.0) / (110.0 - 55.0)) * (pm25 - 55.0) + 75.0;
+      } else if (pm25 <= 330.0) {
+        return ((200.0 - 100.0) / (330.0 - 110.0)) * (pm25 - 110.0) + 100.0;
+      } else {
+        return 200.0;  // over den ekstrapolerede grænse — cappet, ikke udeladt
+      }
+
+  - platform: template
+    name: "CAQI PM10"
+    id: caqi_pm10_index
+    icon: "mdi:air-filter"
+    accuracy_decimals: 0
+    device_class: aqi
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      float pm10 = id(pm_10_0).state;
+      if (isnan(pm10)) {
+        return {};
+      }
+      if (pm10 <= 25.0) {
+        return (25.0 / 25.0) * pm10;
+      } else if (pm10 <= 50.0) {
+        return ((50.0 - 25.0) / (50.0 - 25.0)) * (pm10 - 25.0) + 25.0;
+      } else if (pm10 <= 90.0) {
+        return ((75.0 - 50.0) / (90.0 - 50.0)) * (pm10 - 50.0) + 50.0;
+      } else if (pm10 <= 180.0) {
+        return ((100.0 - 75.0) / (180.0 - 90.0)) * (pm10 - 90.0) + 75.0;
+      } else if (pm10 <= 540.0) {
+        return ((200.0 - 100.0) / (540.0 - 180.0)) * (pm10 - 180.0) + 100.0;
+      } else {
+        return 200.0;  // over den ekstrapolerede grænse — cappet, ikke udeladt
+      }
+
+binary_sensor:
+  # --- Alarm når AQI overstiger 100 (Usund for følsomme grupper) ---
+  - platform: template
+    name: "AQI Alarm"
+    id: aqi_alarm
+    device_class: problem
+    lambda: |-
+      float aqi = id(aqi_index).state;
+      if (isnan(aqi)) {
+        return {};
+      }
+      return aqi > 100;
+
+text_sensor:
+  # --- Tidsstempel for sidste reelle PM-måling ---
+  - platform: template
+    name: "Sidst Opdateret"
+    id: sidst_opdateret
+    icon: "mdi:clock-outline"
+
+  # --- AQI-kategori som læsbar tekst ---
+  - platform: template
+    name: "AQI Kategori"
+    id: aqi_kategori
+    icon: "mdi:air-filter"
+    update_interval: never
+    lambda: |-
+      float aqi = id(aqi_index).state;
+      if (isnan(aqi)) {
+        return {};
+      }
+      if (aqi <= 50) {
+        return {"God"};
+      } else if (aqi <= 100) {
+        return {"Moderat"};
+      } else if (aqi <= 150) {
+        return {"Usund for følsomme grupper"};
+      } else if (aqi <= 200) {
+        return {"Usund"};
+      } else if (aqi <= 300) {
+        return {"Meget usund"};
+      } else {
+        return {"Farlig"};
+      }
+
+# --- weatherdatalogger MQTT-observation ---
+# Publicerer et samlet JSON-objekt hvert 60. sekund med de seneste kendte
+# værdier af alle felter — samme "seneste kendte værdi"-princip som
+# ESPHome/davis/davisnet-weatherlogger.yaml's observation-payload. PM/AQI/CAQI
+# opdateres reelt kun hvert 5. minut (SDS011's egen duty-cycle), men
+# publiceres alligevel hvert minut sammen med BME280-værdierne, så
+# realtime/history i databasen ikke går "stale" mellem PM-målingerne.
+# Feltnavne matcher db_writer.py's _OBS_FIELDS (samme kolonner som
+# Davis AirLink) — se ESPHome/airquality/README.md.
+# serial_number/timestamp udelades bevidst, ligesom på Davis-modtageren:
+# db_writer.py falder tilbage til topic-segmentet og ankomsttidspunktet,
+# denne enhed har hverken et hardware-serienummer eller RF-tidsstempel.
+# ---------------------------------------------------------------------------
+interval:
+  - interval: 60s
+    then:
+      - lambda: |-
+          char buf[512];
+          int pos = snprintf(buf, sizeof(buf), "{");
+
+          if (!isnan(id(pm_2_5).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"pm_2p5_ugm3\":%.1f", pos > 1 ? "," : "", id(pm_2_5).state);
+          }
+          if (!isnan(id(pm_10_0).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"pm_10_ugm3\":%.1f", pos > 1 ? "," : "", id(pm_10_0).state);
+          }
+          if (!isnan(id(aqi_pm25_index).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"aqi_pm2p5\":%.0f", pos > 1 ? "," : "", id(aqi_pm25_index).state);
+          }
+          if (!isnan(id(aqi_pm10_index).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"aqi_pm10\":%.0f", pos > 1 ? "," : "", id(aqi_pm10_index).state);
+          }
+          if (!isnan(id(caqi_pm25_index).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"caqi_pm2p5\":%.0f", pos > 1 ? "," : "", id(caqi_pm25_index).state);
+          }
+          if (!isnan(id(caqi_pm10_index).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"caqi_pm10\":%.0f", pos > 1 ? "," : "", id(caqi_pm10_index).state);
+          }
+          if (!isnan(id(temperature).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"air_temperature_c\":%.1f", pos > 1 ? "," : "", id(temperature).state);
+          }
+          if (!isnan(id(humidity).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"relative_humidity_pct\":%.1f", pos > 1 ? "," : "", id(humidity).state);
+          }
+          if (!isnan(id(dew_point).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"dew_point_c\":%.1f", pos > 1 ? "," : "", id(dew_point).state);
+          }
+          if (!isnan(id(pressure).state)) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos,
+              "%s\"station_pressure_mb\":%.1f", pos > 1 ? "," : "", id(pressure).state);
+          }
+
+          snprintf(buf + pos, sizeof(buf) - pos, "}");
+          id(mqtt_client).publish("weatherdatalogger/aqmonitor-${device_id}/observation", buf);
+
+# --- Om ESP32-C6 specifikt ---
+# Denne chip har derudover indbygget WiFi 6, BLE 5 og IEEE 802.15.4
+# (Zigbee 3.0 / Thread). ESPHome bruger p.t. kun WiFi-delen ovenfor -
+# Zigbee/Thread kræver separat firmware (ESP-IDF Zigbee-stack) og kan
+# ikke køre samtidig med en almindelig ESPHome-node på samme chip.
+# Relevant hvis du senere vil bygge en dedikeret Zigbee/Thread-bro
+# eller Matter-enhed på C6-hardware.
+
+# --- Om duty-cycle på SDS011 ---
+# ESPHomes sds011-komponent skriver update_interval direkte til sensorens
+# egen "working period"-register. Sensoren styrer derefter selv
+# tænd/sluk af laser og blæser uafhængigt af ESP32'en - det kræver ikke
+# deep sleep eller external components. Værdien er persistent i
+# sensorens flash, så den huskes selv efter strømsvigt.
+#
+# Ulempe: Med 5 min cyklus opdateres PM2.5/PM10 kun hvert 5. minut i
+# Home Assistant. BME280 måler stadig hvert minut (uafhængig af SDS011).

@@ -53,6 +53,19 @@ weatherdatalogger/
                                   nothing depends on these topics
   airlink-<did>/           ← Davis AirLink air quality sensor (Python service)
     observation            — PM1/PM2.5/PM10, AQI, temperature, humidity
+  aqmonitor-<id>/          ← Custom Air Quality Monitor (ESPHome firmware,
+    observation               field-compatible with airlink-<did> above) —
+                                PM2.5/PM10, AQI, CAQI, temperature, humidity,
+                                dew point, pressure (BME280 — AirLink has no
+                                barometer). Published every 60s using the
+                                latest known value of every field; PM/AQI/CAQI
+                                only actually change every 5 min (SDS011 duty
+                                cycle). No PM1.0 or 1h/3h/24h averages/NowCast
+                                — this hardware only reports instantaneous
+                                PM2.5/PM10, so AQI here is a same-scale
+                                approximation, not bit-identical to AirLink's
+                                NowCast-based value — see
+                                ESPHome/airquality/README.md
   meteobridge-<mac>/       ← Meteobridge (Python service, optional)
     observation            — wind, pressure, temp/humidity, solar/UV, rain,
                               indoor, lightning summary
@@ -62,6 +75,7 @@ Meteobridge (`meteobridge/meteobridge_datalogger.py`) is a full station like Tem
 
 `<serial>` for Tempest comes from the hub's UDP broadcast (`ST-…` for the sensor, `HB-…` for the hub).
 `<id>` for Davis is the station ID locked by the CC1101 receiver.
+`<id>` for the Air Quality Monitor is the `device_id` substitution at the top of `air-quality-monitor.yaml` (`01` by default — bump it if a second unit is ever added).
 
 All payloads are **flat JSON objects** with human-readable field names and SI units where applicable.
 
@@ -81,14 +95,14 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - Receiver: **M5Stack Basic Core** (ESP32, `m5stack-core-esp32-16M`, esp-idf
   framework) + **M5Stack CC1101 module** (E07-900M10S/EBYTE, external antenna,
   stacked via M-Bus, CS/GDO0 selected via onboard DIP switches — see
-  `davis/README.md`) — currently `frequency: 868.35MHz`,
+  `ESPHome/davis/README.md`) — currently `frequency: 868.35MHz`,
   `filter_bandwidth: 650kHz` (narrowed from an original 325kHz; this
   transmitter doesn't hop, so a tighter filter cuts noise without losing
   signal), CRC-16/CCITT with a 3-position bit-shift fallback. Supersedes an
   earlier ESP32-WROOM-32 + GERUI CC1101 breadboard build — RF decoding, MQTT
   topics, and published fields are unchanged; only the physical build and
   local display changed (see below)
-- Runs **ESPHome** firmware (`davis/davisnet-weatherlogger.yaml`) which handles RF decoding and MQTT publishing
+- Runs **ESPHome** firmware (`ESPHome/davis/davisnet-weatherlogger.yaml`) which handles RF decoding and MQTT publishing
 - HA entities come from ESPHome's own MQTT discovery (`mqtt: discovery: true`), grouped
   under one "Davisnet Datalogger" device — same visual result as Tempest/AirLink's
   hand-rolled discovery, just via ESPHome's built-in mechanism instead. Entity names
@@ -153,6 +167,18 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - Temperature and humidity readings are included (device internal sensors, used for PM correction)
 - AQI (US EPA) is computed from NowCast concentration before publishing
 - CAQI (EU CITEAIR) is also computed, from *current* (not NowCast) concentration, added alongside the US AQI fields rather than replacing them (`caqi_pm2p5`/`caqi_pm10`)
+- **Status: active**
+
+### Air Quality Monitor (ESPHome, custom build)
+- DIY air quality station, field-compatible with Davis AirLink but not affiliated hardware — publishes to the same `_OBS_FIELDS` PM/AQI/CAQI columns via its own `station_type = 'aqmonitor'`
+- **SoC**: ESP32-C6-DevKitC-1 (`esp32-c6-devkitc-1`, esp-idf framework)
+- **PM sensor**: SDS011 (laser PM2.5/PM10 only — no PM1.0, no onboard rolling averages/NowCast), UART, self-managed duty cycle (5 min default: ~30s active, rest idle)
+- **Environmental sensor**: BME280 (temperature/humidity/pressure), I2C
+- Firmware: `ESPHome/airquality/air-quality-monitor.yaml` — see `ESPHome/airquality/README.md`
+- HA entities via the **native ESPHome API** (`api:`), not MQTT discovery — `mqtt:` is present only to publish the `weatherdatalogger/aqmonitor-<id>/observation` topic, with `discovery: false` to avoid duplicate entities
+- Dew point computed on-device (Magnus formula, same as `davisnet-weatherlogger.yaml`/`tempest_datalogger.py`)
+- AQI computed from the SDS011's instantaneous reading (EPA's May-2024 breakpoint table) — an approximation, not NowCast-smoothed like AirLink's; CAQI uses `airlink_datalogger.py`'s exact breakpoint tables (current-concentration convention, same as AirLink)
+- `station_roles`' `air_quality` role still defaults to `airlink` — reassign it to `aqmonitor` to make `combined_realtime`/`history_charting` prefer this device instead (see `ESPHome/airquality/README.md`)
 - **Status: active**
 
 ### Meteobridge (optional)
@@ -274,17 +300,22 @@ WeatherDatalogger/                   ← repo root
 │   │                                     needs; called from install.sh's wizard or
 │   │                                     standalone, idempotent either way
 │   └── config.example.ini          ← Shared config template for all five services
-├── davis/                           ← Davis Vantage Vue (ESPHome receiver)
-│   ├── davisnet-weatherlogger.yaml ← ESPHome firmware (CC1101 RF → MQTT); flashed
-│   │                                  independently, not part of the LXC deploy.
-│   │                                  M5Stack Core build — current/supported
-│   ├── davis-vantage-receiver.yaml ← Superseded ESP32-WROOM-32 breadboard build;
-│   │                                  same RF decode/MQTT topics, kept for reference
-│   ├── scripts/
-│   │   └── set_daily_rain.sh       ← Manual daily-rain correction helper; this one
-│   │                                  IS deployed — installed by deploy.sh to
-│   │                                  /opt/weatherdatalogger/scripts/
-│   └── README.md
+├── ESPHome/                          ← Flashed firmware devices — not part of the
+│   │                                  LXC deploy; each is its own sibling directory
+│   ├── davis/                       ← Davis Vantage Vue (ESPHome receiver)
+│   │   ├── davisnet-weatherlogger.yaml ← ESPHome firmware (CC1101 RF → MQTT);
+│   │   │                                  M5Stack Core build — current/supported
+│   │   ├── davis-vantage-receiver.yaml ← Superseded ESP32-WROOM-32 breadboard build;
+│   │   │                                  same RF decode/MQTT topics, kept for reference
+│   │   ├── scripts/
+│   │   │   └── set_daily_rain.sh   ← Manual daily-rain correction helper; this one
+│   │   │                              IS deployed — installed by deploy.sh to
+│   │   │                              /opt/weatherdatalogger/scripts/
+│   │   └── README.md
+│   └── airquality/                  ← Custom Air Quality Monitor (ESPHome)
+│       ├── air-quality-monitor.yaml ← ESPHome firmware (ESP32-C6 + SDS011 + BME280
+│       │                               → MQTT); field-compatible with Davis AirLink
+│       └── README.md
 ├── scripts/
 │   └── lint                        ← ruff format + ruff check --fix (dev only)
 ├── requirements-dev.txt             ← Shared dev/lint tools: ruff

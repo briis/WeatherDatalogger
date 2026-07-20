@@ -19,9 +19,10 @@ A unified weather data pipeline that collects data from multiple weather station
 | Station | Connection |
 |---|---|
 | WeatherFlow Tempest | UDP broadcast on the local network |
-| Davis Vantage Vue | Custom ESPHome receiver ([`davis/`](davis/) — flashed hardware, not a systemd service) |
+| Davis Vantage Vue | Custom ESPHome receiver ([`ESPHome/davis/`](ESPHome/davis/) — flashed hardware, not a systemd service) |
 | Davis AirLink (air quality) | HTTP polling |
 | Meteobridge | HTTP polling |
+| Custom Air Quality Monitor (PM2.5/PM10) | Custom ESPHome device ([`ESPHome/airquality/`](ESPHome/airquality/) — flashed hardware, not a systemd service; field-compatible with AirLink) |
 
 **Supported forecast providers:**
 
@@ -42,10 +43,11 @@ Ready to set it up? Jump to [Installation](#installation-debian--proxmox-lxc).
 | Directory | Hardware | Status |
 |---|---|---|
 | [`weatherdatalogger/tempest/`](weatherdatalogger/tempest/) | WeatherFlow Tempest (UDP → MQTT) | Active |
-| [`davis/`](davis/) | Davis Vantage Vue (M5Stack Core + CC1101, ESPHome) | Active — field-tested |
+| [`ESPHome/davis/`](ESPHome/davis/) | Davis Vantage Vue (M5Stack Core + CC1101, ESPHome) | Active — field-tested |
 | [`weatherdatalogger/airlink/`](weatherdatalogger/airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
 | [`weatherdatalogger/meteobridge/`](weatherdatalogger/meteobridge/) | Meteobridge (HTTP polling → MQTT full observation) | Active, optional |
 | [`weatherdatalogger/visualcrossing/`](weatherdatalogger/visualcrossing/) | Visual Crossing Weather API forecast (HTTP polling → MQTT) | Active, optional — lat/lon-based, no station hardware required |
+| [`ESPHome/airquality/`](ESPHome/airquality/) | Custom air quality monitor (ESP32-C6 + SDS011 + BME280, ESPHome, field-compatible with AirLink) | Active |
 
 ### Infrastructure (MQTT → storage)
 
@@ -78,6 +80,8 @@ weatherdatalogger/
     set_daily_rain            (Davis's own rain fields are computed standalone
     set_rain_rate              from its RF tip counter; nothing depends on these)
   airlink-<did>/            ← Davis AirLink air quality sensor
+    observation
+  aqmonitor-<id>/           ← Custom Air Quality Monitor (ESPHome, field-compatible with AirLink)
     observation
   meteobridge-<mac>/        ← Meteobridge (optional)
     observation

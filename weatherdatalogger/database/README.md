@@ -84,7 +84,7 @@ One row per physical device. Auto-populated on first observation.
 | Column | Type | Description |
 |---|---|---|
 | `station_id` | `VARCHAR(32)` | Hardware serial number e.g. `ST-00000512`, `001D0A100A5A` |
-| `station_type` | `VARCHAR(32)` | `tempest` \| `airlink` \| `davis` |
+| `station_type` | `VARCHAR(32)` | `tempest` \| `airlink` \| `davis` \| `meteobridge` \| `aqmonitor` — derived from the MQTT topic segment, not a fixed enum; any `<type>-<id>` prefix works (see `db_writer.py`) |
 | `name` | `VARCHAR(128)` | Optional human-readable label |
 | `created_at` | `DATETIME` | First seen timestamp |
 
@@ -121,6 +121,8 @@ Both `realtime` and `history` share the same observation columns:
 ### `combined_realtime` (view)
 
 A single-row view that merges the latest readings from all station types into one record, sourcing each role (`wind`, `pressure`, `temp_humidity`, ...) from whatever `station_type` `station_roles` currently maps it to — see that table's comment. By default: most weather fields come from `davis`; pressure, lightning, UV, solar, illuminance, wet bulb/delta T, air density, and battery voltage come from `tempest`; air quality fields come from `airlink`. Columns for a role whose station isn't registered yet are `NULL`.
+
+The `air_quality` role can instead be pointed at `aqmonitor` — the custom ESPHome PM2.5/PM10 monitor ([`ESPHome/airquality/`](../../ESPHome/airquality/)), which publishes to the same `pm_*`/`aqi_*`/`caqi_*` columns as `airlink` (`UPDATE station_roles SET station_type = 'aqmonitor' WHERE role = 'air_quality';`) — see that device's README for the field-compatibility caveats (no PM1.0/rolling averages, AQI is an instantaneous approximation rather than AirLink's NowCast-smoothed value).
 
 The `temp_humidity`-role station's own on-board barometer/BME280 reading (which would only add information when `pressure` and `temp_humidity` point at different hardware) isn't exposed here or in `history_charting` — on this install both roles currently resolve to the same station, so those columns were always `NULL` and were dropped entirely (see migrations/20260709_derole_station_columns.sql and migrations/20260709_drop_empty_temp_humidity_columns.sql).
 

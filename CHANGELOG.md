@@ -12,6 +12,14 @@ earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-20
+
+### Added
+- `ESPHome/airquality/` — a new custom air quality monitor (ESP32-C6 + SDS011 PM2.5/PM10 + BME280), field-compatible with the Davis AirLink integration. Publishes to `weatherdatalogger/aqmonitor-<id>/observation` with `pm_2p5_ugm3`/`pm_10_ugm3`/`aqi_pm2p5`/`aqi_pm10`/`caqi_pm2p5`/`caqi_pm10`/`air_temperature_c`/`relative_humidity_pct`/`dew_point_c`/`station_pressure_mb` — reuses `db_writer.py`'s existing AirLink columns, no schema changes needed. See `ESPHome/airquality/README.md` for hardware, field-compatibility caveats (no PM1.0/rolling-average/NowCast on this hardware), and how to point the `air_quality` `station_roles` entry at it
+
+### Changed
+- **Breaking (repo layout, not runtime):** the Davis Vantage Vue ESPHome firmware moved from the top-level `davis/` directory to `ESPHome/davis/`, as a sibling of the new `ESPHome/airquality/`. `deploy.sh` and `ESPHome/davis/README.md`/`scripts/set_daily_rain.sh` updated for the new path. No effect on already-deployed installs — the moved files aren't part of the LXC deploy, only referenced from the repo for flashing
+
 ## [0.3.0] - 2026-07-13
 
 ### Added

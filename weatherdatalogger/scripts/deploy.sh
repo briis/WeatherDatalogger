@@ -138,10 +138,10 @@ echo "$INSTALLED_VERSION" > "$INSTALL_ROOT/VERSION"
 
 # Davis receiver — ESPHome firmware is flashed independently (not a systemd
 # service here), but its server-side helper scripts live in the repo under
-# davis/ (a sibling of weatherdatalogger/, not inside it). Installed
+# ESPHome/davis/ (a sibling of weatherdatalogger/, not inside it). Installed
 # alongside deploy.sh rather than in its own directory since it's the only
 # davis-side file that runs on the server.
-install -m 755 "$STAGING/davis/scripts/set_daily_rain.sh" "$INSTALL_ROOT/scripts/set_daily_rain.sh"
+install -m 755 "$STAGING/ESPHome/davis/scripts/set_daily_rain.sh" "$INSTALL_ROOT/scripts/set_daily_rain.sh"
 
 # ---------------------------------------------------------------------------
 # Systemd units — reload only when a file actually changed

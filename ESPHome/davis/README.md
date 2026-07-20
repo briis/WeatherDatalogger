@@ -2,7 +2,7 @@
 
 Receives 868 MHz ISM band transmissions from a **Davis Vantage Vue** weather station and publishes decoded observations to MQTT under the project's standard topic namespace.
 
-> **Installation:** Follow the [server installation guide](../README.md#installation) first. The ESPHome firmware is flashed independently — see [Setup](#setup) below.
+> **Installation:** Follow the [server installation guide](../../README.md#installation) first. The ESPHome firmware is flashed independently — see [Setup](#setup) below.
 
 > **Hardware revision (2026-07-16):** the receiver was rebuilt on an **M5Stack Basic Core** (`davisnet-weatherlogger.yaml`) — a sturdier, case-enclosed build with a built-in color display and an external-antenna CC1101 module for better range. RF decoding, MQTT topics, and all published fields are unchanged from the original breadboard build — see [Field conventions](#field-conventions). The original ESP32-WROOM-32 + breakout-board build (`davis-vantage-receiver.yaml`) is superseded; this README now documents the M5Stack build only. See git history for the old wiring if you still have one of those units deployed.
 
@@ -217,7 +217,7 @@ Or on the server, for the daily total, using the shared config for broker/creden
 
 By default it reads `/opt/weatherdatalogger/config.ini`; override with `CONFIG_INI=/path/to/config.ini`. Both values are clamped to `< 500mm` (or mm/h) on-device — implausible values are logged and ignored, not applied.
 
-**[`weatherdatalogger/meteobridge/`](../weatherdatalogger/meteobridge/)**, if you have one wired to the same Vantage Vue ISS, no longer pushes automated corrections into the two topics above — it's now a full station integration with its own database rows (`weatherdatalogger/meteobridge-<mac>/observation`) rather than a correction feed for this device. To compare its rain reading against this device's RF-tip-derived one, query the database directly (both are logged under their own `station_id`) rather than looking at these entities. See its README for setup.
+**[`weatherdatalogger/meteobridge/`](../../weatherdatalogger/meteobridge/)**, if you have one wired to the same Vantage Vue ISS, no longer pushes automated corrections into the two topics above — it's now a full station integration with its own database rows (`weatherdatalogger/meteobridge-<mac>/observation`) rather than a correction feed for this device. To compare its rain reading against this device's RF-tip-derived one, query the database directly (both are logged under their own `station_id`) rather than looking at these entities. See its README for setup.
 
 ---
 
@@ -231,7 +231,7 @@ The same block also has `language` (`"en"` or `"da"`), controlling the Beaufort 
 
 ### 1. Set the CC1101 module's DIP switches
 
-Before stacking the CC1101 module onto the Core, set its two DIP-switch blocks for a "Core" host — see the [RF module](#rf-module--m5stack-cc1101-module-e07-900m10s--ebyte-external-antenna) table above (CSN block #2 ON, GDO block #4 ON, all other switches OFF). Wrong switches show up as "CC1101 isn't receiving RF frames at all" — see [Debugging this file](../AGENT.md#debugging-this-file) in AGENT.md.
+Before stacking the CC1101 module onto the Core, set its two DIP-switch blocks for a "Core" host — see the [RF module](#rf-module--m5stack-cc1101-module-e07-900m10s--ebyte-external-antenna) table above (CSN block #2 ON, GDO block #4 ON, all other switches OFF). Wrong switches show up as "CC1101 isn't receiving RF frames at all" — see [Debugging this file](../../AGENT.md#debugging-this-file) in AGENT.md.
 
 ### 2. Create `secrets.yaml`
 
@@ -262,13 +262,13 @@ pip install esphome
 Flash for the first time over USB:
 
 ```bash
-esphome run davis/davisnet-weatherlogger.yaml
+esphome run ESPHome/davis/davisnet-weatherlogger.yaml
 ```
 
 Subsequent updates can be flashed over Wi-Fi (OTA):
 
 ```bash
-esphome run davis/davisnet-weatherlogger.yaml
+esphome run ESPHome/davis/davisnet-weatherlogger.yaml
 ```
 
 ### 4. Verify
@@ -276,7 +276,7 @@ esphome run davis/davisnet-weatherlogger.yaml
 Check ESPHome logs:
 
 ```bash
-esphome logs davis/davisnet-weatherlogger.yaml
+esphome logs ESPHome/davis/davisnet-weatherlogger.yaml
 ```
 
 You should see `Auto-locked to station ID: X` on the first valid packet, then wind readings every ~2.5 s. Verify MQTT output:
