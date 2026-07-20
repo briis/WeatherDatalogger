@@ -328,6 +328,73 @@ LEFT JOIN
     ) aq ON TRUE;
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- View: combined_realtime_stats
+-- Derived/calculated stats computed on demand from the raw `history` table
+-- (not history_charting, which is clock-bucketed with up to ~20 min lag and
+-- too coarse for a rolling 10-minute average). `wind` and `rain` are sourced
+-- via station_roles, same as combined_realtime.
+-- Timezone: recorded_at is stored as naive UTC; "today"/"yesterday" mean the
+-- calendar day in Europe/Copenhagen, so the day boundary is computed via
+-- CONVERT_TZ. CONVERT_TZ with a named zone requires the mysql.time_zone
+-- tables to be loaded — if empty, it silently returns NULL. One-time fix:
+--   mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
+-- See migrations/20260703_add_combined_realtime_stats.sql for full detail.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW combined_realtime_stats AS
+SELECT
+    gust.wind_gust_high_today,
+    bday.wind_bearing_avg_day,
+    b10.wind_bearing_avg_10min,
+    rain.rain_total_yesterday
+FROM
+    (
+        SELECT MAX(h.wind_gust_ms) AS wind_gust_high_today
+        FROM   history  h
+        JOIN   stations s ON h.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'wind')
+          AND  h.recorded_at >= CONVERT_TZ(
+                   DATE(CONVERT_TZ(UTC_TIMESTAMP(), 'UTC', 'Europe/Copenhagen')),
+                   'Europe/Copenhagen', 'UTC')
+    ) gust
+CROSS JOIN
+    (
+        SELECT MOD(ROUND(DEGREES(ATAN2(
+                   AVG(SIN(RADIANS(h.wind_direction_deg))),
+                   AVG(COS(RADIANS(h.wind_direction_deg)))
+               ))) + 360, 360) AS wind_bearing_avg_day
+        FROM   history  h
+        JOIN   stations s ON h.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'wind')
+          AND  h.recorded_at >= CONVERT_TZ(
+                   DATE(CONVERT_TZ(UTC_TIMESTAMP(), 'UTC', 'Europe/Copenhagen')),
+                   'Europe/Copenhagen', 'UTC')
+    ) bday
+CROSS JOIN
+    (
+        SELECT MOD(ROUND(DEGREES(ATAN2(
+                   AVG(SIN(RADIANS(h.wind_direction_deg))),
+                   AVG(COS(RADIANS(h.wind_direction_deg)))
+               ))) + 360, 360) AS wind_bearing_avg_10min
+        FROM   history  h
+        JOIN   stations s ON h.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'wind')
+          AND  h.recorded_at >= UTC_TIMESTAMP() - INTERVAL 10 MINUTE
+    ) b10
+CROSS JOIN
+    (
+        SELECT MAX(h.rain_accumulation_mm) AS rain_total_yesterday
+        FROM   history  h
+        JOIN   stations s ON h.station_id = s.station_id
+        WHERE  s.station_type = (SELECT station_type FROM station_roles WHERE role = 'rain')
+          AND  h.recorded_at >= CONVERT_TZ(
+                   DATE(CONVERT_TZ(UTC_TIMESTAMP(), 'UTC', 'Europe/Copenhagen')) - INTERVAL 1 DAY,
+                   'Europe/Copenhagen', 'UTC')
+          AND  h.recorded_at <  CONVERT_TZ(
+                   DATE(CONVERT_TZ(UTC_TIMESTAMP(), 'UTC', 'Europe/Copenhagen')),
+                   'Europe/Copenhagen', 'UTC')
+    ) rain;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Table: history_charting
 -- Pre-aggregated 10-minute windows combining all station types.
 -- One combined row per window_start (clock-aligned UTC: 00:00, 00:10, …).
