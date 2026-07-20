@@ -154,9 +154,37 @@ fi
 # ---------------------------------------------------------------------------
 # 7. Tables — safe to re-run every time; every statement in this file is
 #    already CREATE TABLE IF NOT EXISTS.
+#
+#    02_create_tables.sql is a flattened snapshot that already reflects the
+#    cumulative effect of every migration in migrations/ (each migration's
+#    header says as much, e.g. "see 02_create_tables.sql for the up-to-date
+#    reference copy"). On a brand new database it creates the *final*
+#    column/table names directly — so if deploy.sh's migration runner (which
+#    replays migrations/*.sql in order against an empty schema_migrations
+#    table) is then let loose on top of that, it re-applies renames/adds that
+#    already happened, which can collide (e.g. ALTER ... CHANGE COLUMN x y
+#    when y already exists). Seed schema_migrations with every migration
+#    filename that exists right now, so deploy.sh skips all of them here and
+#    only applies migrations added after this install.
 # ---------------------------------------------------------------------------
+SCHEMA_MIGRATIONS_EXISTS=$(mariadb --silent --skip-column-names -u root -e "
+    SELECT COUNT(*) FROM information_schema.tables
+    WHERE table_schema = '$DB_NAME' AND table_name = 'schema_migrations';
+")
+
 echo "==> Creating/verifying database schema…"
 mariadb -u root "$DB_NAME" < "$WRITER_DIR/02_create_tables.sql"
+
+if [[ "$SCHEMA_MIGRATIONS_EXISTS" -eq 0 ]]; then
+    echo "==> Fresh database — marking existing migrations as already applied…"
+    shopt -s nullglob
+    for sql_file in "$WRITER_DIR/migrations/"*.sql; do
+        filename=$(basename "$sql_file")
+        mariadb -u root "$DB_NAME" -e \
+            "INSERT IGNORE INTO schema_migrations (filename) VALUES ('$filename');"
+    done
+    shopt -u nullglob
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Config wizard — only for a brand new config.ini; an existing one is
