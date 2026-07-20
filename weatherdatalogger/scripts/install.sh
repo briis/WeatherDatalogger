@@ -379,6 +379,30 @@ else
         updates+=(meteobridge host "$METEOBRIDGE_HOST")
     fi
 
+    DAVIS=$(_ask_yn "Do you have the Davis ESPHome/M5Stack weather receiver (davisnet-weatherlogger firmware)?")
+    if [[ "$DAVIS" == "true" ]]; then
+        # The receiver runs on its own device and publishes straight to MQTT —
+        # there's no service on this host to enable/point at a host (unlike
+        # Tempest/AirLink/Meteobridge above), so nothing to record in
+        # config.ini. It just needs pointing at the broker this wizard set up.
+        if [[ "$INSTALL_MQTT" == "true" ]]; then
+            # A remote device can't resolve "localhost" as this host —
+            # give it this machine's LAN IP instead.
+            DAVIS_MQTT_HOST=$(hostname -I | awk '{print $1}')
+        else
+            DAVIS_MQTT_HOST="$MQTT_BROKER"
+        fi
+        echo ""
+        echo "    Point the receiver's secrets.yaml at this broker so it starts"
+        echo "    publishing (see the [mqtt] section for the full topic layout):"
+        echo "      mqtt_broker:   $DAVIS_MQTT_HOST"
+        echo "      mqtt_port:     1883"
+        if [[ -n "$MQTT_USERNAME" ]]; then
+            echo "      mqtt_username: $MQTT_USERNAME"
+            echo "      mqtt_password: see the [mqtt] password field in $SHARED_CONFIG"
+        fi
+    fi
+
     echo ""
     echo "── Forecast provider ───────────────────────────────────────────"
     VISUALCROSSING=$(_ask_yn "Enable Visual Crossing weather forecast?")
