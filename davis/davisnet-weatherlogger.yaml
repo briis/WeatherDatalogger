@@ -42,9 +42,9 @@ logger:
 # api: kept solely for remote `esphome logs`/OTA — do NOT also add this
 # node via Home Assistant's "ESPHome" integration UI, or entities would be
 # duplicated (once via native API, once via MQTT discovery below).
-api:
-  encryption:
-    key: !secret api_encryption_key
+# api:
+#   encryption:
+#     key: !secret api_encryption_key
 
 ota:
   - platform: esphome
