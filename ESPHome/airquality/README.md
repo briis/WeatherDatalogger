@@ -92,11 +92,11 @@ Unlike the Davis receiver (which uses ESPHome's own MQTT discovery), this device
 | AQI | Sensor | AQI (0-500) | Combined display value — `max(AQI PM2.5, AQI PM10)` |
 | AQI PM2.5, AQI PM10 | Sensor | AQI (0-500) | Per-pollutant sub-indices — published to MQTT as `aqi_pm2p5`/`aqi_pm10` |
 | CAQI PM2.5, CAQI PM10 | Sensor | CAQI (0-200) | Published to MQTT as `caqi_pm2p5`/`caqi_pm10` |
-| AQI Kategori | Text sensor | — | Danish AQI category label (God/Moderat/Usund/…) |
+| AQI Category | Text sensor | — | AQI category label (Good/Moderate/Unhealthy/…) |
 | AQI Alarm | Binary sensor | on/off | `problem` device class, trips when AQI > 100 |
-| Temperatur, Luftfugtighed, Lufttryk | Sensor | °C / % / hPa | BME280 |
-| Dugpunkt | Sensor | °C | Computed |
-| Sidst Opdateret | Text sensor | — | Timestamp of the last real PM measurement |
+| Temperature, Humidity, Pressure | Sensor | °C / % / hPa | BME280 |
+| Dew Point | Sensor | °C | Computed |
+| Last Updated | Text sensor | — | Timestamp of the last real PM measurement |
 
 ---
 
