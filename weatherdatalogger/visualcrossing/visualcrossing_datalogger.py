@@ -54,7 +54,7 @@ DEFAULT_CONFIG = {
         "latitude": "",  # Forecast location — must be set by user
         "longitude": "",  # Forecast location — must be set by user
         "days": "14",  # Free tier max; today + next N days
-        "language": "en",  # See pyVisualCrossing.const.SUPPORTED_LANGUAGES
+        "language": "en",  # Language for the "description" field — see pyVisualCrossing.const.SUPPORTED_LANGUAGES
         "location": "home",  # label used in MQTT topic: forecast-<provider>-<location>
         "interval_min": "60",  # 24 calls/day at default — free tier is 1000/day
     },

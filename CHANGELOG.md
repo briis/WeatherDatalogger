@@ -12,6 +12,11 @@ earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-22
+
+### Fixed
+- `[visualcrossing] language` config comments incorrectly said the setting was "unused" — that was true when the comment was written, but `forecast_current`/`forecast_daily`'s `description` narrative text (added in `migrations/20260713_add_forecast_description.sql`) is sent in whatever language `language` is set to (it's passed straight through as Visual Crossing's `lang` API parameter). No code change — `visualcrossing_datalogger.py` already forwarded it correctly. Set `language = da` (or any of `pyVisualCrossing.const.SUPPORTED_LANGUAGES`) in `config.ini` and restart `visualcrossing-datalogger` to change it
+
 ## [0.5.0] - 2026-07-22
 
 ### Added

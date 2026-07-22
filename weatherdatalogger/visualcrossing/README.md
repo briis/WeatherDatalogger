@@ -129,10 +129,12 @@ api_key      =         # REQUIRED — Visual Crossing API key
 latitude     =         # REQUIRED — decimal latitude, e.g. 55.6761
 longitude    =         # REQUIRED — decimal longitude, e.g. 12.5683
 days         = 14      # Forecast days to request (today + next N); free tier max
-language     = en      # Native condition text language — see pyVisualCrossing.const.SUPPORTED_LANGUAGES (includes da)
+language     = en      # Language for the "description" narrative text (current + forecast_daily) — see pyVisualCrossing.const.SUPPORTED_LANGUAGES (includes da)
 location     = home    # Slug used in MQTT topic: forecast-visualcrossing-<location>
 interval_min = 60      # Poll interval in minutes — 60 min = 24 calls/day
 ```
+
+`language` is per-deployment (one value in this install's `config.ini`), sent to Visual Crossing as the `lang` query parameter, which controls the `description` narrative text on `forecast_current`/`forecast_daily` — everything else in the MQTT payload (numbers, the HA-mapped `condition` icon) is language-independent. Supported codes (`pyVisualCrossing.const.SUPPORTED_LANGUAGES`): `ar`, `bg`, `cs`, `da`, `de`, `el`, `en`, `es`, `fa`, `fi`, `fr`, `he`, `hu`, `it`, `ja`, `ko`, `nl`, `pl`, `pt`, `sr`, `sv`, `tr`, `uk`, `vi`, `zh`. An unrecognized code falls back to `en` silently (`pyVisualCrossing` clamps it internally).
 
 Shared keys used by this service:
 
