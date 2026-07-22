@@ -69,6 +69,23 @@ echo "==> Fetching latest code from GitHub…"
 git clone --quiet --depth 1 --branch main "$REPO_URL" "$STAGING"
 STAGING_WDL="$STAGING/weatherdatalogger"
 
+# Self-update: if deploy.sh changed upstream, install the new copy and
+# re-exec it now. Otherwise the rest of *this* run keeps executing the old
+# script's logic/paths against a repo checkout that may have moved on
+# structurally (e.g. a file relocated to a new directory) — that fails
+# partway through instead of just picking up the fix, and strands the
+# install on a broken deploy.sh until someone notices and refetches it by
+# hand. Skips cleanly on the very first run, when there's nothing installed
+# yet to compare against.
+DEPLOY_SELF="$INSTALL_ROOT/scripts/deploy.sh"
+if [[ -f "$DEPLOY_SELF" ]] && ! cmp -s "$STAGING_WDL/scripts/deploy.sh" "$DEPLOY_SELF"; then
+    echo "==> deploy.sh changed upstream — updating and re-running…"
+    install -m 755 "$STAGING_WDL/scripts/deploy.sh" "$DEPLOY_SELF"
+    trap - EXIT
+    rm -rf "$STAGING"
+    exec bash "$DEPLOY_SELF" "$@"
+fi
+
 # Version = VERSION file (bumped by hand on meaningful changes) + the short
 # commit SHA of what was actually cloned, so a user reporting an issue can
 # give you an identifier that's both human-friendly and exact.
