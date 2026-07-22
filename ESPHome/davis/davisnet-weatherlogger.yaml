@@ -1,7 +1,7 @@
 substitutions:
   name: "Davisnet Datalogger"
   device: davisnet-datalogger
-  version: 0.1.0
+  version: 0.2.0
   created_by: "Bjarne Riis"
 
   # Used only for the sea-level pressure conversion below — adjust to the
@@ -9,6 +9,7 @@ substitutions:
   # be left at 0 if unsure; elevation matters far more).
   elevation_m: "12"
   height_above_ground_m: "0.9"
+  page_interval: "8"
 
   # Language for derived text descriptions (Beaufort wind scale, pressure
   # trend). Supported: "en" (English), "da" (Danish).
@@ -150,6 +151,22 @@ color:
     blue: 20%
   - id: color_amber
     hex: FFC109
+  - id: color_gray
+    red: 40%
+    green: 40%
+    blue: 40%
+  - id: color_blue
+    red: 25%
+    green: 60%
+    blue: 100%
+  - id: color_cyan
+    red: 10%
+    green: 80%
+    blue: 90%
+  - id: color_purple
+    red: 65%
+    green: 40%
+    blue: 95%
 
 font:
   - file: "gfonts://Roboto"
@@ -168,6 +185,16 @@ font:
     id: font_wifi_icon
     size: 20
     glyphs: ["\U000F05A9", "\U000F05AA"]
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: font_page_icon
+    size: 28
+    # thermometer, water-percent, weather-windy, weather-pouring, gauge
+    glyphs: ["\U000F050F", "\U000F058E", "\U000F059D", "\U000F0596", "\U000F029A"]
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: font_trend_icon
+    size: 16
+    # arrow-up-bold, arrow-down-bold
+    glyphs: ["\U000F0737", "\U000F072E"]
   - file: "gfonts://Roboto"
     id: font_page_label
     size: 36
@@ -177,14 +204,26 @@ font:
 # Global state variables
 # ─────────────────────────────────────────────────────────────
 globals:
-  # Display page navigation — M5_BtnA (left) goes back a page,
-  # M5_BtnC (right) goes forward. Wraps around at both ends.
+  # Display page navigation — auto-advances every page_interval seconds
+  # (see interval: below). M5_BtnA (left) / M5_BtnC (right) still allow
+  # a manual jump and reset the countdown so it doesn't immediately
+  # auto-advance again right after a manual press.
   - id: current_page
     type: int
     initial_value: '0'
   - id: total_pages
     type: int
     initial_value: '5'
+  - id: page_timer_s
+    type: int
+    initial_value: '0'
+
+  # Set true on every valid (CRC-passed, station-matched) packet;
+  # consumed and cleared by the display lambda's next redraw, so the
+  # lower-left indicator flashes once per packet rather than staying lit.
+  - id: packet_led_on
+    type: bool
+    initial_value: 'false'
 
   - id: rain_count_prev
     type: int
@@ -325,6 +364,8 @@ cc1101:
           } else if (unit_id != id(known_unit_id)) {
             return; // Ignore neighbouring station
           }
+
+          id(packet_led_on) = true;
 
           // Build base topic: weatherdatalogger/davis-<id>
           char base_topic[48];
@@ -668,6 +709,15 @@ i2c:
 # (15min), and wind-lull/gust/rain-rate staleness handling (60s).
 # ─────────────────────────────────────────────────────────────
 interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          id(page_timer_s) += 1;
+          if (id(page_timer_s) >= ${page_interval}) {
+            id(current_page) = (id(current_page) + 1) % id(total_pages);
+            id(page_timer_s) = 0;
+          }
+
   - interval: 30s
     then:
       - lambda: |-
@@ -733,8 +783,9 @@ interval:
 # MIPI_SPI Display Configuration — Model: M5CORE
 #
 # Header (unchanged): time / title / WiFi icon.
-# Page content: 5 rotating pages of live Davis data, switched via
-# M5_BtnA (back) / M5_BtnC (forward) — see binary_sensor section.
+# Page content: 5 rotating pages of live Davis data, auto-advancing
+# every page_interval seconds (see interval: above). M5_BtnA (back) /
+# M5_BtnC (forward) still allow a manual jump — see binary_sensor section.
 # ─────────────────────────────────────────────────────────────
 display:
   - platform: mipi_spi
@@ -773,63 +824,92 @@ display:
 
       switch (id(current_page)) {
         case 0:
-          // ── Page 1: Date & time ───────────────────────────────────
-          it.print(10, y0, id(font_small), "Dato / Klokkeslæt");
-          if (now.is_valid()) {
-            it.strftime(10, y0 + 24, id(font_roboto_medium22), "%H:%M:%S", now);
-            it.strftime(10, y0 + 56, id(font_small), "%A %d-%m-%Y", now);
-          } else {
-            it.print(10, y0 + 24, id(font_small), "Tid ikke synkroniseret endnu");
-          }
-          it.printf(10, y0 + 84, id(font_small), "IP: %s",
-            id(davis_ip_address).state.c_str());
-          break;
-
-        case 1:
-          // ── Page 2: Temperature & humidity ────────────────────────
+          // ── Page 1: Temperature & humidity ────────────────────────
           it.print(10, y0, id(font_small), "Temperatur / Fugtighed");
-          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.1f°C   %.0f%%",
-            id(davis_temp).state, id(davis_hum).state);
-          it.printf(10, y0 + 56, id(font_small), "Føles som: %.1f°C",
-            id(davis_feels_like).state);
-          it.printf(10, y0 + 76, id(font_small), "Dugpunkt: %.1f°C",
-            id(davis_dew_point).state);
-          it.printf(10, y0 + 96, id(font_small), "Inde: %.1f°C  %.0f%%",
+          it.print(10, y0 + 18, id(font_page_icon), id(color_amber), "\U000F050F");
+          it.printf(46, y0 + 20, id(font_roboto_medium22), id(color_amber),
+            "%.1f°C", id(davis_temp).state);
+          it.print(170, y0 + 18, id(font_page_icon), id(color_blue), "\U000F058E");
+          it.printf(206, y0 + 20, id(font_roboto_medium22), id(color_blue),
+            "%.0f%%", id(davis_hum).state);
+          it.printf(10, y0 + 64, id(font_small), "Føles som: %.1f°C   Dugpunkt: %.1f°C",
+            id(davis_feels_like).state, id(davis_dew_point).state);
+          it.printf(10, y0 + 84, id(font_small), id(color_gray), "Inde: %.1f°C  %.0f%%",
             id(baro_temp).state, id(baro_hum).state);
           break;
 
-        case 2:
-          // ── Page 3: Wind ───────────────────────────────────────────
+        case 1:
+          // ── Page 2: Wind ───────────────────────────────────────────
           it.print(10, y0, id(font_small), "Vind");
-          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.1f m/s %s",
+          it.print(10, y0 + 18, id(font_page_icon), id(color_cyan), "\U000F059D");
+          it.printf(46, y0 + 20, id(font_roboto_medium22), id(color_cyan), "%.1f m/s %s",
             id(davis_wind_speed).state, id(davis_wind_cardinal).state.c_str());
-          it.printf(10, y0 + 56, id(font_small), "Vindstød: %.1f m/s",
-            id(davis_windgust).state);
-          it.printf(10, y0 + 76, id(font_small), "Vindstille: %.1f m/s",
-            id(davis_wind_lull).state);
-          it.printf(10, y0 + 96, id(font_small), "%s (%.0f)",
+          it.printf(10, y0 + 64, id(font_small), "Vindstød: %.1f m/s   Vindstille: %.1f m/s",
+            id(davis_windgust).state, id(davis_wind_lull).state);
+          it.printf(10, y0 + 84, id(font_small), id(color_amber), "%s (%.0f)",
             id(davis_beaufort_desc).state.c_str(), id(davis_beaufort).state);
           break;
 
-        case 3:
-          // ── Page 4: Rain ───────────────────────────────────────────
+        case 2:
+          // ── Page 3: Rain ───────────────────────────────────────────
           it.print(10, y0, id(font_small), "Regn");
-          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.1f mm",
+          it.print(10, y0 + 18, id(font_page_icon), id(color_blue), "\U000F0596");
+          it.printf(46, y0 + 20, id(font_roboto_medium22), id(color_blue), "%.1f mm",
             id(davis_rain).state);
-          it.printf(10, y0 + 56, id(font_small), "Intensitet: %.1f mm/t",
+          it.printf(10, y0 + 64, id(font_small), "Intensitet: %.1f mm/t",
             id(davis_rain_rate).state);
           break;
 
-        case 4:
-          // ── Page 5: Pressure ─────────────────────────────────────
+        case 3: {
+          // ── Page 4: Pressure ─────────────────────────────────────
           it.print(10, y0, id(font_small), "Lufttryk");
-          it.printf(10, y0 + 24, id(font_roboto_medium22), "%.0f hPa",
+          it.print(10, y0 + 18, id(font_page_icon), id(color_purple), "\U000F029A");
+          it.printf(46, y0 + 20, id(font_roboto_medium22), id(color_purple), "%.0f hPa",
             id(davis_slp).state);
-          it.printf(10, y0 + 56, id(font_small), "Tendens: %.1f hPa (%s)",
-            id(davis_slp_trend_mb).state, id(davis_slp_trend_desc).state.c_str());
-          it.printf(10, y0 + 76, id(font_small), "Ved station: %.0f hPa",
+
+          float trend = id(davis_slp_trend_mb).state;
+          Color trend_color = (trend >= 1.0f) ? id(color_green)
+                             : (trend <= -1.0f) ? id(color_red)
+                             : id(color_gray);
+          if (trend >= 1.0f) {
+            it.print(10, y0 + 66, id(font_trend_icon), trend_color, "\U000F0737");
+          } else if (trend <= -1.0f) {
+            it.print(10, y0 + 66, id(font_trend_icon), trend_color, "\U000F072E");
+          } else {
+            it.print(10, y0 + 66, id(font_small), trend_color, "-");
+          }
+          it.printf(30, y0 + 64, id(font_small), trend_color, "%.1f hPa (%s)",
+            trend, id(davis_slp_trend_desc).state.c_str());
+
+          it.printf(10, y0 + 84, id(font_small), id(color_gray), "Ved station: %.0f hPa",
             id(davis_baro).state);
           break;
+        }
+
+        case 4: {
+          // ── Page 5: Network / system info ─────────────────────────
+          it.print(10, y0, id(font_small), "System");
+          it.printf(10, y0 + 24, id(font_roboto_medium22), "IP: %s",
+            id(davis_ip_address).state.c_str());
+          it.printf(10, y0 + 56, id(font_small), "MAC: %s",
+            id(davis_mac_address).state.c_str());
+          uint32_t up_s = (uint32_t)id(davis_uptime).state;
+          uint32_t up_d = up_s / 86400;
+          uint32_t up_h = (up_s % 86400) / 3600;
+          uint32_t up_m = (up_s % 3600) / 60;
+          it.printf(10, y0 + 76, id(font_small), "Oppetid: %ud %02u:%02u",
+            up_d, up_h, up_m);
+          break;
+        }
+      }
+
+      // ── Packet-received indicator (lower-left, all pages) ─────────
+      int led_x = 14, led_y = it.get_height() - 14;
+      if (id(packet_led_on)) {
+        it.filled_circle(led_x, led_y, 5, id(color_green));
+        id(packet_led_on) = false;
+      } else {
+        it.circle(led_x, led_y, 5, id(color_gray));
       }
 
 # ─────────────────────────────────────────────────────────────
@@ -881,6 +961,7 @@ binary_sensor:
       then:
         - lambda: |-
             id(current_page) = (id(current_page) - 1 + id(total_pages)) % id(total_pages);
+            id(page_timer_s) = 0;
   - platform: gpio
     id: M5_BtnB
     pin:
@@ -898,6 +979,7 @@ binary_sensor:
       then:
         - lambda: |-
             id(current_page) = (id(current_page) + 1) % id(total_pages);
+            id(page_timer_s) = 0;
 
   - platform: template
     name: "Charging"
@@ -916,6 +998,11 @@ sensor:
   - platform: wifi_signal
     id: wifi_rssi
     update_interval: 30s
+
+  - platform: uptime
+    name: "Uptime"
+    id: davis_uptime
+    update_interval: 60s
 
   - platform: bme280_i2c
     address: 0x76
@@ -1150,6 +1237,9 @@ text_sensor:
     ip_address:
       name: "IP Address"
       id: davis_ip_address
+    mac_address:
+      name: "Mac Address"
+      id: davis_mac_address
 
   - platform: template
     name: "Pressure Trend Description"
