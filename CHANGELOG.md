@@ -12,6 +12,11 @@ earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-22
+
+### Added
+- `database/migrations/20260722_add_daily_temp_extremes_and_wind_speed_avg.sql` — three new `combined_realtime_stats` columns, needed by downstream consumers (e.g. the [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA) integration) that previously sourced them from a MeteobridgeSQL-based setup: `air_temp_high_today`/`air_temp_low_today` (max/min air temperature since local midnight, `temp_humidity` role) and `wind_speed_avg_10min` (genuine trailing 10-minute mean wind speed, `wind` role — unlike `combined_realtime.wind_avg_ms`, which for Davis is the raw per-packet instantaneous reading despite its name)
+
 ## [0.4.1] - 2026-07-20
 
 ### Changed

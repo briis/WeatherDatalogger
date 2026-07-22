@@ -148,6 +148,8 @@ A single-row view of derived/calculated stats, computed on demand from raw `hist
 | `wind_bearing_avg_day` | Circular-mean wind bearing since local midnight |
 | `wind_bearing_avg_10min` | Circular-mean wind bearing over the trailing 10 minutes (rolling, not clock-aligned) |
 | `rain_total_yesterday` | Total rainfall for the full previous local calendar day — `MAX(rain_accumulation_mm)`, not `SUM`, since that column is a running cumulative "so far today" counter (resets at local midnight), not a per-observation delta |
+| `air_temp_high_today`, `air_temp_low_today` | Highest/lowest air temperature since local midnight (`temp_humidity` role) |
+| `wind_speed_avg_10min` | Mean wind speed over the trailing 10 minutes (rolling, not clock-aligned) — a genuine average, unlike `combined_realtime.wind_avg_ms`, which for Davis is the raw per-packet instantaneous reading despite its name (see `davisnet-weatherlogger.yaml`) |
 
 "Today"/"yesterday" boundaries use `CONVERT_TZ(..., 'UTC', 'Europe/Copenhagen')` since `recorded_at` is stored as naive UTC. This requires the MariaDB named-timezone tables to be loaded (`mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql`) — if they're missing, `CONVERT_TZ` silently returns `NULL` and the day-boundary columns will all be `NULL` (the 10-min rolling column is unaffected, since it doesn't need a day boundary).
 
