@@ -1,7 +1,7 @@
 substitutions:
   name: "Davisnet Datalogger"
   device: davisnet-datalogger
-  version: 0.2.1
+  version: 0.2.2
   created_by: "Bjarne Riis"
 
   # Used only for the sea-level pressure conversion below — adjust to the
@@ -31,6 +31,12 @@ esphome:
           // nothing else pushes that value into the davis_rain entity, so
           // without this it sits at NaN/unavailable until the next tip.
           id(davis_rain).publish_state(id(rain_total_mm));
+
+          // Rain rate has no meaningful "restored" value across a reboot —
+          // it's momentary, not accumulated — but 0.0 (no rain right now)
+          // is a much more sensible default than NaN/unavailable until the
+          // next tip happens to arrive.
+          id(davis_rain_rate).publish_state(0.0f);
 
 # M5Stack Basic Core V2.6 — RF Module CC1101 stacked via M-Bus.
 esp32:
@@ -906,7 +912,7 @@ display:
           uint32_t up_h = (up_s % 86400) / 3600;
           uint32_t up_m = (up_s % 3600) / 60;
           it.printf(10, y0 + 76, id(font_small), "Oppetid: %ud %02u:%02u",
-            up_d, up_h, up_m);
+            (unsigned)up_d, (unsigned)up_h, (unsigned)up_m);
           break;
         }
       }
