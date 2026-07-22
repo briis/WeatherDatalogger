@@ -336,8 +336,9 @@ LEFT JOIN
 -- Timezone: recorded_at is stored as naive UTC; "today"/"yesterday" mean the
 -- calendar day in Europe/Copenhagen, so the day boundary is computed via
 -- CONVERT_TZ. CONVERT_TZ with a named zone requires the mysql.time_zone
--- tables to be loaded — if empty, it silently returns NULL. One-time fix:
---   mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
+-- tables to be loaded — if empty, it silently returns NULL. install.sh does
+-- this automatically; one-time fix on an existing DB host:
+--   mariadb-tzinfo-to-sql /usr/share/zoneinfo | mariadb -u root mysql
 -- See migrations/20260703_add_combined_realtime_stats.sql for full detail.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW combined_realtime_stats AS

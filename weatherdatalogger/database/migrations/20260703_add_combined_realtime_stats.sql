@@ -31,8 +31,10 @@
 -- UTC_TIMESTAMP() directly. CONVERT_TZ with a named zone (as opposed to a
 -- fixed '+02:00' offset) requires the mysql.time_zone tables to be loaded —
 -- if they're empty, CONVERT_TZ silently returns NULL and the four columns
--- below will all read NULL instead of erroring. One-time fix on the DB host:
---   mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
+-- below will all read NULL instead of erroring. install.sh now does this
+-- automatically (step 5b); one-time fix on an existing DB host:
+--   mariadb-tzinfo-to-sql /usr/share/zoneinfo | mariadb -u root mysql
+--   (older systems: mysql_tzinfo_to_sql ... | mysql -u root mysql)
 --   (then restart mariadbd)
 -- The 10-minute rolling average does not depend on local day boundaries, so
 -- it's unaffected either way.

@@ -125,6 +125,24 @@ if [[ "$MARIADB_RESTART_NEEDED" == "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 5b. MariaDB — named timezone tables. Without these, CONVERT_TZ(..., 'UTC',
+#     'Europe/Copenhagen') silently returns NULL instead of erroring, which
+#     cascades into combined_realtime_stats' local-day columns all reading
+#     NULL (see migrations/20260703_add_combined_realtime_stats.sql). The
+#     loader binary was renamed from mysql_tzinfo_to_sql to
+#     mariadb-tzinfo-to-sql in newer MariaDB packaging (matches the mariadb-*
+#     renames this script already relies on elsewhere) — fall back to the old
+#     name for older systems that still ship it.
+# ---------------------------------------------------------------------------
+echo "==> Loading timezone tables into MariaDB…"
+TZINFO_TO_SQL=$(command -v mariadb-tzinfo-to-sql || command -v mysql_tzinfo_to_sql || true)
+if [[ -n "$TZINFO_TO_SQL" ]]; then
+    "$TZINFO_TO_SQL" /usr/share/zoneinfo | mariadb -u root mysql
+else
+    echo "==> WARNING: no tzinfo-to-sql loader found — named-timezone CONVERT_TZ() calls will return NULL." >&2
+fi
+
+# ---------------------------------------------------------------------------
 # 6. Database + application user. Root access needs no password on Debian
 #    (Unix socket auth) — matches the project's existing manual docs.
 #    Only generates/sets a password if the app user doesn't exist yet;
