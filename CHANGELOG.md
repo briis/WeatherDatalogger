@@ -12,6 +12,11 @@ earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-20
+
+### Changed
+- `ESPHome/airquality/air-quality-monitor.yaml` now integrates with Home Assistant via ESPHome's own MQTT discovery (`mqtt: discovery: true`), matching the Davis receiver, instead of the native API — `api:` is now commented out by default (remote logs/OTA only) and `time:` switched from `homeassistant` to `sntp` so the data path stays independent of whether the device is ever added via HA's native ESPHome integration
+
 ## [0.4.0] - 2026-07-20
 
 ### Added

@@ -63,23 +63,33 @@ captive_portal:
 
 logger:
 
-api:
-  encryption:
-    key: !secret api_encryption_key
+# api: kept solely for remote `esphome logs`/OTA — do NOT also add this
+# node via Home Assistant's "ESPHome" integration UI, or entities would be
+# duplicated (once via native API, once via MQTT discovery below).
+# api:
+#   encryption:
+#     key: !secret api_encryption_key
 
 ota:
   - platform: esphome
     password: !secret ota_password
 
-# --- Time (used to timestamp "Last Updated") ---
+# --- Time — SNTP (not Home Assistant), so this device's data path stays
+# independent of whether it's ever added via HA's ESPHome integration —
+# see the api: comment above. Used to timestamp "Last Updated". ---
 time:
-  - platform: homeassistant
-    id: ha_time
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Copenhagen  # adjust if this device isn't in Denmark
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
 
-# --- MQTT — solely for the weatherdatalogger observation topic.
-# discovery: false, because HA already gets every sensor via the native API
-# above (api:) — with mqtt discovery: true as well, every sensor would be
-# duplicated (the same pitfall described in ESPHome/davis/README.md).
+# --- MQTT — set credentials in secrets.yaml
+# discovery: true — publishes ESPHome's built-in HA MQTT discovery config,
+# grouping all sensors under one device in HA, same as the Davis receiver.
+# api: above is kept solely for remote logs/OTA — do NOT also add this node
+# via HA's ESPHome integration UI, or entities would be duplicated.
 # reboot_timeout: 0s is set explicitly — see AGENT.md/CONTEXT.md "Known
 # Issues": a short reboot_timeout on the Davis receiver made it reboot
 # every 10-25 minutes on routine MQTT hiccups.
@@ -91,7 +101,7 @@ mqtt:
   username: !secret mqtt_username
   password: !secret mqtt_password
   client_id: ${device}
-  discovery: false
+  discovery: true
   skip_cert_cn_check: true
   reboot_timeout: 0s
 
@@ -139,7 +149,7 @@ sensor:
               id(caqi_pm25_index).update();
           - text_sensor.template.publish:
               id: last_updated
-              state: !lambda 'return id(ha_time).now().strftime("%Y-%m-%d %H:%M:%S");'
+              state: !lambda 'return id(sntp_time).now().strftime("%Y-%m-%d %H:%M:%S");'
     pm_10_0:
       name: "PM10"
       id: pm_10_0

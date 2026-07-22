@@ -182,7 +182,7 @@ Optional: the service logs an error and idles (doesn't crash-loop) if `[meteobri
 
 Also **not a Python service** — ESPHome YAML + inline C++ lambdas (`ESPHome/airquality/air-quality-monitor.yaml`) flashed to an ESP32-C6-DevKitC-1 with an SDS011 (PM2.5/PM10, UART) and a BME280 (temperature/humidity/pressure, I2C). Read `ESPHome/airquality/README.md` for hardware/wiring and field conventions before touching this file.
 
-Unlike the Davis receiver, this device uses the **native ESPHome API** (`api:`) for its Home Assistant entities (not `mqtt: discovery:`) — `mqtt:` is present purely to publish the `weatherdatalogger/aqmonitor-<id>/observation` topic for `db_writer.py`, with `discovery: false` so entities aren't registered twice via both paths. `reboot_timeout: 0s` is set explicitly from the start, learning from the Davis `reboot_timeout` incident below.
+Like the Davis receiver, this device connects to Home Assistant via ESPHome's own **MQTT discovery** (`mqtt: discovery: true`), grouping all entities under one device. `time:` uses `sntp`, not `homeassistant`, so this device's data path stays independent of whether it's ever added via HA's native ESPHome integration — same reasoning as the Davis receiver. `api:` is commented out by default, kept solely for remote `esphome logs`/OTA if enabled; do **not** also add this node via HA's "ESPHome" integration UI if you do, since entities would then be duplicated (once via native API, once via MQTT discovery). `reboot_timeout: 0s` is set explicitly from the start, learning from the Davis `reboot_timeout` incident below.
 
 ### Data flow
 ```
@@ -385,7 +385,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ### Air Quality Monitor (ESPHome)
 - [x] ESPHome firmware (`ESPHome/airquality/air-quality-monitor.yaml`) — ESP32-C6 + SDS011 (PM2.5/PM10) + BME280 (temperature/humidity/pressure)
-- [x] `mqtt:` block added, `discovery: false` (entities come from the native API instead — see `api:`), `reboot_timeout: 0s` set from the start (learned from the Davis `reboot_timeout` incident, see "Known Issues")
+- [x] `mqtt:` block added, `discovery: true` (HA entities via MQTT discovery, same as the Davis receiver — `api:` is commented out, `time:` uses `sntp` not `homeassistant`), `reboot_timeout: 0s` set from the start (learned from the Davis `reboot_timeout` incident, see "Known Issues")
 - [x] Consolidated `observation` JSON published every 60s to `weatherdatalogger/aqmonitor-<id>/observation`, latest-known-value convention like Davis's per-packet publish
 - [x] Dew point computed on-device (Magnus formula, same as `davisnet-weatherlogger.yaml`/`tempest_datalogger.py`)
 - [x] `AQI PM2.5`/`AQI PM10`/`CAQI PM2.5`/`CAQI PM10` sensors added — publish as `aqi_pm2p5`/`aqi_pm10`/`caqi_pm2p5`/`caqi_pm10`, same DB columns as AirLink, not bit-identical values (see "Air Quality Monitor (ESPHome firmware)" above for why)

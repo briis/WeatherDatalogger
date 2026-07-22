@@ -84,7 +84,7 @@ There's no PM1.0, no 1h/3h/24h rolling averages, and no EPA NowCast on this hard
 
 ## Home Assistant Integration
 
-Unlike the Davis receiver (which uses ESPHome's own MQTT discovery), this device connects to Home Assistant via the **native ESPHome API** (`api:`) — add it through HA's "ESPHome" integration UI as usual. The `mqtt:` block exists solely to publish the `weatherdatalogger/aqmonitor-01/observation` topic for the database writer; it has `discovery: false` so entities aren't registered twice.
+Like the Davis receiver, this device connects to Home Assistant via ESPHome's own **MQTT discovery** (`mqtt: discovery: true`), grouping all entities under one "Air Quality Monitor" device. The `api:` block is commented out by default; it exists only for remote `esphome logs`/OTA over the native API if you choose to enable it. If you do, **do not** also add this node through Home Assistant's "ESPHome" integration UI, or entities would be duplicated (once via native API, once via MQTT discovery).
 
 | Entity | Type | Unit | Notes |
 |---|---|---|---|
@@ -122,11 +122,12 @@ In the same directory as the YAML file (or your ESPHome config directory):
 wifi_ssid: "YourWiFiSSID"
 wifi_password: "YourWiFiPassword"
 fallback_ap_password: "YourFallbackAPPassword"
-api_encryption_key: "your_32_byte_base64_key"   # generate: openssl rand -base64 32
 ota_password: "your_ota_password"
 mqtt_broker: "192.168.1.10"
 mqtt_username: "your_mqtt_user"
 mqtt_password: "your_mqtt_password"
+# api_encryption_key: "your_32_byte_base64_key"   # generate: openssl rand -base64 32
+# only needed if you uncomment `api:` in the yaml — see below
 ```
 
 ### 2. Flash the firmware

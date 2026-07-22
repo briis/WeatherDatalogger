@@ -175,7 +175,7 @@ All payloads are **flat JSON objects** with human-readable field names and SI un
 - **PM sensor**: SDS011 (laser PM2.5/PM10 only — no PM1.0, no onboard rolling averages/NowCast), UART, self-managed duty cycle (5 min default: ~30s active, rest idle)
 - **Environmental sensor**: BME280 (temperature/humidity/pressure), I2C
 - Firmware: `ESPHome/airquality/air-quality-monitor.yaml` — see `ESPHome/airquality/README.md`
-- HA entities via the **native ESPHome API** (`api:`), not MQTT discovery — `mqtt:` is present only to publish the `weatherdatalogger/aqmonitor-<id>/observation` topic, with `discovery: false` to avoid duplicate entities
+- HA entities come from ESPHome's own MQTT discovery (`mqtt: discovery: true`), same as the Davis receiver — `api:` is commented out by default (remote logs/OTA only), and `time:` uses `sntp` rather than `homeassistant` so the data path stays independent of whether it's ever added via HA's native ESPHome integration
 - Dew point computed on-device (Magnus formula, same as `davisnet-weatherlogger.yaml`/`tempest_datalogger.py`)
 - AQI computed from the SDS011's instantaneous reading (EPA's May-2024 breakpoint table) — an approximation, not NowCast-smoothed like AirLink's; CAQI uses `airlink_datalogger.py`'s exact breakpoint tables (current-concentration convention, same as AirLink)
 - `station_roles`' `air_quality` role still defaults to `airlink` — reassign it to `aqmonitor` to make `combined_realtime`/`history_charting` prefer this device instead (see `ESPHome/airquality/README.md`)
