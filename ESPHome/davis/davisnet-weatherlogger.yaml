@@ -1,7 +1,7 @@
 substitutions:
   name: "Davisnet Datalogger"
   device: davisnet-datalogger
-  version: 0.2.0
+  version: 0.2.1
   created_by: "Bjarne Riis"
 
   # Used only for the sea-level pressure conversion below — adjust to the
@@ -26,6 +26,11 @@ esphome:
           // below) — standalone, no external station required.
           // set_daily_rain / set_rain_rate (mqtt: on_message: below)
           // remain available as an OPTIONAL manual correction.
+
+          // rain_total_mm is restored from flash (restore_value: yes) but
+          // nothing else pushes that value into the davis_rain entity, so
+          // without this it sits at NaN/unavailable until the next tip.
+          id(davis_rain).publish_state(id(rain_total_mm));
 
 # M5Stack Basic Core V2.6 — RF Module CC1101 stacked via M-Bus.
 esp32:
@@ -218,12 +223,14 @@ globals:
     type: int
     initial_value: '0'
 
-  # Set true on every valid (CRC-passed, station-matched) packet;
-  # consumed and cleared by the display lambda's next redraw, so the
-  # lower-left indicator flashes once per packet rather than staying lit.
-  - id: packet_led_on
-    type: bool
-    initial_value: 'false'
+  # Timestamp of the last valid (CRC-passed, station-matched) packet.
+  # The display lambda lights the lower-left indicator for a fixed
+  # window after this (see PACKET_LED_MS below) — a duration-based check
+  # rather than a single-frame consumed flag, so the blink is visible
+  # regardless of the display's actual redraw cadence.
+  - id: last_packet_ms
+    type: uint32_t
+    initial_value: '0'
 
   - id: rain_count_prev
     type: int
@@ -365,7 +372,7 @@ cc1101:
             return; // Ignore neighbouring station
           }
 
-          id(packet_led_on) = true;
+          id(last_packet_ms) = millis();
 
           // Build base topic: weatherdatalogger/davis-<id>
           char base_topic[48];
@@ -796,6 +803,7 @@ display:
     reset_pin: 33
     rotation: 0
     invert_colors: true
+    update_interval: 1s
     lambda: |-
       // ── Header bar ──────────────────────────────────────────────
       it.horizontal_line(0, 28, it.get_width());
@@ -905,9 +913,8 @@ display:
 
       // ── Packet-received indicator (lower-left, all pages) ─────────
       int led_x = 14, led_y = it.get_height() - 14;
-      if (id(packet_led_on)) {
+      if (millis() - id(last_packet_ms) < 500) {
         it.filled_circle(led_x, led_y, 5, id(color_green));
-        id(packet_led_on) = false;
       } else {
         it.circle(led_x, led_y, 5, id(color_gray));
       }
