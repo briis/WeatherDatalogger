@@ -4,7 +4,7 @@ Listens for UDP broadcasts from a **WeatherFlow Tempest hub** on the local netwo
 
 Designed to run as a **systemd service on Debian/Proxmox LXC** and integrate with **Home Assistant** via MQTT auto-discovery.
 
-> **Installation:** Follow the [server installation guide](../README.md#installation-debian--proxmox-lxc) first, then return here to configure the Tempest datalogger.
+> **Installation:** Follow the [server installation guide](../../README.md#installation-debian--proxmox-lxc) first, then return here to configure the Tempest datalogger.
 
 ---
 
@@ -48,7 +48,7 @@ weatherdatalogger/tempest-HB-00013030/hub_status
 
 ## Setup
 
-After completing the [server installation](../README.md#installation-debian--proxmox-lxc), edit the shared config file:
+After completing the [server installation](../../README.md#installation-debian--proxmox-lxc), edit the shared config file:
 
 ```bash
 nano /opt/weatherdatalogger/config.ini

@@ -6,7 +6,7 @@ data documented in [`database/README.md`](../database/README.md). Built for
 dashboards, mobile/web apps, or any consumer that shouldn't need direct
 database credentials or MQTT access.
 
-> **Installation:** Follow the [server installation guide](../README.md#installation-debian--proxmox-lxc) first, then return here to configure the API.
+> **Installation:** Follow the [server installation guide](../../README.md#installation-debian--proxmox-lxc) first, then return here to configure the API.
 
 ---
 
@@ -25,7 +25,7 @@ This is v1 scope: just the two combined-view "current conditions" endpoints. His
 
 ## Setup
 
-After completing the [server installation](../README.md#installation-debian--proxmox-lxc):
+After completing the [server installation](../../README.md#installation-debian--proxmox-lxc):
 
 1. Create the read-only database user:
 
