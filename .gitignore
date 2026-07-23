@@ -235,3 +235,4 @@ docs/weatherdatalogger-ha-upstream-changes.md
 images/.DS_Store
 */.DS_Store
 .DS_Store
+test_ws.py
