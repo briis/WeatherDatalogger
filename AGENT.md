@@ -8,13 +8,14 @@ full architecture overview.
 
 ## What this project is
 
-A weather data pipeline with five active Python services:
+A weather data pipeline with six active Python services:
 
 1. **Tempest datalogger** (`tempest/tempest_datalogger.py`) — receives WeatherFlow Tempest UDP broadcasts, computes derived metrics, and publishes everything to MQTT
 2. **AirLink datalogger** (`airlink/airlink_datalogger.py`) — polls the Davis AirLink's local REST API for air quality and publishes to MQTT
 3. **DB writer** (`database/db_writer.py`) — subscribes to MQTT observation topics and persists readings to MariaDB (`realtime` + `history` tables), plus forecast topics into `forecast_current`/`forecast_hourly`/`forecast_daily`
 4. **Meteobridge datalogger** (`meteobridge/meteobridge_datalogger.py`) — optional; polls a Meteobridge's local REST template API and publishes a full observation to MQTT (wind, pressure, temperature/humidity, solar/UV, rain, indoor, lightning) — a full station integration with its own database rows, not just a correction feed (see "Meteobridge datalogger" below)
 5. **Visual Crossing forecast datalogger** (`visualcrossing/visualcrossing_datalogger.py`) — optional; lat/lon-based, polls the Visual Crossing Weather API via the `pyVisualCrossing` wrapper and publishes current/hourly/daily forecast to MQTT (no station hardware required — see "Visual Crossing forecast datalogger" below)
+6. **API server** (`api/api_server.py`) — optional; FastAPI + uvicorn, read-only REST + WebSocket access to `combined_realtime`/`combined_realtime_stats` for dashboards/apps, backed by its own DB-polling cache (no MQTT involvement) — see "API server architecture" below
 
 Two further, non-Python components live under `ESPHome/` (a sibling of `weatherdatalogger/` at the repo root) rather than as Python services:
 
@@ -121,6 +122,40 @@ MQTT on_message() → _payload_to_row() → DbWriter.write_observation()
 
 ---
 
+## API server architecture
+
+### Data flow
+```
+DataPoller.run_forever() (background thread, every poll_interval_s)
+    → poll_once() → SELECT * FROM combined_realtime / combined_realtime_stats
+                                                ↓
+                                   Snapshot (version bumped only if changed)
+                                                ↓
+              ┌─────────────────────────────────┴─────────────────────────────┐
+              ↓                                                                ↓
+  GET /api/v1/current (pull)                                    WS /api/v1/ws/current (push)
+  reads app.state.poller.snapshot                    per-connection loop re-checks snapshot.version
+  directly, no DB hit                                 every poll_interval_s, sends on change
+```
+
+Everything downstream of `DataPoller` is served from the in-memory `Snapshot` — no request handler ever queries MariaDB directly. This is deliberate (see CONTEXT.md "API Server — Key Design Decisions" for why DB polling was chosen over MQTT-driven push).
+
+### Adding a new endpoint / exposing another table
+1. Add the `SELECT` to `DataPoller` (new `_SQL_*` constant + a fetch in `poll_once()`) if it's a new data source, or add a route straight off the existing `combined_realtime`/`combined_realtime_stats` snapshot if not
+2. Add a `@app.get(...)`/`@app.websocket(...)` route function; reuse `Depends(require_api_key)` for REST auth (WebSocket routes check the key manually before `.accept()` — see `ws_current()`)
+3. Document the new endpoint in `api/README.md` (field meanings/units live in `database/README.md` — don't duplicate that table, link to it)
+4. If it's genuinely new information (not already in `combined_realtime`/`combined_realtime_stats`), bump `VERSION` and add a `CHANGELOG.md` entry
+
+### Auth
+- Single shared secret (`[api] api_key`), checked with `secrets.compare_digest()` (constant-time, avoids a timing side-channel)
+- REST: `Depends(require_api_key)`, which pulls `X-API-Key` via `APIKeyHeader` — add this to `dependencies=[...]` on any new route that should require auth
+- WebSocket: no `Depends()` equivalent for the handshake in this codebase — `ws_current()` checks `?api_key=` manually and calls `websocket.close(code=1008)` **before** `.accept()`, so an unauthorized client gets an HTTP-level rejection (403) rather than an accepted-then-closed connection
+
+### DB connection management
+Same reconnect pattern as `DbWriter._execute()` in `db_writer.py` (`OperationalError`/`InterfaceError`, one retry via `_connect()`) — see `DataPoller._fetch_one()`. Uses its own `[api] db_user`/`db_password`, a SELECT-only user (`weatherdatalogger_api`, created by `scripts/create_api_readonly_user.sh`), never the `weatherlogger` writer credentials from `[database]`.
+
+---
+
 ## Davis Vantage Vue (ESPHome firmware)
 
 Unlike Tempest/AirLink, this is **not a Python service** — it's ESPHome YAML + inline C++ lambdas (`ESPHome/davis/davisnet-weatherlogger.yaml`) flashed to an M5Stack Core (ESP32) + CC1101 radio module. This supersedes an earlier ESP32-WROOM-32 + breakout-board build (`ESPHome/davis/davis-vantage-receiver.yaml`, kept for reference) — the RF decode/MQTT logic below is unchanged between the two; only the physical hardware and local display differ. Read `ESPHome/davis/README.md` for hardware/wiring and CONTEXT.md's "Known Issues" section before touching this file — several non-obvious RF findings are documented there and are expensive to re-derive.
@@ -217,17 +252,17 @@ This device registers as its own `station_type` (`aqmonitor`, from the `aqmonito
 
 ## Config sections
 
-All five services (tempest, airlink, db_writer, meteobridge, visualcrossing) share a single config file at `/opt/weatherdatalogger/config.ini`. Each service reads only the sections it needs — extra sections are ignored. The full template is `config.example.ini` at the repo root.
+All six services (tempest, airlink, db_writer, meteobridge, visualcrossing, api_server) share a single config file at `/opt/weatherdatalogger/config.ini`. Each service reads only the sections it needs — extra sections are ignored. The full template is `config.example.ini` at the repo root.
 
-`client_id` is **not** in the shared config — each service's `DEFAULT_CONFIG` provides its own unique value so they don't collide on the MQTT broker.
+`client_id` is **not** in the shared config — each MQTT-connected service's `DEFAULT_CONFIG` provides its own unique value so they don't collide on the MQTT broker. `api_server.py` has no `client_id` — it doesn't connect to MQTT at all.
 
-### Shared sections (all services)
+### Shared sections
 
-| Section | Notable keys |
-|---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
-| `[logging]` | `level`, `file` |
-| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
+| Section | Notable keys | Used by |
+|---|---|---|
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` | tempest, airlink, db_writer, meteobridge, visualcrossing — **not** api_server |
+| `[logging]` | `level`, `file` | all six |
+| `[homeassistant]` | `discovery` (bool), `discovery_prefix` | tempest, airlink |
 
 ### Service-specific sections
 
@@ -240,13 +275,17 @@ All five services (tempest, airlink, db_writer, meteobridge, visualcrossing) sha
 | `db_writer.py` | `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
 | `meteobridge_datalogger.py` | `[meteobridge]` | `enabled` (**default false**), `host` (**REQUIRED** if enabled), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10), `language` (en/da, for `wind_beaufort_description`), `data_dir` (lightning-window state file) |
 | `visualcrossing_datalogger.py` | `[visualcrossing]` | `enabled` (**default false** — service idles if false), `api_key`/`latitude`/`longitude` (**REQUIRED** if enabled), `days` (14), `language` (en), `location` (home), `interval_min` (60) |
+| `api_server.py` | `[api]` | `enabled` (**default false**), `host` (0.0.0.0), `port` (8000), `api_key` (**REQUIRED** if enabled), `poll_interval_s` (5), `cors_origins` (empty = disabled), `db_host`/`db_port`/`db_name`/`db_user`/`db_password` (**password REQUIRED** if enabled — own connection, separate from `[database]`) |
 
-All four services now share the same `enabled` gate (checked first in `run()`,
-before connecting to MQTT), defaulting to `false` so a fresh install doesn't
-try to log hardware/APIs it doesn't have. If `config.ini` predates this flag
-(no explicit `enabled` key for that section), the service logs a one-time
-`WARNING` explaining the new default instead of silently idling — see
-`_enabled_key_present()` in each `*_datalogger.py`.
+All five services above share the same `enabled` gate (checked first in `run()`,
+before connecting to MQTT or the database), defaulting to `false` so a fresh
+install doesn't try to log hardware/APIs it doesn't have. If `config.ini`
+predates this flag (no explicit `enabled` key for that section), the four
+MQTT-based services log a one-time `WARNING` explaining the new default
+instead of silently idling — see `_enabled_key_present()` in each
+`*_datalogger.py`. `api_server.py` skips that upgrade-compat check (it's new
+enough that no `config.ini` predates its `enabled` flag) but follows the same
+"exit cleanly if disabled" shape in `run()`.
 
 `data_dir` (tempest) defaults to `/opt/weatherdatalogger/tempest`. That is where `tempest_lightning.json` and `tempest_pressure.json` are written.
 
@@ -365,6 +404,18 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] `evt_aggregate_history_charting` MariaDB event — fires every 10 min, 30-min lookback, `INSERT IGNORE` for idempotency; uses `UTC_TIMESTAMP()` throughout (not `NOW()`) to match UTC-stored `recorded_at`
 - [x] MariaDB event scheduler enabled via `/etc/mysql/mariadb.conf.d/99-local.cnf`
 
+### API server
+- [x] `api/api_server.py` — FastAPI + uvicorn service, read-only REST + WebSocket access to `combined_realtime`/`combined_realtime_stats`
+- [x] Background `DataPoller` thread caches both views on `poll_interval_s` (default 5s); every request served from the cache, never a per-request DB query
+- [x] `GET /api/v1/current` (pull) and `WS /api/v1/ws/current` (push — sends on connect, then again on every change) share the same payload shape
+- [x] `GET /api/v1/health` — unauthenticated liveness check
+- [x] Interactive OpenAPI/Swagger docs at `/docs` (free from FastAPI), raw schema at `/openapi.json`
+- [x] Single shared-secret API key (`X-API-Key` header for REST, `?api_key=` query param for WebSocket), checked with `secrets.compare_digest()`; service refuses to start if `api_key` or `db_password` is unset
+- [x] Own SELECT-only DB user (`weatherdatalogger_api`) — `database/04_create_api_readonly_user.sql` + `scripts/create_api_readonly_user.sh`, same pattern as `weatherdatalogger_ha`, separate credentials from the writer user and from the HA integration's user
+- [x] Optional CORS (`[api] cors_origins`), off by default
+- [x] Full service scaffold: `config.example.ini`, `requirements.txt`, `systemd/weatherdatalogger-api.service`, `README.md` (REST/WebSocket usage, auth, examples, reverse-proxy notes)
+- [x] Wired into `deploy.sh` (install/venv/systemd sync/config-driven restart) and `install.sh`'s wizard (offers to create the readonly user + generate an API key) like every other optional service
+
 ### Davis Vantage Vue (ESPHome)
 - [x] ESPHome firmware (`ESPHome/davis/davisnet-weatherlogger.yaml`) — CC1101 packet decode, CRC validation, station-ID lock
 - [x] Rebuilt on an M5Stack Basic Core + M5Stack CC1101 module (external antenna) — superseding the original ESP32-WROOM-32 + GERUI CC1101 breadboard build (`ESPHome/davis/davis-vantage-receiver.yaml`, kept for reference). RF decode/MQTT topics/fields unchanged; local display switched from a time-cycled I2C OLED to the Core's built-in MIPI SPI LCD with button-driven paging. Device name for HA grouping and the static rain-correction MQTT topic changed from `davis-vantage-receiver` to `davisnet-datalogger`
@@ -425,7 +476,7 @@ bash scripts/lint      # ruff format + ruff check --fix
 
 ## Things to avoid
 
-- Do not introduce async frameworks (asyncio, trio) — the current threading model is intentional and simple
+- Do not introduce async frameworks (asyncio, trio) into the **datalogger/db_writer services** — the current threading model is intentional and simple. `api/api_server.py` is the deliberate exception: it uses FastAPI/uvicorn (asyncio-based) for native WebSocket support and free OpenAPI docs, since it has no UDP/MQTT receive loop to keep simple in the first place. Don't use this as precedent to introduce asyncio elsewhere
 - Do not add database write logic to `tempest_datalogger.py` — MQTT is its only output; the DB writer is the correct place
 - Do not insert directly into `realtime` or `history` without first ensuring the station exists in `stations` — the foreign key will reject it
 - Do not change the MQTT topic structure without updating CONTEXT.md and the HA discovery sensor list

@@ -55,6 +55,12 @@ Ready to set it up? Jump to [Installation](#installation-debian--proxmox-lxc).
 |---|---|---|
 | [`weatherdatalogger/database/`](weatherdatalogger/database/) | WeatherDB Writer — persists observations to MariaDB | Active |
 
+### API (storage → consumers)
+
+| Directory | Purpose | Status |
+|---|---|---|
+| [`weatherdatalogger/api/`](weatherdatalogger/api/) | REST + WebSocket API — read-only access to `combined_realtime`/`combined_realtime_stats` for dashboards/apps | Active, optional |
+
 ---
 
 ## MQTT Topic Namespace
@@ -236,7 +242,7 @@ mysql --defaults-extra-file=/opt/weatherdatalogger/db.cnf \
 
 #### 9. Create the shared config file
 
-All five services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
+All six services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
 
 ```bash
 cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
@@ -253,6 +259,7 @@ nano /opt/weatherdatalogger/config.ini
 | `enabled`, `host` | `[airlink]` | Set `true` + IP/hostname if you have a Davis AirLink |
 | `enabled`, `host` | `[meteobridge]` | Set `true` + IP/hostname if you have a Meteobridge Pro |
 | `enabled`, `api_key`, `latitude`, `longitude` | `[visualcrossing]` | Set `true` + your API key/coordinates for Visual Crossing forecast data |
+| `enabled`, `api_key`, `db_password` | `[api]` | Set `true` + a generated API key + the `weatherdatalogger_api` DB password if you want the [REST/WebSocket API](weatherdatalogger/api/) — see step 11 below |
 
 A service left `enabled = false` idles rather than crash-loops, so it's safe to leave every optional one at its default and enable only what you own.
 
@@ -278,17 +285,29 @@ journalctl -u meteobridge-datalogger -f
 # Visual Crossing forecast (skip if [visualcrossing] enabled = false)
 systemctl enable --now visualcrossing-datalogger
 journalctl -u visualcrossing-datalogger -f
+
+# REST/WebSocket API (skip if [api] enabled = false)
+systemctl enable --now weatherdatalogger-api
+journalctl -u weatherdatalogger-api -f
 ```
 
-#### 11. (Optional) Create a read-only user for the Home Assistant integration
+#### 11. (Optional) Create read-only database users for external consumers
 
-Only needed if you're using [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA), which reads this database directly and only ever needs `SELECT`:
+Both of these are `SELECT`-only — separate from the `weatherlogger` writer user the datalogger services themselves use, so each can be rotated/revoked independently.
+
+For [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA) (reads this database directly):
 
 ```bash
-mysql -u root weatherdatalogger < /opt/weatherdatalogger/database/03_create_readonly_user.sql
+sudo bash /opt/weatherdatalogger/scripts/create_ha_readonly_user.sh
 ```
 
-Edit the password on the `CREATE USER` line before running — or skip editing SQL by hand entirely and run `sudo bash /opt/weatherdatalogger/scripts/create_ha_readonly_user.sh` instead, which prompts for the password for you.
+For the [REST/WebSocket API](weatherdatalogger/api/) (`[api]` section in `config.ini`):
+
+```bash
+sudo bash /opt/weatherdatalogger/scripts/create_api_readonly_user.sh
+```
+
+Both scripts prompt for a password and are safe to re-run. The equivalent raw SQL (`database/03_create_readonly_user.sql` / `database/04_create_api_readonly_user.sql`) is kept for reference if you'd rather run it by hand — edit the password on the `CREATE USER` line first.
 
 </details>
 

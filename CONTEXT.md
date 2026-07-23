@@ -289,17 +289,30 @@ WeatherDatalogger/                   ← repo root
 │   │   ├── systemd/
 │   │   │   └── visualcrossing-datalogger.service
 │   │   └── README.md
+│   ├── api/                         ← Optional REST + WebSocket API
+│   │   ├── api_server.py           ← Main FastAPI service (single file); background
+│   │   │                              thread polls combined_realtime/
+│   │   │                              combined_realtime_stats, serves REST + WS from
+│   │   │                              that in-memory cache
+│   │   ├── requirements.txt        ← Runtime deps: fastapi, uvicorn[standard], PyMySQL
+│   │   ├── systemd/
+│   │   │   └── weatherdatalogger-api.service
+│   │   └── README.md
 │   ├── scripts/
 │   │   ├── deploy.sh               ← Pull from GitHub, install all services, run
 │   │   │                              migrations, enable+restart per config.ini
 │   │   ├── install.sh              ← One-time (re-runnable) fresh-host bootstrap:
 │   │   │                              OS packages, service user, MariaDB, DB/tables,
 │   │   │                              config wizard, then calls deploy.sh
-│   │   └── create_ha_readonly_user.sh ← Creates the SELECT-only 'weatherdatalogger_ha'
-│   │                                     user the WeatherDatalogger-HA integration
-│   │                                     needs; called from install.sh's wizard or
-│   │                                     standalone, idempotent either way
-│   └── config.example.ini          ← Shared config template for all five services
+│   │   ├── create_ha_readonly_user.sh ← Creates the SELECT-only 'weatherdatalogger_ha'
+│   │   │                                 user the WeatherDatalogger-HA integration
+│   │   │                                 needs; called from install.sh's wizard or
+│   │   │                                 standalone, idempotent either way
+│   │   └── create_api_readonly_user.sh ← Same idea for the 'weatherdatalogger_api'
+│   │                                      user the api/ service needs — separate user
+│   │                                      from weatherdatalogger_ha so each consumer's
+│   │                                      credentials can be rotated independently
+│   └── config.example.ini          ← Shared config template for all six services
 ├── ESPHome/                          ← Flashed firmware devices — not part of the
 │   │                                  LXC deploy; each is its own sibling directory
 │   ├── davis/                       ← Davis Vantage Vue (ESPHome receiver)
@@ -337,7 +350,8 @@ WeatherDatalogger/                   ← repo root
   - `weatherdb-writer` — files at `/opt/weatherdatalogger/database/`, venv at `.../database/venv`
   - `meteobridge-datalogger` — files at `/opt/weatherdatalogger/meteobridge/`, venv at `.../meteobridge/venv` (optional — idles if `[meteobridge] enabled = false`)
   - `visualcrossing-datalogger` — files at `/opt/weatherdatalogger/visualcrossing/`, venv at `.../visualcrossing/venv` (optional — idles if `[visualcrossing] enabled = false`)
-- **Single shared config** at `/opt/weatherdatalogger/config.ini` — all five services read from this one file; never overwritten by the deploy script
+  - `weatherdatalogger-api` — files at `/opt/weatherdatalogger/api/`, venv at `.../api/venv` (optional — idles if `[api] enabled = false`); REST + WebSocket read access to `combined_realtime`/`combined_realtime_stats`, see `weatherdatalogger/api/README.md`
+- **Single shared config** at `/opt/weatherdatalogger/config.ini` — all six services read from this one file; never overwritten by the deploy script
 - **MariaDB** running on the same LXC, bound to `0.0.0.0:3306` for network access
   - `db.cnf` (MySQL client format, `chmod 600`) auto-generated at `/opt/weatherdatalogger/db.cnf` by the deploy script from the shared `config.ini`
 - Install script: `sudo bash /opt/weatherdatalogger/scripts/install.sh` — one-time (but
@@ -350,7 +364,9 @@ WeatherDatalogger/                   ← repo root
   migrations apply and services enable+start against the now-real `config.ini`).
   The wizard also offers, once, to run `create_ha_readonly_user.sh` (creates the
   `SELECT`-only `weatherdatalogger_ha` user the separate WeatherDatalogger-HA
-  integration needs) — that script can also be run standalone anytime later
+  integration needs) — that script can also be run standalone anytime later.
+  Same pattern for the API server: the wizard offers to enable `[api]`, runs
+  `create_api_readonly_user.sh` if so, and generates the `api_key` for you
 - Deploy script: `sudo bash /opt/weatherdatalogger/scripts/deploy.sh`
   - Installs all production files for all services
   - Records the installed version (repo-root `VERSION` file + deployed commit's short SHA) to `/opt/weatherdatalogger/VERSION` — `cat` it to check what's installed; bump `VERSION` on any change worth telling deployments apart by
@@ -397,6 +413,17 @@ WeatherDatalogger/                   ← repo root
 
 ---
 
+## API Server — Key Design Decisions
+
+- Single file (`api/api_server.py`), FastAPI + uvicorn — the one exception to "no async frameworks" (see "Things to avoid"): FastAPI is what gives native async WebSocket support and free interactive OpenAPI docs at `/docs`, and this service has no UDP/MQTT loop to keep simple, unlike the datalogger services that rule
+- **Chose DB polling over MQTT-driven push**: a background thread (`DataPoller`) polls `combined_realtime`/`combined_realtime_stats` on `[api] poll_interval_s` (default 5s) and keeps the latest rows in an in-memory `Snapshot` (with a `version` counter bumped only when content actually changes); every REST/WebSocket request is served from that cache, never a fresh query. Simpler than also subscribing to MQTT in this service (no second data path to keep consistent with the DB writer's own view of "current"), at the cost of up to one poll interval of latency
+- WebSocket (`/api/v1/ws/current`) sends the current snapshot on connect, then again whenever `version` increments — one async loop per connection compares against the cache (no cross-thread signaling into the asyncio event loop; `asyncio.wait_for(websocket.receive_text(), timeout=poll_interval_s)` doubles as the tick and as disconnect detection)
+- Own `[api] db_user`/`db_password`, separate from the `weatherlogger` writer user — always create it with `scripts/create_api_readonly_user.sh` (SELECT-only, mirrors `create_ha_readonly_user.sh`/`weatherdatalogger_ha`), never point this service at the writer credentials
+- Single shared-secret API key (`[api] api_key`) — `X-API-Key` header for REST, `?api_key=` query param for WebSocket (browsers can't set custom headers on the WS handshake). The service refuses to start (`run()` returns before touching MQTT/DB) if `api_key` or `db_password` is unset — never runs unauthenticated
+- v1 scope is deliberately just `combined_realtime`/`combined_realtime_stats` — no `history_charting`/`forecast_*` endpoints yet; same extension pattern as everything else here (add a query + a route, not a new service)
+
+---
+
 ## Database Schema
 
 Tables live in the `weatherdatalogger` database. All observation columns are shared between `realtime` and `history`. The complete schema is defined in `02_create_tables.sql`; migrations add incremental changes and must use `ADD COLUMN IF NOT EXISTS` for idempotency.
@@ -407,7 +434,8 @@ Tables live in the `weatherdatalogger` database. All observation columns are sha
 | `realtime` | Latest reading per station (PK = `station_id`) |
 | `history` | Full time-series; indexed on `(station_id, recorded_at)` |
 | `history_charting` | Pre-aggregated 10-min combined windows (one row per UTC `window_start`); populated by `evt_aggregate_history_charting` event |
-| `combined_realtime` | View merging latest Davis (primary weather) + Tempest (pressure/lightning/UV/solar — sensors Davis lacks) + AirLink (air quality) into one row; use this for dashboards |
+| `combined_realtime` | View merging latest Davis (primary weather) + Tempest (pressure/lightning/UV/solar — sensors Davis lacks) + AirLink (air quality) into one row; use this for dashboards — also the primary source `api/api_server.py` serves over REST/WebSocket, see below |
+| `combined_realtime_stats` | View of derived/rolling stats (today's high/low, 10-min averages, ...) computed on demand from `history`; served alongside `combined_realtime` by the API |
 | `forecast_current`, `forecast_hourly`, `forecast_daily` | Latest Visual Crossing forecast fetch per `location` (not append-only); populated by `visualcrossing_datalogger.py` via `db_writer.py` |
 | `schema_migrations` | Tracks applied migration filenames |
 
@@ -428,19 +456,19 @@ Migrations are SQL files in `database/migrations/` named `YYYYMMDD_description.s
 
 ## Config Sections
 
-All five services read from a single shared `config.ini`. The template with all documented keys is `config.example.ini` at the repo root (deployed to `/opt/weatherdatalogger/config.example.ini`).
+All six services read from a single shared `config.ini`. The template with all documented keys is `config.example.ini` at the repo root (deployed to `/opt/weatherdatalogger/config.example.ini`).
 
 Each service uses only the sections relevant to it — extra sections are ignored by `configparser`.
 
-### Shared sections (all services)
+### Shared sections
 
-| Section | Key settings |
-|---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` |
-| `[logging]` | `level`, `file` |
-| `[homeassistant]` | `discovery` (bool), `discovery_prefix` |
+| Section | Key settings | Used by |
+|---|---|---|
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` | tempest, airlink, db_writer, meteobridge, visualcrossing — **not** api_server (it never touches MQTT, only the database) |
+| `[logging]` | `level`, `file` | all six |
+| `[homeassistant]` | `discovery` (bool), `discovery_prefix` | tempest, airlink |
 
-> **Note:** `client_id` is NOT in the shared config — each service's `DEFAULT_CONFIG` provides its own unique default (`tempest-datalogger`, `airlink-datalogger`, `weatherdb-writer`, `meteobridge-datalogger`, `visualcrossing-datalogger`).
+> **Note:** `client_id` is NOT in the shared config — each MQTT-connected service's `DEFAULT_CONFIG` provides its own unique default (`tempest-datalogger`, `airlink-datalogger`, `weatherdb-writer`, `meteobridge-datalogger`, `visualcrossing-datalogger`). `api_server.py` has no `client_id` since it doesn't connect to MQTT at all.
 
 ### tempest_datalogger.py
 
@@ -483,6 +511,14 @@ All four services above share the same pattern: `enabled` defaults to
 service's section has no `enabled` key at all (a `config.ini` predating
 this flag), a one-time `WARNING` is logged instead of silently idling —
 see `_enabled_key_present()` in each `*_datalogger.py`.
+
+### api_server.py
+
+| Section | Key settings |
+|---|---|
+| `[api]` | `enabled` (default `false`), `host` (`0.0.0.0`), `port` (8000), `api_key` (**REQUIRED** if enabled — shared secret, `X-API-Key` header or `?api_key=` query param), `poll_interval_s` (5), `cors_origins` (empty = CORS disabled), `db_host`/`db_port`/`db_name` (own connection, not `[database]`), `db_user` (`weatherdatalogger_api`), `db_password` (**REQUIRED** if enabled) |
+
+Same `enabled` pattern as the four services above (`run()` returns before doing anything if false), but simpler: no `_enabled_key_present()` upgrade-compat warning, since this service didn't exist before the flag did. It also intentionally has its own `db_*` keys rather than reusing `[database]` — that section holds the `weatherlogger` writer user's credentials, and this service should only ever hold read-only ones (see `scripts/create_api_readonly_user.sh`).
 
 ---
 

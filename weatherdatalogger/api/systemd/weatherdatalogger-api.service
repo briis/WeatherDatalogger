@@ -1,0 +1,19 @@
+[Unit]
+Description=WeatherDatalogger API — REST + WebSocket access to combined_realtime
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=weatherdatalogger
+Group=weatherdatalogger
+WorkingDirectory=/opt/weatherdatalogger/api
+ExecStart=/opt/weatherdatalogger/api/venv/bin/python3 api_server.py --config /opt/weatherdatalogger/config.ini
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=weatherdatalogger-api
+
+[Install]
+WantedBy=multi-user.target

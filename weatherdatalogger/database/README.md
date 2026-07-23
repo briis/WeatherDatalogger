@@ -126,7 +126,7 @@ The `air_quality` role can instead be pointed at `aqmonitor` — the custom ESPH
 
 The `temp_humidity`-role station's own on-board barometer/BME280 reading (which would only add information when `pressure` and `temp_humidity` point at different hardware) isn't exposed here or in `history_charting` — on this install both roles currently resolve to the same station, so those columns were always `NULL` and were dropped entirely (see migrations/20260709_derole_station_columns.sql and migrations/20260709_drop_empty_temp_humidity_columns.sql).
 
-**Use this view as the primary source for dashboards and downstream consumers** — it hides the per-station layout of `realtime` and provides a unified snapshot of all current conditions.
+**Use this view as the primary source for dashboards and downstream consumers** — it hides the per-station layout of `realtime` and provides a unified snapshot of all current conditions. If a consumer shouldn't have direct database credentials (a dashboard, a mobile app), point it at the [REST + WebSocket API](../api/) instead, which serves this view (plus `combined_realtime_stats`) over HTTP/WS from its own read-only DB user.
 
 | Column | Source |
 |---|---|

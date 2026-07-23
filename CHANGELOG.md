@@ -12,6 +12,11 @@ earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-23
+
+### Added
+- New optional 6th service: `weatherdatalogger/api/` — a FastAPI + uvicorn REST + WebSocket API providing read-only access to `combined_realtime`/`combined_realtime_stats`, for dashboards/apps that shouldn't need direct database or MQTT access. `GET /api/v1/current` for pull, `WS /api/v1/ws/current` for push (sends the snapshot on connect, then again on every change); both served from an in-memory cache refreshed by a background poller (`[api] poll_interval_s`, default 5s), so no request hits MariaDB directly. Interactive docs at `/docs`. Single shared-secret API key auth (`X-API-Key` header / `?api_key=` query param), its own SELECT-only `weatherdatalogger_api` database user (`database/04_create_api_readonly_user.sql` + `scripts/create_api_readonly_user.sh`, mirroring the existing `weatherdatalogger_ha` pattern), optional CORS. Off by default (`[api] enabled = false`); `install.sh`'s wizard offers to enable it, create the readonly user, and generate an API key. See `weatherdatalogger/api/README.md` for full usage, and `CONTEXT.md`/`AGENT.md` for the architecture
+
 ## [0.5.1] - 2026-07-22
 
 ### Fixed

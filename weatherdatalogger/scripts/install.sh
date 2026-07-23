@@ -451,6 +451,32 @@ else
         echo "    Skipping — run 'sudo bash $INSTALL_ROOT/scripts/create_ha_readonly_user.sh'"
         echo "    anytime later if you decide to add it."
     fi
+
+    echo ""
+    echo "── REST + WebSocket API (optional) ─────────────────────────────"
+    API_ENABLED=$(_ask_yn "Enable the read-only REST/WebSocket API for dashboards/apps (weatherdatalogger/api/README.md)?")
+    if [[ "$API_ENABLED" == "true" ]]; then
+        bash "$INSTALL_ROOT/scripts/create_api_readonly_user.sh"
+        API_KEY=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true)
+        API_DB_PASSWORD=""
+        while [[ -z "$API_DB_PASSWORD" ]]; do
+            API_DB_PASSWORD=$(_ask_secret "Password you just set for the 'weatherdatalogger_api' database user")
+            [[ -z "$API_DB_PASSWORD" ]] && echo "    Required — please enter a value."
+        done
+        _set_config_values "$SHARED_CONFIG" \
+            api enabled true \
+            api api_key "$API_KEY" \
+            api db_password "$API_DB_PASSWORD"
+        echo ""
+        echo "==> API enabled — generated API key recorded in $SHARED_CONFIG."
+        echo "    Clients must send it as the X-API-Key header (REST) or"
+        echo "    ?api_key= query parameter (WebSocket) — see"
+        echo "    weatherdatalogger/api/README.md."
+    else
+        echo "    Skipping — set [api] enabled = true in $SHARED_CONFIG and run"
+        echo "    'sudo bash $INSTALL_ROOT/scripts/create_api_readonly_user.sh'"
+        echo "    anytime later if you decide to add it."
+    fi
 fi
 
 # ---------------------------------------------------------------------------

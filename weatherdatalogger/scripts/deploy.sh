@@ -40,24 +40,28 @@ AIRLINK_DIR="$INSTALL_ROOT/airlink"
 WRITER_DIR="$INSTALL_ROOT/database"
 METEOBRIDGE_DIR="$INSTALL_ROOT/meteobridge"
 VISUALCROSSING_DIR="$INSTALL_ROOT/visualcrossing"
+API_DIR="$INSTALL_ROOT/api"
 
 TEMPEST_VENV="$TEMPEST_DIR/venv"
 AIRLINK_VENV="$AIRLINK_DIR/venv"
 WRITER_VENV="$WRITER_DIR/venv"
 METEOBRIDGE_VENV="$METEOBRIDGE_DIR/venv"
 VISUALCROSSING_VENV="$VISUALCROSSING_DIR/venv"
+API_VENV="$API_DIR/venv"
 
 TEMPEST_SERVICE="tempest-datalogger"
 AIRLINK_SERVICE="airlink-datalogger"
 WRITER_SERVICE="weatherdb-writer"
 METEOBRIDGE_SERVICE="meteobridge-datalogger"
 VISUALCROSSING_SERVICE="visualcrossing-datalogger"
+API_SERVICE="weatherdatalogger-api"
 
 TEMPEST_UNIT="/etc/systemd/system/tempest-datalogger.service"
 AIRLINK_UNIT="/etc/systemd/system/airlink-datalogger.service"
 WRITER_UNIT="/etc/systemd/system/weatherdb-writer.service"
 METEOBRIDGE_UNIT="/etc/systemd/system/meteobridge-datalogger.service"
 VISUALCROSSING_UNIT="/etc/systemd/system/visualcrossing-datalogger.service"
+API_UNIT="/etc/systemd/system/weatherdatalogger-api.service"
 
 # ---------------------------------------------------------------------------
 # Staging — always cleaned up on exit, even if the script fails
@@ -104,6 +108,7 @@ mkdir -p \
     "$WRITER_DIR/migrations" \
     "$METEOBRIDGE_DIR" \
     "$VISUALCROSSING_DIR" \
+    "$API_DIR" \
     "$INSTALL_ROOT/scripts"
 
 # Persistent log directory — outside INSTALL_ROOT (survives /tmp being
@@ -136,17 +141,23 @@ echo "==> Installing visualcrossing-datalogger…"
 install -m 755 "$STAGING_WDL/visualcrossing/visualcrossing_datalogger.py" "$VISUALCROSSING_DIR/visualcrossing_datalogger.py"
 install -m 644 "$STAGING_WDL/visualcrossing/requirements.txt"             "$VISUALCROSSING_DIR/requirements.txt"
 
+echo "==> Installing weatherdatalogger-api…"
+install -m 755 "$STAGING_WDL/api/api_server.py"    "$API_DIR/api_server.py"
+install -m 644 "$STAGING_WDL/api/requirements.txt" "$API_DIR/requirements.txt"
+
 # Database SQL scripts — kept on disk for manual re-runs and reference
 install -m 644 "$STAGING_WDL/database/01_create_database.sql"    "$WRITER_DIR/01_create_database.sql"
 install -m 644 "$STAGING_WDL/database/02_create_tables.sql"      "$WRITER_DIR/02_create_tables.sql"
 install -m 644 "$STAGING_WDL/database/03_create_readonly_user.sql" "$WRITER_DIR/03_create_readonly_user.sql"
+install -m 644 "$STAGING_WDL/database/04_create_api_readonly_user.sql" "$WRITER_DIR/04_create_api_readonly_user.sql"
 cp -a "$STAGING_WDL/database/migrations/." "$WRITER_DIR/migrations/"
 
 # Shared config example and scripts
-install -m 644 "$STAGING_WDL/config.example.ini"                 "$INSTALL_ROOT/config.example.ini"
-install -m 755 "$STAGING_WDL/scripts/deploy.sh"                  "$INSTALL_ROOT/scripts/deploy.sh"
-install -m 755 "$STAGING_WDL/scripts/install.sh"                 "$INSTALL_ROOT/scripts/install.sh"
-install -m 755 "$STAGING_WDL/scripts/create_ha_readonly_user.sh" "$INSTALL_ROOT/scripts/create_ha_readonly_user.sh"
+install -m 644 "$STAGING_WDL/config.example.ini"                  "$INSTALL_ROOT/config.example.ini"
+install -m 755 "$STAGING_WDL/scripts/deploy.sh"                   "$INSTALL_ROOT/scripts/deploy.sh"
+install -m 755 "$STAGING_WDL/scripts/install.sh"                  "$INSTALL_ROOT/scripts/install.sh"
+install -m 755 "$STAGING_WDL/scripts/create_ha_readonly_user.sh"  "$INSTALL_ROOT/scripts/create_ha_readonly_user.sh"
+install -m 755 "$STAGING_WDL/scripts/create_api_readonly_user.sh" "$INSTALL_ROOT/scripts/create_api_readonly_user.sh"
 
 # Installed version — persisted so it can be checked anytime later without
 # re-running deploy.sh: `cat /opt/weatherdatalogger/VERSION`. Report this
@@ -179,6 +190,7 @@ _sync_unit "$STAGING_WDL/airlink/systemd/airlink-datalogger.service"  "$AIRLINK_
 _sync_unit "$STAGING_WDL/database/systemd/weatherdb-writer.service"   "$WRITER_UNIT"
 _sync_unit "$STAGING_WDL/meteobridge/systemd/meteobridge-datalogger.service" "$METEOBRIDGE_UNIT"
 _sync_unit "$STAGING_WDL/visualcrossing/systemd/visualcrossing-datalogger.service" "$VISUALCROSSING_UNIT"
+_sync_unit "$STAGING_WDL/api/systemd/weatherdatalogger-api.service" "$API_UNIT"
 
 # ---------------------------------------------------------------------------
 # Shared config — print instructions on first deploy, never overwrite
@@ -267,7 +279,8 @@ for dir_venv_req in \
     "$AIRLINK_DIR:$AIRLINK_VENV:$AIRLINK_DIR/requirements.txt" \
     "$WRITER_DIR:$WRITER_VENV:$WRITER_DIR/requirements.txt" \
     "$METEOBRIDGE_DIR:$METEOBRIDGE_VENV:$METEOBRIDGE_DIR/requirements.txt" \
-    "$VISUALCROSSING_DIR:$VISUALCROSSING_VENV:$VISUALCROSSING_DIR/requirements.txt"; do
+    "$VISUALCROSSING_DIR:$VISUALCROSSING_VENV:$VISUALCROSSING_DIR/requirements.txt" \
+    "$API_DIR:$API_VENV:$API_DIR/requirements.txt"; do
 
     IFS=: read -r svc_dir venv req <<< "$dir_venv_req"
     svc_name=$(basename "$svc_dir")
@@ -328,7 +341,8 @@ for service_section in \
     "$WRITER_SERVICE:" \
     "$AIRLINK_SERVICE:airlink" \
     "$METEOBRIDGE_SERVICE:meteobridge" \
-    "$VISUALCROSSING_SERVICE:visualcrossing"; do
+    "$VISUALCROSSING_SERVICE:visualcrossing" \
+    "$API_SERVICE:api"; do
 
     IFS=: read -r service section <<< "$service_section"
 
