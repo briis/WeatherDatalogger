@@ -4,7 +4,7 @@ Polls the [Visual Crossing](https://www.visualcrossing.com/) Timeline Weather AP
 
 This replaces the WeatherFlow Better Forecast poller that used to live in `tempest_datalogger.py`. Unlike that one, this service is purely **latitude/longitude-based** — it has no dependency on a registered Tempest station, WeatherFlow account, or any physical hardware at all.
 
-> **Installation:** Follow the [server installation guide](../../README.md#installation) first, then return here to configure the forecast datalogger.
+> **Installation:** Follow the [server installation guide](../../README.md#installation-debian--proxmox-lxc) first, then return here to configure the forecast datalogger.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Subscribes to MQTT observation topics published by the weather station loggers and persists every reading to MariaDB. Runs as a standalone systemd service so database writes are completely decoupled from the station loggers.
 
-> **Installation:** Follow the [server installation guide](../README.md#installation) first, then return here to configure the DB writer.
+> **Installation:** Follow the [server installation guide](../README.md#installation-debian--proxmox-lxc) first, then return here to configure the DB writer.
 
 ---
 
@@ -21,7 +21,7 @@ All timestamps are stored in **UTC** as naive `DATETIME` values. Use `UTC_TIMEST
 
 ## Setup
 
-After completing the [server installation](../README.md#installation), edit the shared config file:
+After completing the [server installation](../README.md#installation-debian--proxmox-lxc), edit the shared config file:
 
 ```bash
 nano /opt/weatherdatalogger/config.ini

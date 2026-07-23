@@ -6,7 +6,7 @@ data documented in [`database/README.md`](../database/README.md). Built for
 dashboards, mobile/web apps, or any consumer that shouldn't need direct
 database credentials or MQTT access.
 
-> **Installation:** Follow the [server installation guide](../README.md#installation) first, then return here to configure the API.
+> **Installation:** Follow the [server installation guide](../README.md#installation-debian--proxmox-lxc) first, then return here to configure the API.
 
 ---
 
@@ -25,7 +25,7 @@ This is v1 scope: just the two combined-view "current conditions" endpoints. His
 
 ## Setup
 
-After completing the [server installation](../README.md#installation):
+After completing the [server installation](../README.md#installation-debian--proxmox-lxc):
 
 1. Create the read-only database user:
 
@@ -150,22 +150,63 @@ Returns the latest snapshot of both views. `503` if no station reporting the `wi
 
 On connect, sends one message with the current snapshot immediately, then sends a new message every time `poll_once()` detects either view changed — same payload shape as `GET /api/v1/current`. The connection never expects anything from the client; any inbound frame is ignored (harmless to send pings).
 
-**Python example:**
+**Python example — quick test script:**
+
+Install the client library (separate from anything this project's own services need — this only runs on your workstation, not the server):
+
+```bash
+pip install websockets
+```
+
+Save as `test_ws.py` and run it — it connects, prints the initial snapshot, then prints each subsequent push as it arrives (trigger one by letting a station report a new reading, or by hand: `UPDATE realtime SET air_temperature_c = 20.0 WHERE station_id = '<id>';`):
 
 ```python
+#!/usr/bin/env python3
+"""Quick manual test for WS /api/v1/ws/current — connects, prints every push."""
+
+import argparse
 import asyncio
 import json
+
 import websockets
 
-async def main():
-    uri = "ws://localhost:8000/api/v1/ws/current?api_key=your-key-here"
+
+async def main(host: str, port: int, api_key: str, use_tls: bool) -> None:
+    scheme = "wss" if use_tls else "ws"
+    uri = f"{scheme}://{host}:{port}/api/v1/ws/current?api_key={api_key}"
+    print(f"Connecting to {uri} ...")
+
     async with websockets.connect(uri) as ws:
+        print("Connected — waiting for pushes (Ctrl+C to stop)\n")
         async for message in ws:
             data = json.loads(message)
-            print(data["version"], data["combined_realtime"]["air_temperature_c"])
+            current = data["combined_realtime"] or {}
+            print(
+                f"[version {data['version']}] updated_at={data['updated_at']} "
+                f"air_temperature_c={current.get('air_temperature_c')} "
+                f"wind_avg_ms={current.get('wind_avg_ms')}"
+            )
 
-asyncio.run(main())
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="localhost")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--api-key", required=True)
+    parser.add_argument("--tls", action="store_true", help="use wss:// instead of ws://")
+    args = parser.parse_args()
+
+    try:
+        asyncio.run(main(args.host, args.port, args.api_key, args.tls))
+    except KeyboardInterrupt:
+        print("\nStopped.")
 ```
+
+```bash
+python3 test_ws.py --host localhost --port 8000 --api-key <your key>
+```
+
+A wrong `--api-key` raises `websockets.exceptions.InvalidStatus` with an HTTP `403` — that's the expected rejection, not a bug in the script (see [Authentication](#authentication) above).
 
 **JavaScript (browser) example:**
 
