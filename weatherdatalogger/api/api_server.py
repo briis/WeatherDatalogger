@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pymysql
 import pymysql.cursors
@@ -157,7 +157,7 @@ class DataPoller:
             try:
                 with self._conn.cursor() as cur:  # type: ignore[union-attr]
                     cur.execute(sql)
-                    return cur.fetchone()
+                    return cast("dict[str, Any] | None", cur.fetchone())
             except (pymysql.OperationalError, pymysql.InterfaceError):
                 if attempt == 0:
                     self._log.warning("DB connection lost — reconnecting…")
