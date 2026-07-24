@@ -166,9 +166,23 @@ Save as `test_ws.py` and run it — it connects, prints the initial snapshot, th
 
 import argparse
 import asyncio
+import contextlib
 import json
+import signal
 
 import websockets
+
+
+def _print_message(message: str | bytes) -> None:
+    data = json.loads(message)
+    current = data["combined_realtime"] or {}
+    extra = data["combined_realtime_stats"] or {}
+    print(
+        f"[version {data['version']}] updated_at={data['updated_at']} "
+        f"air_temperature_c={current.get('air_temperature_c')} "
+        f"wind_avg_ms={current.get('wind_avg_ms')} "
+        f"wind_gust_high_today={extra.get('wind_gust_high_today')}"
+    )
 
 
 async def main(host: str, port: int, api_key: str, use_tls: bool) -> None:
@@ -176,16 +190,24 @@ async def main(host: str, port: int, api_key: str, use_tls: bool) -> None:
     uri = f"{scheme}://{host}:{port}/api/v1/ws/current?api_key={api_key}"
     print(f"Connecting to {uri} ...")
 
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, stop.set)
+
     async with websockets.connect(uri) as ws:
         print("Connected — waiting for pushes (Ctrl+C to stop)\n")
-        async for message in ws:
-            data = json.loads(message)
-            current = data["combined_realtime"] or {}
-            print(
-                f"[version {data['version']}] updated_at={data['updated_at']} "
-                f"air_temperature_c={current.get('air_temperature_c')} "
-                f"wind_avg_ms={current.get('wind_avg_ms')}"
-            )
+
+        async def consume() -> None:
+            async for message in ws:
+                _print_message(message)
+
+        consumer = asyncio.ensure_future(consume())
+        await stop.wait()
+        consumer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer
+    # __aexit__ ran above, so the WS close handshake completed before we get here.
+    print("\nStopped.")
 
 
 if __name__ == "__main__":
@@ -193,13 +215,11 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--api-key", required=True)
-    parser.add_argument("--tls", action="store_true", help="use wss:// instead of ws://")
+    parser.add_argument("--tls", action="store_true",
+                        help="use wss:// instead of ws://")
     args = parser.parse_args()
 
-    try:
-        asyncio.run(main(args.host, args.port, args.api_key, args.tls))
-    except KeyboardInterrupt:
-        print("\nStopped.")
+    asyncio.run(main(args.host, args.port, args.api_key, args.tls))
 ```
 
 ```bash
