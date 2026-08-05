@@ -38,6 +38,20 @@ esphome:
           // next tip happens to arrive.
           id(davis_rain_rate).publish_state(0.0f);
 
+          // Pressure trend: pressure_hist_stn/slp (restore_value: yes)
+          // already survive a reboot, but the trend sensors themselves
+          // don't — without this they'd sit unknown/blank for up to
+          // 15min until the next interval fires. Rebuild the trend here
+          // from the two ends of the restored history (last sample vs.
+          // oldest sample, ~3h apart) so a short reboot shows the same
+          // trend it had right before restarting, instead of making us
+          // wait for a fresh 3h window to fill up again.
+          if (id(pressure_hist_count) >= 12) {
+            float stn_delta = id(pressure_hist_stn)[11] - id(pressure_hist_stn)[0];
+            float slp_delta = id(pressure_hist_slp)[11] - id(pressure_hist_slp)[0];
+            id(publish_pressure_trend).execute(stn_delta, slp_delta);
+          }
+
 # M5Stack Basic Core V2.6 — RF Module CC1101 stacked via M-Bus.
 esp32:
   board: m5stack-core-esp32-16M
@@ -708,6 +722,31 @@ cc1101:
           id(mqtt_client).publish(topic, buf);
 
 # ─────────────────────────────────────────────────────────────
+# Shared pressure-trend publisher — called from the 15min interval
+# below with a freshly-measured delta, and from on_boot (above) with
+# a delta rebuilt from the restored pressure_hist_* globals, so a
+# short reboot doesn't blank the trend until the next 15min window.
+# ─────────────────────────────────────────────────────────────
+script:
+  - id: publish_pressure_trend
+    parameters:
+      stn_delta: float
+      slp_delta: float
+    then:
+      - lambda: |-
+          id(davis_pressure_trend_mb).publish_state(stn_delta);
+          id(davis_slp_trend_mb).publish_state(slp_delta);
+
+          bool danish = (std::string("${language}") == "da");
+          auto trend_desc = [danish](float delta) -> std::string {
+            if (delta <= -1.0f) return danish ? "Falder" : "Falling";
+            if (delta >=  1.0f) return danish ? "Stiger" : "Rising";
+            return danish ? "Stabil" : "Steady";
+          };
+          id(davis_pressure_trend_desc).publish_state(trend_desc(stn_delta));
+          id(davis_slp_trend_desc).publish_state(trend_desc(slp_delta));
+
+# ─────────────────────────────────────────────────────────────
 # I2C bus — shared by the IP5306 (battery, 0x75) and BME280
 # (barometer, 0x76). No address conflict.
 # ─────────────────────────────────────────────────────────────
@@ -752,17 +791,7 @@ interval:
             if (id(pressure_hist_count) >= 12) {
               float stn_delta = p_sta - id(pressure_hist_stn)[0];
               float slp_delta = p_slp - id(pressure_hist_slp)[0];
-              id(davis_pressure_trend_mb).publish_state(stn_delta);
-              id(davis_slp_trend_mb).publish_state(slp_delta);
-
-              bool danish = (std::string("${language}") == "da");
-              auto trend_desc = [danish](float delta) -> std::string {
-                if (delta <= -1.0f) return danish ? "Faldende" : "Falling";
-                if (delta >=  1.0f) return danish ? "Stigende" : "Rising";
-                return danish ? "Stabil" : "Steady";
-              };
-              id(davis_pressure_trend_desc).publish_state(trend_desc(stn_delta));
-              id(davis_slp_trend_desc).publish_state(trend_desc(slp_delta));
+              id(publish_pressure_trend).execute(stn_delta, slp_delta);
             }
 
             for (int i = 0; i < 11; i++) {
