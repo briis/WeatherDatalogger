@@ -1,7 +1,7 @@
 substitutions:
   name: "Davisnet Datalogger"
   device: davisnet-datalogger
-  version: 0.2.2
+  version: 0.2.3
   created_by: "Bjarne Riis"
 
   # Used only for the sea-level pressure conversion below — adjust to the
