@@ -10,7 +10,10 @@ what's installed, and quote it when asking for a change or filing an issue.
 This changelog starts at `0.1.0`, the first version tracked this way —
 earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
-## [Unreleased]
+## [0.6.1] - 2026-08-17
+
+### Fixed
+- `ESPHome/davis/davisnet-weatherlogger.yaml` (bumped to `0.2.4`): Rain Rate stuck at `0` for any sustained rain at or below ~2.4 mm/h (light/moderate rain — accumulated Daily Rain was unaffected and always correct). The 60s staleness interval that blanks the displayed rate after 5 minutes without a bucket tip was reusing the same `rain_tip_seen` flag that gates the rate calculation; at ≤2.4 mm/h the gap between 0.2mm tips exceeds 5 minutes, so the flag kept getting cleared *between* tips of the same rain event and every next tip was treated as the first ever (no rate computed for it). Split into two flags — `rain_tip_seen` (idle-display blanking, still resets every 5min) and `rain_tip_ever_seen` (gates the rate math, never resets) — so a rate is now computed off however long the previous tip actually was
 
 ## [0.6.0] - 2026-07-23
 

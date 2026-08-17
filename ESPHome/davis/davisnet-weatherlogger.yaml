@@ -1,7 +1,7 @@
 substitutions:
   name: "Davisnet Datalogger"
   device: davisnet-datalogger
-  version: 0.2.3
+  version: 0.2.4
   created_by: "Bjarne Riis"
 
   # Used only for the sea-level pressure conversion below — adjust to the
@@ -155,6 +155,7 @@ mqtt:
               id(davis_rain_rate).publish_state(new_rate);
               id(rain_last_tip_ms) = millis();
               id(rain_tip_seen) = true;
+              id(rain_tip_ever_seen) = true;
               ESP_LOGI("davis", "Rain rate corrected to %.1f mm/h via MQTT", new_rate);
             } else {
               ESP_LOGW("davis", "Ignored implausible rain-rate correction: %s", x.c_str());
@@ -264,6 +265,17 @@ globals:
     type: uint32_t
     initial_value: '0'
   - id: rain_tip_seen
+    type: bool
+    initial_value: 'false'
+  # Separate from rain_tip_seen: that flag gets cleared every time the 60s
+  # staleness interval sees >5min since the last tip (so the display goes
+  # back to 0 while idle). At tip rates below ~2.4mm/h (0.2mm bucket, gap
+  # >5min) that reset was also happening *between* tips of the same rain
+  # event, so the next tip was always treated as "the very first ever" and
+  # never got a rate computed for it — rain rate stuck at 0 for any light/
+  # moderate rain. This flag gates the rate math instead and is never
+  # cleared, so a rate is still computed however long the previous tip was.
+  - id: rain_tip_ever_seen
     type: bool
     initial_value: 'false'
   - id: raw_wind_dir
@@ -530,7 +542,7 @@ cc1101:
                 id(davis_rain).publish_state(id(rain_total_mm));
 
                 uint32_t now_ms = millis();
-                if (id(rain_tip_seen)) {
+                if (id(rain_tip_ever_seen)) {
                   uint32_t elapsed_ms = now_ms - id(rain_last_tip_ms);
                   if (elapsed_ms > 0) {
                     float rate_mmh = (delta * 0.2f / (float)elapsed_ms) * 3600000.0f;
@@ -541,6 +553,7 @@ cc1101:
                 }
                 id(rain_last_tip_ms) = now_ms;
                 id(rain_tip_seen) = true;
+                id(rain_tip_ever_seen) = true;
               } else if (delta >= 60) {
                 ESP_LOGW("davis", "Ignored implausible rain tip delta: %d tips since last packet", delta);
               }
