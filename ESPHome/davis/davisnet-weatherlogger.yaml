@@ -1,7 +1,7 @@
 substitutions:
   name: "Davisnet Datalogger"
   device: davisnet-datalogger
-  version: 0.2.4
+  version: 0.2.5
   created_by: "Bjarne Riis"
 
   # Used only for the sea-level pressure conversion below — adjust to the
@@ -819,9 +819,29 @@ interval:
   - interval: 60s
     then:
       - lambda: |-
-          if (id(rain_tip_seen) && (millis() - id(rain_last_tip_ms) > 300000UL)) {
-            id(davis_rain_rate).publish_state(0.0f);
-            id(rain_tip_seen) = false;
+          // Rain rate is normally only recomputed when a fresh 0.2mm tip
+          // arrives (rate = 0.2mm / time-since-previous-tip). In light rain
+          // tips can be 10-20+ minutes apart, so without this block the
+          // displayed rate would sit frozen at the last tip's value and
+          // then hard-drop to 0 — making anything under ~2.4 mm/h (a tip
+          // every 5 min) look like it keeps cutting out to "no rain".
+          //
+          // Instead, decay the estimate every tick: as long as a tip is
+          // still pending, the true rate can be at most 0.2mm/elapsed, so
+          // only ever push it DOWN toward that bound (never up — a real
+          // new tip still drives the value directly, above). Only force a
+          // hard 0 after a much longer dry spell, as a stale-data backstop.
+          if (id(rain_tip_seen)) {
+            uint32_t elapsed_ms = millis() - id(rain_last_tip_ms);
+            if (elapsed_ms > 1200000UL) {  // 20 min with no tip: genuinely dry
+              id(davis_rain_rate).publish_state(0.0f);
+              id(rain_tip_seen) = false;
+            } else if (elapsed_ms > 0) {
+              float implied_rate = (0.2f / (float)elapsed_ms) * 3600000.0f;
+              if (implied_rate < id(davis_rain_rate).state) {
+                id(davis_rain_rate).publish_state(implied_rate);
+              }
+            }
           }
 
           if (id(wind_lull_min_ms) < 900.0f) {
