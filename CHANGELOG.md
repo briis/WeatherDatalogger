@@ -10,6 +10,11 @@ what's installed, and quote it when asking for a change or filing an issue.
 This changelog starts at `0.1.0`, the first version tracked this way —
 earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
+## [0.6.2] - 2026-09-01
+
+### Fixed
+- `ESPHome/davis/davisnet-weatherlogger.yaml` (bumped to `0.2.5`): the 5-minute zero-out cutoff added in `0.2.4` was still too short — it kept zeroing out genuine light drizzle/rain, since tips can legitimately be 10-20+ minutes apart at low rates. The 60s tick now decays the displayed rate downward each second a tip is pending (bounded by `0.2mm / time-since-last-tip`, i.e. the highest rate still consistent with no new tip yet) instead of holding the last value frozen then hard-dropping it to `0`; only a genuine 20-minute dry spell forces a hard `0` now, as a stale-data backstop rather than the thing zeroing out real rain. Field-validated on 2026-09-01 across both drizzle and heavier rain — Rain Rate now tracks correctly at both ends
+
 ## [0.6.1] - 2026-08-17
 
 ### Fixed
