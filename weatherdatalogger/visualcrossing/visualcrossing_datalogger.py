@@ -37,11 +37,7 @@ from pyVisualCrossing import (
     ForecastData,
     ForecastHourlyData,
     VisualCrossing,
-    VisualCrossingBadRequest,
     VisualCrossingException,
-    VisualCrossingInternalServerError,
-    VisualCrossingTooManyRequests,
-    VisualCrossingUnauthorized,
 )
 
 # ---------------------------------------------------------------------------
@@ -124,11 +120,10 @@ def _kmh_to_ms(kmh: float | None) -> float | None:
     """
     Convert km/h to m/s.
 
-    Visual Crossing's metric unit group returns wind speed/gust in km/h, but
-    pyVisualCrossing's wind_speed/wind_gust_speed properties are documented
-    as m/s without actually converting. Fixed here rather than in the
-    wrapper to avoid a breaking change for other pyVisualCrossing consumers
-    who may already depend on its current (km/h) values.
+    Visual Crossing's metric unit group returns wind speed/gust in km/h, and
+    pyVisualCrossing passes them through unconverted (documented as km/h
+    since 1.1.0; earlier releases mislabelled them as m/s). This project
+    publishes m/s everywhere, so the conversion happens here.
     """
     return kmh / 3.6 if kmh is not None else None
 
@@ -175,7 +170,7 @@ def load_config(path: str) -> configparser.ConfigParser:
 # wind_gust_speed here so all three payloads share one consistent key,
 # despite the library itself naming it differently on daily entries.
 # wind_speed/wind_gust_speed are also converted km/h → m/s via _kmh_to_ms
-# (see its docstring for why that happens here and not in the wrapper).
+# (see its docstring).
 # ---------------------------------------------------------------------------
 
 
@@ -287,13 +282,13 @@ def _build_daily_payload(
 # Fetch
 # ---------------------------------------------------------------------------
 
-_VC_ERRORS = (
-    VisualCrossingBadRequest,
-    VisualCrossingUnauthorized,
-    VisualCrossingTooManyRequests,
-    VisualCrossingInternalServerError,
-    VisualCrossingException,
-)
+# Since pyVisualCrossing 1.1.0 every HTTP error (400/401/429/500 and any
+# other non-200 status) is a VisualCrossingException subclass. Transport
+# failures (DNS, connection refused, the library's 30 s request timeout) are
+# not wrapped and surface as urllib.error.URLError/TimeoutError — both
+# OSError subclasses — so they're treated as the same transient warning
+# rather than logged with a full traceback every poll while offline.
+_VC_ERRORS = (VisualCrossingException, OSError)
 
 
 def _log_raw_response(vcapi: VisualCrossing, log: logging.Logger) -> None:

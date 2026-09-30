@@ -10,6 +10,11 @@ what's installed, and quote it when asking for a change or filing an issue.
 This changelog starts at `0.1.0`, the first version tracked this way —
 earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
+## [0.6.3] - 2026-09-30
+
+### Changed
+- `weatherdatalogger/visualcrossing/`: requires `pyVisualCrossing>=1.1.0`. Forecast `datetime` values are now derived from the API's epoch timestamps, so they're correct UTC even when the host's timezone differs from the forecast location's (existing `forecast_hourly`/`forecast_daily` rows self-correct on the next publish via the stale-row cleanup). API requests now time out after 30 s instead of potentially hanging the poll loop, and network/timeout failures are logged as a one-line warning instead of a full traceback
+
 ## [0.6.2] - 2026-09-01
 
 ### Fixed
