@@ -10,6 +10,11 @@ what's installed, and quote it when asking for a change or filing an issue.
 This changelog starts at `0.1.0`, the first version tracked this way —
 earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
+## [0.6.4] - 2026-10-09
+
+### Fixed
+- `database/migrations/20261009_add_history_recorded_at_index.sql` — new `idx_history_recorded_at (recorded_at)` index on `history` (also added to `02_create_tables.sql` for fresh installs). `combined_realtime_stats` joins `history` to `stations` to resolve each role's station, so MariaDB could only use the `station_id` half of `idx_history_station_time` and walked that station's entire history in each of the view's seven subqueries — query time grew with the total size of `history` (the Davis receiver alone adds a row per RF packet, ~every 2.5 s) until it exceeded the 10 s read timeout of the [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA) integration, which then logged `(2013, 'Lost connection to MySQL server during query (The read operation timed out)')` and marked all its entities unavailable. With the index the view only reads the rows inside its time windows. Applied automatically by `deploy.sh`; no view or code changes
+
 ## [0.6.3] - 2026-09-30
 
 ### Changed

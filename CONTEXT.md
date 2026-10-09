@@ -432,7 +432,7 @@ Tables live in the `weatherdatalogger` database. All observation columns are sha
 |---|---|
 | `stations` | One row per device; auto-inserted on first observation |
 | `realtime` | Latest reading per station (PK = `station_id`) |
-| `history` | Full time-series; indexed on `(station_id, recorded_at)` |
+| `history` | Full time-series; indexed on `(station_id, recorded_at)` and on `(recorded_at)` alone (the latter keeps `combined_realtime_stats` fast as the table grows) |
 | `history_charting` | Pre-aggregated 10-min combined windows (one row per UTC `window_start`); populated by `evt_aggregate_history_charting` event |
 | `combined_realtime` | View merging latest Davis (primary weather) + Tempest (pressure/lightning/UV/solar — sensors Davis lacks) + AirLink (air quality) into one row; use this for dashboards — also the primary source `api/api_server.py` serves over REST/WebSocket, see below |
 | `combined_realtime_stats` | View of derived/rolling stats (today's high/low, 10-min averages, ...) computed on demand from `history`; served alongside `combined_realtime` by the API |

@@ -185,6 +185,12 @@ CREATE TABLE IF NOT EXISTS history (
     caqi_pm10                   SMALLINT UNSIGNED NULL,
     PRIMARY KEY (id),
     KEY idx_history_station_time (station_id, recorded_at),
+    -- Time-only index for queries that filter on a recorded_at window but
+    -- reach station_id through a JOIN on stations (combined_realtime_stats):
+    -- MariaDB can only use the station_id half of idx_history_station_time
+    -- there and would otherwise walk that station's entire history. See
+    -- migrations/20261009_add_history_recorded_at_index.sql.
+    KEY idx_history_recorded_at (recorded_at),
     CONSTRAINT fk_history_station
         FOREIGN KEY (station_id) REFERENCES stations (station_id)
         ON UPDATE CASCADE ON DELETE CASCADE

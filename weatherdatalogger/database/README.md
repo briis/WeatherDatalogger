@@ -94,7 +94,7 @@ One row per station, replaced on every incoming observation. Primary key is `sta
 
 ### `history`
 
-Full append-only time-series. Every observation is inserted here. Indexed on `(station_id, recorded_at)` for efficient range queries.
+Full append-only time-series. Every observation is inserted here. Indexed on `(station_id, recorded_at)` for efficient per-station range queries, and on `(recorded_at)` alone so `combined_realtime_stats`' time-window subqueries (which reach `station_id` through a join on `stations`) only read the rows inside their window instead of a station's whole history.
 
 Both `realtime` and `history` share the same observation columns:
 
