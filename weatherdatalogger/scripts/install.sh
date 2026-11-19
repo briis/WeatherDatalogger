@@ -435,6 +435,25 @@ else
             visualcrossing longitude "$VC_LON"
         )
     fi
+    OPENMETEO=$(_ask_yn "Enable Open-Meteo weather forecast (free, no API key)?")
+    updates+=(openmeteo enabled "$OPENMETEO")
+    if [[ "$OPENMETEO" == "true" ]]; then
+        if [[ "$VISUALCROSSING" == "true" ]]; then
+            # Same location for both is the common case — don't ask twice.
+            OM_LAT="$VC_LAT"
+            OM_LON="$VC_LON"
+            echo "    Using the same location as Visual Crossing ($OM_LAT, $OM_LON)."
+        else
+            OM_LAT=$(_ask "Forecast location latitude")
+            OM_LON=$(_ask "Forecast location longitude")
+        fi
+        updates+=(
+            openmeteo latitude "$OM_LAT"
+            openmeteo longitude "$OM_LON"
+        )
+        echo "    Weather model left at 'best_match' — set [openmeteo] model in"
+        echo "    $SHARED_CONFIG to pick one (e.g. dmi_seamless)."
+    fi
 
     _set_config_values "$SHARED_CONFIG" "${updates[@]}"
     echo ""

@@ -40,6 +40,7 @@ AIRLINK_DIR="$INSTALL_ROOT/airlink"
 WRITER_DIR="$INSTALL_ROOT/database"
 METEOBRIDGE_DIR="$INSTALL_ROOT/meteobridge"
 VISUALCROSSING_DIR="$INSTALL_ROOT/visualcrossing"
+OPENMETEO_DIR="$INSTALL_ROOT/openmeteo"
 API_DIR="$INSTALL_ROOT/api"
 
 TEMPEST_VENV="$TEMPEST_DIR/venv"
@@ -47,6 +48,7 @@ AIRLINK_VENV="$AIRLINK_DIR/venv"
 WRITER_VENV="$WRITER_DIR/venv"
 METEOBRIDGE_VENV="$METEOBRIDGE_DIR/venv"
 VISUALCROSSING_VENV="$VISUALCROSSING_DIR/venv"
+OPENMETEO_VENV="$OPENMETEO_DIR/venv"
 API_VENV="$API_DIR/venv"
 
 TEMPEST_SERVICE="tempest-datalogger"
@@ -54,6 +56,7 @@ AIRLINK_SERVICE="airlink-datalogger"
 WRITER_SERVICE="weatherdb-writer"
 METEOBRIDGE_SERVICE="meteobridge-datalogger"
 VISUALCROSSING_SERVICE="visualcrossing-datalogger"
+OPENMETEO_SERVICE="openmeteo-datalogger"
 API_SERVICE="weatherdatalogger-api"
 
 TEMPEST_UNIT="/etc/systemd/system/tempest-datalogger.service"
@@ -61,6 +64,7 @@ AIRLINK_UNIT="/etc/systemd/system/airlink-datalogger.service"
 WRITER_UNIT="/etc/systemd/system/weatherdb-writer.service"
 METEOBRIDGE_UNIT="/etc/systemd/system/meteobridge-datalogger.service"
 VISUALCROSSING_UNIT="/etc/systemd/system/visualcrossing-datalogger.service"
+OPENMETEO_UNIT="/etc/systemd/system/openmeteo-datalogger.service"
 API_UNIT="/etc/systemd/system/weatherdatalogger-api.service"
 
 # ---------------------------------------------------------------------------
@@ -108,6 +112,7 @@ mkdir -p \
     "$WRITER_DIR/migrations" \
     "$METEOBRIDGE_DIR" \
     "$VISUALCROSSING_DIR" \
+    "$OPENMETEO_DIR" \
     "$API_DIR" \
     "$INSTALL_ROOT/scripts"
 
@@ -140,6 +145,10 @@ install -m 644 "$STAGING_WDL/meteobridge/requirements.txt"          "$METEOBRIDG
 echo "==> Installing visualcrossing-datalogger…"
 install -m 755 "$STAGING_WDL/visualcrossing/visualcrossing_datalogger.py" "$VISUALCROSSING_DIR/visualcrossing_datalogger.py"
 install -m 644 "$STAGING_WDL/visualcrossing/requirements.txt"             "$VISUALCROSSING_DIR/requirements.txt"
+
+echo "==> Installing openmeteo-datalogger…"
+install -m 755 "$STAGING_WDL/openmeteo/openmeteo_datalogger.py" "$OPENMETEO_DIR/openmeteo_datalogger.py"
+install -m 644 "$STAGING_WDL/openmeteo/requirements.txt"        "$OPENMETEO_DIR/requirements.txt"
 
 echo "==> Installing weatherdatalogger-api…"
 install -m 755 "$STAGING_WDL/api/api_server.py"    "$API_DIR/api_server.py"
@@ -190,6 +199,7 @@ _sync_unit "$STAGING_WDL/airlink/systemd/airlink-datalogger.service"  "$AIRLINK_
 _sync_unit "$STAGING_WDL/database/systemd/weatherdb-writer.service"   "$WRITER_UNIT"
 _sync_unit "$STAGING_WDL/meteobridge/systemd/meteobridge-datalogger.service" "$METEOBRIDGE_UNIT"
 _sync_unit "$STAGING_WDL/visualcrossing/systemd/visualcrossing-datalogger.service" "$VISUALCROSSING_UNIT"
+_sync_unit "$STAGING_WDL/openmeteo/systemd/openmeteo-datalogger.service" "$OPENMETEO_UNIT"
 _sync_unit "$STAGING_WDL/api/systemd/weatherdatalogger-api.service" "$API_UNIT"
 
 # ---------------------------------------------------------------------------
@@ -280,6 +290,7 @@ for dir_venv_req in \
     "$WRITER_DIR:$WRITER_VENV:$WRITER_DIR/requirements.txt" \
     "$METEOBRIDGE_DIR:$METEOBRIDGE_VENV:$METEOBRIDGE_DIR/requirements.txt" \
     "$VISUALCROSSING_DIR:$VISUALCROSSING_VENV:$VISUALCROSSING_DIR/requirements.txt" \
+    "$OPENMETEO_DIR:$OPENMETEO_VENV:$OPENMETEO_DIR/requirements.txt" \
     "$API_DIR:$API_VENV:$API_DIR/requirements.txt"; do
 
     IFS=: read -r svc_dir venv req <<< "$dir_venv_req"
@@ -342,6 +353,7 @@ for service_section in \
     "$AIRLINK_SERVICE:airlink" \
     "$METEOBRIDGE_SERVICE:meteobridge" \
     "$VISUALCROSSING_SERVICE:visualcrossing" \
+    "$OPENMETEO_SERVICE:openmeteo" \
     "$API_SERVICE:api"; do
 
     IFS=: read -r service section <<< "$service_section"

@@ -28,9 +28,10 @@ A unified weather data pipeline that collects data from multiple weather station
 
 | Provider | Notes |
 |---|---|
-| Visual Crossing | Free tier available; lat/lon-based, no station hardware required |
+| Visual Crossing | Free tier available (API key); lat/lon-based, no station hardware required |
+| Open-Meteo | Free for non-commercial use, no API key; lat/lon-based, selectable weather model (e.g. DMI HARMONIE, ECMWF, ICON) |
 
-More than one station and more than one forecast provider can run at the same time — readings land in one shared schema, with whatever fields a given piece of hardware doesn't report simply left `NULL` (see `station_roles` in [`database/README.md`](weatherdatalogger/database/)). The `forecast-<provider>-<location>/` MQTT topic namespace and the `provider` column on the forecast tables (see [`visualcrossing/README.md`](weatherdatalogger/visualcrossing/)) mean additional forecast sources can be added later without disrupting Visual Crossing or each other.
+More than one station and more than one forecast provider can run at the same time — readings land in one shared schema, with whatever fields a given piece of hardware doesn't report simply left `NULL` (see `station_roles` in [`database/README.md`](weatherdatalogger/database/)). The `forecast-<provider>-<location>/` MQTT topic namespace and the `provider` column on the forecast tables (see [`visualcrossing/README.md`](weatherdatalogger/visualcrossing/)) let Visual Crossing and Open-Meteo run side by side for the same location; the [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA) integration lets you pick which one feeds the weather entity.
 
 Ready to set it up? Jump to [Installation](#installation-debian--proxmox-lxc).
 
@@ -47,6 +48,7 @@ Ready to set it up? Jump to [Installation](#installation-debian--proxmox-lxc).
 | [`weatherdatalogger/airlink/`](weatherdatalogger/airlink/) | Davis AirLink air quality sensor (HTTP polling → MQTT) | Active |
 | [`weatherdatalogger/meteobridge/`](weatherdatalogger/meteobridge/) | Meteobridge (HTTP polling → MQTT full observation) | Active, optional |
 | [`weatherdatalogger/visualcrossing/`](weatherdatalogger/visualcrossing/) | Visual Crossing Weather API forecast (HTTP polling → MQTT) | Active, optional — lat/lon-based, no station hardware required |
+| [`weatherdatalogger/openmeteo/`](weatherdatalogger/openmeteo/) | Open-Meteo forecast (HTTP polling → MQTT) | Active, optional — lat/lon-based, no API key |
 | [`ESPHome/airquality/`](ESPHome/airquality/) | Custom air quality monitor (ESP32-C6 + SDS011 + BME280, ESPHome, field-compatible with AirLink) | Active |
 
 ### Infrastructure (MQTT → storage)
@@ -74,7 +76,7 @@ weatherdatalogger/
     lightning
     device_status
     hub_status
-  forecast-<provider>-<location>/  ← forecast provider(s), e.g. forecast-visualcrossing-home (optional)
+  forecast-<provider>-<location>/  ← forecast provider(s), e.g. forecast-visualcrossing-home, forecast-openmeteo-home (optional)
     current
     forecast_hourly
     forecast_daily
@@ -128,6 +130,8 @@ This one command:
     Visual Crossing API key: ****************
     Forecast location latitude: 55.737406
     Forecast location longitude: 12.165889
+==> Enable Open-Meteo weather forecast (free, no API key)? [y/N]: y
+    Using the same location as Visual Crossing (55.737406, 12.165889).
 ==> Will you be installing the WeatherDatalogger-HA integration? [y/N]: y
     Password for the read-only 'weatherdatalogger_ha' database user: ****************
 ```
@@ -242,7 +246,7 @@ mysql --defaults-extra-file=/opt/weatherdatalogger/db.cnf \
 
 #### 9. Create the shared config file
 
-All six services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
+All seven services read from a single configuration file at `/opt/weatherdatalogger/config.ini`. The deploy script never overwrites this file once it exists.
 
 ```bash
 cp /opt/weatherdatalogger/config.example.ini /opt/weatherdatalogger/config.ini
@@ -259,6 +263,7 @@ nano /opt/weatherdatalogger/config.ini
 | `enabled`, `host` | `[airlink]` | Set `true` + IP/hostname if you have a Davis AirLink |
 | `enabled`, `host` | `[meteobridge]` | Set `true` + IP/hostname if you have a Meteobridge Pro |
 | `enabled`, `api_key`, `latitude`, `longitude` | `[visualcrossing]` | Set `true` + your API key/coordinates for Visual Crossing forecast data |
+| `enabled`, `latitude`, `longitude`, `model` | `[openmeteo]` | Set `true` + your coordinates for Open-Meteo forecast data (no API key); `model` is optional |
 | `enabled`, `api_key`, `db_password` | `[api]` | Set `true` + a generated API key + the `weatherdatalogger_api` DB password if you want the [REST/WebSocket API](weatherdatalogger/api/) — see step 11 below |
 
 A service left `enabled = false` idles rather than crash-loops, so it's safe to leave every optional one at its default and enable only what you own.
@@ -285,6 +290,10 @@ journalctl -u meteobridge-datalogger -f
 # Visual Crossing forecast (skip if [visualcrossing] enabled = false)
 systemctl enable --now visualcrossing-datalogger
 journalctl -u visualcrossing-datalogger -f
+
+# Open-Meteo forecast (skip if [openmeteo] enabled = false)
+systemctl enable --now openmeteo-datalogger
+journalctl -u openmeteo-datalogger -f
 
 # REST/WebSocket API (skip if [api] enabled = false)
 systemctl enable --now weatherdatalogger-api

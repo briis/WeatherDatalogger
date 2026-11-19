@@ -8,12 +8,13 @@ datalogger(s) and persists every reading to MariaDB:
   - realtime  — one row per station, upserted on every message
   - history   — full append-only time-series log for charting
 
-Also subscribes to visualcrossing_datalogger.py's forecast topics and
-persists the latest Visual Crossing fetch (not an append-only history) to:
+Also subscribes to the forecast providers' topics (visualcrossing_datalogger.py,
+openmeteo_datalogger.py) and persists the latest fetch per provider (not an
+append-only history) to:
 
-  - forecast_current — one row per location, upserted on every fetch
-  - forecast_hourly  — one row per (location, forecast_time)
-  - forecast_daily   — one row per (location, forecast_time)
+  - forecast_current — one row per (provider, location), upserted on every fetch
+  - forecast_hourly  — one row per (provider, location, forecast_time)
+  - forecast_daily   — one row per (provider, location, forecast_time)
 
 Subscribes to:
     {base_topic}/+/observation
@@ -151,7 +152,8 @@ _SQL_ENSURE_STATION = (
 # ---------------------------------------------------------------------------
 # Forecast field mapping
 # ---------------------------------------------------------------------------
-# visualcrossing_datalogger.py's forecast payloads use Home Assistant's own
+# The forecast providers' payloads (visualcrossing_datalogger.py,
+# openmeteo_datalogger.py — same field names) use Home Assistant's own
 # weather attribute names (condition/temperature/humidity/...) rather than
 # this project's usual descriptive-snake_case-with-unit-suffix convention
 # (see db/README.md), so each JSON key is mapped explicitly to its DB column
