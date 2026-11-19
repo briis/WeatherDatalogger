@@ -8,14 +8,15 @@ full architecture overview.
 
 ## What this project is
 
-A weather data pipeline with six active Python services:
+A weather data pipeline with seven active Python services:
 
 1. **Tempest datalogger** (`tempest/tempest_datalogger.py`) — receives WeatherFlow Tempest UDP broadcasts, computes derived metrics, and publishes everything to MQTT
 2. **AirLink datalogger** (`airlink/airlink_datalogger.py`) — polls the Davis AirLink's local REST API for air quality and publishes to MQTT
 3. **DB writer** (`database/db_writer.py`) — subscribes to MQTT observation topics and persists readings to MariaDB (`realtime` + `history` tables), plus forecast topics into `forecast_current`/`forecast_hourly`/`forecast_daily`
 4. **Meteobridge datalogger** (`meteobridge/meteobridge_datalogger.py`) — optional; polls a Meteobridge's local REST template API and publishes a full observation to MQTT (wind, pressure, temperature/humidity, solar/UV, rain, indoor, lightning) — a full station integration with its own database rows, not just a correction feed (see "Meteobridge datalogger" below)
 5. **Visual Crossing forecast datalogger** (`visualcrossing/visualcrossing_datalogger.py`) — optional; lat/lon-based, polls the Visual Crossing Weather API via the `pyVisualCrossing` wrapper and publishes current/hourly/daily forecast to MQTT (no station hardware required — see "Visual Crossing forecast datalogger" below)
-6. **API server** (`api/api_server.py`) — optional; FastAPI + uvicorn, read-only REST + WebSocket access to `combined_realtime`/`combined_realtime_stats` for dashboards/apps, backed by its own DB-polling cache (no MQTT involvement) — see "API server architecture" below
+6. **Open-Meteo forecast datalogger** (`openmeteo/openmeteo_datalogger.py`) — optional; lat/lon-based, polls the free Open-Meteo forecast API (no API key, selectable weather model) with stdlib `urllib` and publishes the same current/hourly/daily payloads as the Visual Crossing service under provider `openmeteo` — see "Open-Meteo forecast datalogger" below
+7. **API server** (`api/api_server.py`) — optional; FastAPI + uvicorn, read-only REST + WebSocket access to `combined_realtime`/`combined_realtime_stats` for dashboards/apps, backed by its own DB-polling cache (no MQTT involvement) — see "API server architecture" below
 
 Two further, non-Python components live under `ESPHome/` (a sibling of `weatherdatalogger/` at the repo root) rather than as Python services:
 
@@ -252,7 +253,7 @@ This device registers as its own `station_type` (`aqmonitor`, from the `aqmonito
 
 ## Config sections
 
-All six services (tempest, airlink, db_writer, meteobridge, visualcrossing, api_server) share a single config file at `/opt/weatherdatalogger/config.ini`. Each service reads only the sections it needs — extra sections are ignored. The full template is `config.example.ini` at the repo root.
+All seven services (tempest, airlink, db_writer, meteobridge, visualcrossing, openmeteo, api_server) share a single config file at `/opt/weatherdatalogger/config.ini`. Each service reads only the sections it needs — extra sections are ignored. The full template is `config.example.ini` at the repo root.
 
 `client_id` is **not** in the shared config — each MQTT-connected service's `DEFAULT_CONFIG` provides its own unique value so they don't collide on the MQTT broker. `api_server.py` has no `client_id` — it doesn't connect to MQTT at all.
 
@@ -260,8 +261,8 @@ All six services (tempest, airlink, db_writer, meteobridge, visualcrossing, api_
 
 | Section | Notable keys | Used by |
 |---|---|---|
-| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` | tempest, airlink, db_writer, meteobridge, visualcrossing — **not** api_server |
-| `[logging]` | `level`, `file` | all six |
+| `[mqtt]` | `broker`, `port`, `username`, `password`, `tls`, `base_topic`, `retain`, `qos` | tempest, airlink, db_writer, meteobridge, visualcrossing, openmeteo — **not** api_server |
+| `[logging]` | `level`, `file` | all seven |
 | `[homeassistant]` | `discovery` (bool), `discovery_prefix` | tempest, airlink |
 
 ### Service-specific sections
@@ -275,6 +276,7 @@ All six services (tempest, airlink, db_writer, meteobridge, visualcrossing, api_
 | `db_writer.py` | `[database]` | `host`, `port`, `name`, `user`, `password` (**REQUIRED**) |
 | `meteobridge_datalogger.py` | `[meteobridge]` | `enabled` (**default false**), `host` (**REQUIRED** if enabled), `port` (80), `username` (default `meteobridge`, Meteobridge's own factory default — empty sends no `Authorization` header), `password`, `interval_s` (60), `timeout_s` (10), `language` (en/da, for `wind_beaufort_description`), `data_dir` (lightning-window state file) |
 | `visualcrossing_datalogger.py` | `[visualcrossing]` | `enabled` (**default false** — service idles if false), `api_key`/`latitude`/`longitude` (**REQUIRED** if enabled), `days` (14), `language` (en), `location` (home), `interval_min` (60) |
+| `openmeteo_datalogger.py` | `[openmeteo]` | `enabled` (**default false**), `latitude`/`longitude` (**REQUIRED** if enabled), `model` (best_match), `days` (14, max 16), `location` (home), `interval_min` (60), `api_key` (commercial plans only), `timeout_s` (30) |
 | `api_server.py` | `[api]` | `enabled` (**default false**), `host` (0.0.0.0), `port` (8000), `api_key` (**REQUIRED** if enabled), `poll_interval_s` (5), `cors_origins` (empty = disabled), `db_host`/`db_port`/`db_name`/`db_user`/`db_password` (**password REQUIRED** if enabled — own connection, separate from `[database]`) |
 
 All five services above share the same `enabled` gate (checked first in `run()`,
@@ -388,6 +390,14 @@ bash scripts/lint      # ruff format + ruff check --fix
 - [x] `forecast_current`/`forecast_hourly`/`forecast_daily` DB tables replaced outright (not extended) for the new field set — `database/migrations/20260707_add_forecast_tables.sql`
 - [x] `provider` dimension added later — MQTT topic became `forecast-<provider>-<location>/...` and the three tables' keys became `(provider, location[, forecast_time])`, so a second forecast provider (Pirate Weather, WeatherFlow Better Forecast, ...) can run alongside Visual Crossing without colliding on the same location. `visualcrossing_datalogger.py`'s `FORECAST_PROVIDER = "visualcrossing"` constant is the slug; `db_writer.py` parses it by partitioning the topic segment on the first `-` — see `database/migrations/20260713_add_forecast_provider.sql`
 - [x] Note for future maintainers: `pyVisualCrossing` 0.1.16 imports `aiohttp` unconditionally at module load (for its unused async path) but doesn't declare it as a dependency — listed explicitly in `visualcrossing/requirements.txt`
+
+### Open-Meteo forecast datalogger
+- [x] New service `weatherdatalogger/openmeteo/openmeteo_datalogger.py` — second forecast provider (`FORECAST_PROVIDER = "openmeteo"`), an alternative or companion to Visual Crossing. Free, no API key, lat/lon-based; `[openmeteo] model` selects the Open-Meteo weather model (same ids as the aioopenmeteo library / ha-openmeteo integration, e.g. `dmi_seamless`)
+- [x] Publishes the **same payload field names and units** as `visualcrossing_datalogger.py`, so `db_writer.py` needed no changes — `_FORECAST_*_FIELDS` map both. Fields without an Open-Meteo equivalent (`severe_risk`, current/hourly `solar_energy`, daily `snow_depth`) are `null`
+- [x] stdlib `urllib`, not aioopenmeteo — that library is asyncio-based, and the datalogger services stay synchronous (see "Things to avoid"). One GET per poll covers current + hourly + daily. The WMO-code → HA condition table matches aioopenmeteo's `condition_from_wmo()`
+- [x] Conversions: wind km/h → m/s, visibility m → km (capped at 255 for the `TINYINT UNSIGNED` columns), snow depth m → cm. `precipitation_type` derived from the weather code using Visual Crossing's vocabulary (`rain`/`snow`/`freezingrain`/`rain,ice`); `sunrise`/`sunset` formatted as local `HH:MM:SS` like Visual Crossing's raw strings; daily `datetime` is local midnight in UTC, the same convention as Visual Crossing's day epoch
+- [x] Rows with no temperature are dropped — Open-Meteo pads short-horizon models (DMI HARMONIE ~2.5 days) with nulls up to `days`
+- [x] Wired into `deploy.sh` (files, venv, unit, config-driven enable/restart via `[openmeteo] enabled`), `install.sh` wizard (reuses the Visual Crossing coordinates if both are enabled) and the shared `config.example.ini`
 
 ### Database
 - [x] MariaDB on the same LXC, bound to `0.0.0.0:3306` for network access

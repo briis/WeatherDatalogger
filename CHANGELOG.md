@@ -10,6 +10,13 @@ what's installed, and quote it when asking for a change or filing an issue.
 This changelog starts at `0.1.0`, the first version tracked this way —
 earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
+## [0.7.0] - 2026-11-19
+
+### Added
+- New optional forecast service `weatherdatalogger/openmeteo/` (`openmeteo-datalogger`) — an alternative to Visual Crossing, or a companion: both can run for the same location. Polls the free [Open-Meteo](https://open-meteo.com) forecast API (non-commercial use, no API key) and publishes current conditions plus hourly and daily forecasts to `weatherdatalogger/forecast-openmeteo-<location>/{current,forecast_hourly,forecast_daily}` with the same field names and units as Visual Crossing, so `weatherdb-writer` stores them in the existing `forecast_*` tables under provider `openmeteo` — no schema change. The [WeatherDatalogger-HA](https://github.com/briis/WeatherDatalogger-HA) integration offers `openmeteo` as a forecast provider once the first forecast is in the database
+- `[openmeteo]` settings: `latitude`/`longitude`, `model` (Open-Meteo weather model, default `best_match` — e.g. `dmi_seamless` for DMI HARMONIE with ECMWF after its ~2.5-day horizon; same model ids as the Open-Meteo Home Assistant integration), `days` (default 14, max 16), `location`, `interval_min` (default 60), `api_key` (commercial plans only). Off by default (`enabled = false`); `deploy.sh` installs, enables and starts it once enabled, and the `install.sh` wizard asks for it (reusing the Visual Crossing coordinates if both are enabled)
+- Fields Open-Meteo has no equivalent for (`severe_risk`, current/hourly `solar_energy`, daily `snow_depth`) are left empty; `description` is the weather code's English name ("Moderate rain") rather than a narrative sentence
+
 ## [0.6.4] - 2026-10-09
 
 ### Fixed

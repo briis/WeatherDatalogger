@@ -12,7 +12,7 @@ Subscribes to MQTT observation topics published by the weather station loggers a
 - Auto-registers new stations in the `stations` table on first observation
 - **Upserts** the `realtime` table — always holds the single latest reading per station
 - **Appends** the `history` table — full time-series log for charting and trend analysis
-- Also subscribes to `{base_topic}/forecast-+/+` — the [`visualcrossing-datalogger`](../visualcrossing/) service (Visual Crossing Weather API) — and **upserts** `forecast_current`/`forecast_hourly`/`forecast_daily` with the latest fetch (not appended; see [Database Schema](#database-schema))
+- Also subscribes to `{base_topic}/forecast-+/+` — the [`visualcrossing-datalogger`](../visualcrossing/) (Visual Crossing) and [`openmeteo-datalogger`](../openmeteo/) (Open-Meteo) services — and **upserts** `forecast_current`/`forecast_hourly`/`forecast_daily` with the latest fetch (not appended; see [Database Schema](#database-schema))
 - Reconnects automatically to both MQTT and MariaDB on connection loss (handles both `OperationalError` and `InterfaceError`)
 
 All timestamps are stored in **UTC** as naive `DATETIME` values. Use `UTC_TIMESTAMP()` (not `NOW()`) when querying if the MariaDB server runs in a non-UTC timezone.
@@ -181,7 +181,7 @@ Pre-aggregated 10-minute summaries combining Davis, Tempest, and AirLink data in
 
 ### `forecast_current`, `forecast_hourly`, `forecast_daily`
 
-Weather forecast data fetched by forecast-provider services — currently just [`visualcrossing-datalogger`](../visualcrossing/) (`[visualcrossing]` section in `config.ini`) — and published to `{base_topic}/forecast-<provider>-<location>/{current,forecast_hourly,forecast_daily}`; see [visualcrossing/README.md](../visualcrossing/README.md) for how that fetch is configured. All three tables hold only the **latest fetch** per `(provider, location)`, not an append-only history — there's no tracking of how a forecast for a given hour/day changed across successive fetches, just the current best guess, which is what a live Home Assistant weather entity needs.
+Weather forecast data fetched by forecast-provider services — [`visualcrossing-datalogger`](../visualcrossing/) (`[visualcrossing]` section in `config.ini`) and [`openmeteo-datalogger`](../openmeteo/) (`[openmeteo]`) — and published to `{base_topic}/forecast-<provider>-<location>/{current,forecast_hourly,forecast_daily}`; see [visualcrossing/README.md](../visualcrossing/README.md) for how that fetch is configured. All three tables hold only the **latest fetch** per `(provider, location)`, not an append-only history — there's no tracking of how a forecast for a given hour/day changed across successive fetches, just the current best guess, which is what a live Home Assistant weather entity needs.
 
 `location` matches the `location` config value in the provider's own config section (defaults to `home`), not a row in `stations` — forecasts aren't tied to a physical device the way `realtime`/`history` are, so there's no foreign key here. `provider` is a forecast-source slug (e.g. `visualcrossing`) hardcoded per forecast-datalogger script as its own `FORECAST_PROVIDER` constant — it lets a second forecast provider (Pirate Weather, WeatherFlow Better Forecast, ...) coexist against the same `location` without colliding on the same row/topic; see `migrations/20260713_add_forecast_provider.sql`.
 
@@ -195,8 +195,8 @@ Weather forecast data fetched by forecast-provider services — currently just [
 
 | Column | Description |
 |---|---|
-| `provider` | Forecast provider slug, e.g. `visualcrossing` — matches the MQTT topic segment `forecast-<provider>-<location>`. All three tables |
-| `weather_condition` | HA weather condition string, e.g. `partlycloudy`, `rainy` — mapped from Visual Crossing's `icons2` icon set; see `_VC_ICON_TO_HA` in `visualcrossing_datalogger.py`. Named `weather_condition`, not `condition` — the latter is a reserved word in MariaDB (used for `DECLARE ... CONDITION FOR`) and can't be used as a bare column name |
+| `provider` | Forecast provider slug, `visualcrossing` or `openmeteo` — matches the MQTT topic segment `forecast-<provider>-<location>`. All three tables |
+| `weather_condition` | HA weather condition string, e.g. `partlycloudy`, `rainy` — mapped from Visual Crossing's `icons2` icon set (`_VC_ICON_TO_HA` in `visualcrossing_datalogger.py`) or from Open-Meteo's WMO weather code (`_WMO` in `openmeteo_datalogger.py`). Named `weather_condition`, not `condition` — the latter is a reserved word in MariaDB (used for `DECLARE ... CONDITION FOR`) and can't be used as a bare column name |
 | `temperature_c` | `forecast_current`/`forecast_hourly`: forecast temperature. `forecast_daily`: use `temperature_high_c` instead |
 | `temperature_high_c`, `temperature_low_c` | `forecast_daily`: the day's forecast high/low. `forecast_current`: also present — today's high/low, sourced from `forecast_daily[0]` since Visual Crossing's `currentConditions` doesn't report one itself. Not on `forecast_hourly` |
 | `feels_like_c` | Apparent temperature — all three tables |
@@ -211,9 +211,9 @@ Weather forecast data fetched by forecast-provider services — currently just [
 | `precipitation_type` | All three tables — comma-joined string, e.g. `rain,ice` (`pyVisualCrossing` returns a list; there's rarely more than one value, so a normalized join table wasn't worth it) |
 | `precipitation_mm`, `precipitation_probability_pct` | `forecast_hourly` and `forecast_daily` only |
 | `precipitation_cover_pct` | `forecast_daily` only — percentage of the day with precipitation |
-| `sunrise`, `sunset` | `forecast_current` and `forecast_daily` only. Stored as the raw pass-through string from the API — `pyVisualCrossing` doesn't parse these to a time type, so don't assume a fixed format |
+| `sunrise`, `sunset` | `forecast_current` and `forecast_daily` only. Stored as the raw pass-through string from the API — `pyVisualCrossing` doesn't parse these to a time type, so don't assume a fixed format (Open-Meteo rows are local `HH:MM:SS`) |
 | `moon_phase` | `forecast_current` and `forecast_daily` only — fraction 0-1 (0 or 1 = new moon, 0.5 = full moon) |
-| `description` | `forecast_current` and `forecast_daily` only — narrative summary sentence. On `forecast_current` it's the API response's top-level summary of the whole forecast period; on `forecast_daily` it's that specific day's summary (not exposed by `pyVisualCrossing` — read from the raw API response, see `visualcrossing/README.md`) |
+| `description` | `forecast_current` and `forecast_daily` only — narrative summary sentence. On `forecast_current` it's the API response's top-level summary of the whole forecast period; on `forecast_daily` it's that specific day's summary (not exposed by `pyVisualCrossing` — read from the raw API response, see `visualcrossing/README.md`). Open-Meteo has no narrative text: its rows hold the weather code's English name, e.g. "Moderate rain" |
 | `forecast_time` | The UTC hour (`forecast_hourly`) or day (`forecast_daily`) this row forecasts — not when it was fetched |
 | `fetched_at` | UTC timestamp of the fetch that produced this row |
 
