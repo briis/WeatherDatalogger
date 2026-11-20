@@ -41,6 +41,50 @@
   const shown = $derived(frame ?? radar.latest);
   const night = $derived(scene.night);
 
+  /**
+   * After every (re)loaded style:
+   *  - labels in Danish where OSM has a Danish name (København, Danmark),
+   *    otherwise the local name
+   *  - an invisible 44 px symbol at the station, on top, so MapLibre's label
+   *    collision keeps place names out from under the temperature bubble
+   */
+  function prepareStyle(m: MlMap): void {
+    for (const layer of m.getStyle().layers) {
+      if (layer.type !== 'symbol') continue;
+      // Only place-name labels — road refs / house numbers use other fields
+      const field = JSON.stringify(m.getLayoutProperty(layer.id, 'text-field') ?? '');
+      if (!field.includes('name')) continue;
+      m.setLayoutProperty(layer.id, 'text-field', [
+        'coalesce',
+        ['get', 'name:da'],
+        ['get', 'name'],
+      ]);
+    }
+    if (!m.hasImage('station-blocker')) {
+      m.addImage('station-blocker', { width: 44, height: 44, data: new Uint8Array(44 * 44 * 4) });
+    }
+    if (!m.getSource('station')) {
+      m.addSource('station', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'Point', coordinates: [STATION.lon, STATION.lat] },
+        },
+      });
+      m.addLayer({
+        id: 'station-blocker',
+        type: 'symbol',
+        source: 'station',
+        layout: {
+          'icon-image': 'station-blocker',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': false,
+        },
+      });
+    }
+  }
+
   /** [[S, W], [N, E]] → MapLibre corner order TL, TR, BR, BL as [lon, lat]. */
   function corners(b: [[number, number], [number, number]]) {
     const [[s, w], [n, e]] = b;
@@ -59,16 +103,17 @@
       center: [STATION.lon, STATION.lat],
       zoom,
       interactive,
-      // Static widget: show the attribution in full (it can't be tapped open)
-      attributionControl: {
-        compact: interactive,
-        customAttribution: 'Radar: <a href="https://www.dmi.dk/friedata" target="_blank" rel="noopener">DMI</a>',
-      },
+      // Own one-line credit below (the built-in control wraps to two lines
+      // in a narrow card and can't be tapped open in the static widget)
+      attributionControl: false,
       minZoom: 4,
       maxZoom: 11,
       fadeDuration: 0,
     });
-    m.on('style.load', () => styleReady++);
+    m.on('style.load', () => {
+      prepareStyle(m);
+      styleReady++;
+    });
 
     bubble = document.createElement('div');
     bubble.className = 'bubble';
@@ -95,11 +140,13 @@
 
   // Radar overlay — (re)created after each style load, otherwise just swapped
   $effect(() => {
-    void styleReady;
+    // styleReady (not m.isStyleLoaded()): the station GeoJSON source added in
+    // prepareStyle() makes isStyleLoaded() false until it has loaded
+    const ready = styleReady;
     const m = map;
     const b = radar.bounds;
     const f = shown;
-    if (!m || !b || !f || !m.isStyleLoaded()) return;
+    if (!m || !b || !f || ready === 0) return;
     const src = m.getSource(SOURCE) as ImageSource | undefined;
     if (src) {
       src.updateImage({ url: f.url, coordinates: corners(b) });
@@ -126,10 +173,24 @@
   });
 </script>
 
-<div class="map" class:night bind:this={el}></div>
+<div class="wrap">
+  <div class="map" class:night bind:this={el}></div>
+  <div class="credit" class:night>
+    © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+    · <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>
+    · Radar: <a href="https://www.dmi.dk/friedata" target="_blank" rel="noopener">DMI</a>
+  </div>
+</div>
 
 <style>
+  .wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+  }
   .map {
+    flex: 1;
     width: 100%;
     height: 100%;
     min-height: 180px;
@@ -143,8 +204,8 @@
   .map :global(.bubble) {
     display: grid;
     place-items: center;
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     background: rgb(40 70 120 / 0.92);
     border: 2px solid #fff;
@@ -152,14 +213,27 @@
     color: #fff;
     font: 600 13px var(--font);
   }
-  .map :global(.maplibregl-ctrl-attrib) {
-    font-size: 10px;
+  .credit {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    max-width: calc(100% - 12px);
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 9px;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #444;
+    background: rgb(255 255 255 / 0.7);
+    pointer-events: auto;
   }
-  .map.night :global(.maplibregl-ctrl-attrib) {
-    background: rgb(0 0 0 / 0.5);
+  .credit a {
+    color: inherit;
+  }
+  .credit.night {
     color: #ccc;
-  }
-  .map.night :global(.maplibregl-ctrl-attrib a) {
-    color: #ddd;
+    background: rgb(0 0 0 / 0.5);
   }
 </style>
