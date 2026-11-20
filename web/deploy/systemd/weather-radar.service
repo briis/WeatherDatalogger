@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=oneshot
 User=weatherradar
 Group=weatherradar
-ExecStart=/opt/weather-web/radar-venv/bin/python3 /opt/weather-web/radar/radar_worker.py --config /etc/weather-web/radar.ini
+ExecStart=/opt/weather-web/radar-venv/bin/python3 /opt/weather-web/radar/radar_worker.py --config /etc/weather-radar.ini
 TimeoutStartSec=180
 Nice=10
 # Hardening — it only needs the network and its output directory

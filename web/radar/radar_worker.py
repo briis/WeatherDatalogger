@@ -22,7 +22,7 @@ libhdf5), DMI's scaling in the ROOT `what`, and Snyder's oblique
 stereographic in numpy (identical to PROJ on DMI's grid, so no pyproj).
 
 Usage:
-    python3 radar_worker.py [--config /etc/weather-web/radar.ini] [--file X.h5 ...]
+    python3 radar_worker.py [--config /etc/weather-radar.ini] [--file X.h5 ...]
 """
 
 # ruff: noqa: SIM118 — pyfive groups need .keys() for membership tests
@@ -446,7 +446,7 @@ def load_config(path: Path) -> configparser.ConfigParser:
 def main() -> None:
     """Entry point."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--config", type=Path, default=Path("/etc/weather-web/radar.ini"))
+    ap.add_argument("--config", type=Path, default=Path("/etc/weather-radar.ini"))
     ap.add_argument(
         "--file",
         type=Path,

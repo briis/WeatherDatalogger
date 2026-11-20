@@ -49,7 +49,13 @@ id weatherradar >/dev/null 2>&1 || useradd --system --no-create-home --shell /us
 install -d -m 0755 -o weatherradar -g weatherradar /var/lib/weather-web/radar
 install -d -m 0755 /opt/weather-web/radar
 install -m 0644 radar/radar_worker.py radar/requirements.txt /opt/weather-web/radar/
-[[ -f /etc/weather-web/radar.ini ]] || install -m 0644 radar/radar.example.ini /etc/weather-web/radar.ini
+# Outside /etc/weather-web (0750 root:caddy, holds the API key) — the radar
+# user must be able to read its config but has no business seeing the key
+if [[ -f /etc/weather-web/radar.ini && ! -f /etc/weather-radar.ini ]]; then
+  mv /etc/weather-web/radar.ini /etc/weather-radar.ini
+fi
+[[ -f /etc/weather-radar.ini ]] || install -m 0644 radar/radar.example.ini /etc/weather-radar.ini
+chmod 0644 /etc/weather-radar.ini
 if [[ ! -x /opt/weather-web/radar-venv/bin/python3 ]]; then
   python3 -m venv /opt/weather-web/radar-venv
 fi

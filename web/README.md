@@ -67,7 +67,7 @@ DMI udgiver radaren som HDF5-filer (ODIM, stereografisk gitter, 500 m, hvert 10.
 
 Caddy serverer mappen som `/radar/*`. Widgetten lægger det nyeste billede på et CARTO-kort (lyst om dagen, mørkt om natten) med Leaflet. Læsning, skalering og projektion er overtaget fra radar-spiken i `briis/pydmi` (branch `spike/radar`).
 
-Indstillinger: `/etc/weather-web/radar.ini` (oprettes fra `radar/radar.example.ini` ved første deploy). Fejlsøgning:
+Indstillinger: `/etc/weather-radar.ini` (oprettes fra `radar/radar.example.ini` ved første deploy). Fejlsøgning:
 
 ```bash
 systemctl list-timers weather-radar.timer
