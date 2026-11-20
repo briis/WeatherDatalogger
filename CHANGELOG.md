@@ -10,6 +10,11 @@ what's installed, and quote it when asking for a change or filing an issue.
 This changelog starts at `0.1.0`, the first version tracked this way —
 earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
+## [Unreleased]
+
+### Added
+- `web/` 0.2.0 (phase 2 — main page): animated sky (clouds, rain, snow, stars, lightning, fog, sun/twilight glow) on one canvas that pauses in background tabs and honours reduced-motion; current condition combines the forecast with what the station observes (rain gauge, lightning, wind); dawn/dusk palettes; compact sticky header on scroll; live tab title; offline/stale/forecast-error banner; PWA manifest for "Add to Home Screen"; `?sky=…&tod=…` preview parameters
+
 ## [0.8.0] - 2026-11-20
 
 ### Added

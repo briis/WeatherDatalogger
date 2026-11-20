@@ -1,0 +1,15 @@
+{
+  "name": "Vejret i Gundsømagle",
+  "short_name": "Vejret",
+  "description": "Live vejrdata fra egen vejrstation",
+  "lang": "da",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#2a62a8",
+  "theme_color": "#2a62a8",
+  "icons": [
+    { "src": "/icon.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

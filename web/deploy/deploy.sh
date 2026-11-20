@@ -39,6 +39,8 @@ if ! cmp -s deploy/Caddyfile /etc/caddy/Caddyfile; then
   RELOAD_CADDY=1
 fi
 install -m 0755 deploy/deploy.sh /usr/local/sbin/weather-web-deploy
+# `pct enter` gives a minimal PATH without /usr/local/sbin — link it into /usr/sbin too
+ln -sf /usr/local/sbin/weather-web-deploy /usr/sbin/weather-web-deploy
 
 RELEASE="$WEB_ROOT/releases/$(date +%Y%m%d-%H%M%S)-$SHA"
 rsync -a --delete dist/ "$RELEASE/"

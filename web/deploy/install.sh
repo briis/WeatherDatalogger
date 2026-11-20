@@ -62,6 +62,8 @@ fi
 
 install -m 0644 "$SRC_DIR/web/deploy/Caddyfile" /etc/caddy/Caddyfile
 install -m 0755 "$SRC_DIR/web/deploy/deploy.sh" /usr/local/sbin/weather-web-deploy
+# `pct enter` gives a minimal PATH without /usr/local/sbin — link it into /usr/sbin too
+ln -sf /usr/local/sbin/weather-web-deploy /usr/sbin/weather-web-deploy
 
 echo "==> First deploy"
 /usr/local/sbin/weather-web-deploy

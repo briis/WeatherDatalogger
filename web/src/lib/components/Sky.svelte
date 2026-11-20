@@ -1,69 +1,59 @@
 <!--
-  Sets the page's sky gradient from the current condition and whether it's
-  night at the station. Renders nothing; it only writes CSS variables on
-  <body> (app.css fades between them). Phase 2 adds animated layers
-  (clouds, rain, stars) on top.
+  Page background: a sky gradient picked from the scene (condition family ×
+  time of day), written as CSS variables on <body> so app.css can fade
+  between them, plus the animated WeatherFx layer on top.
 -->
 <script lang="ts">
-  import type { WeatherCondition } from '$lib/api/types';
-  import { isNight } from '$lib/astro';
-
-  let { condition }: { condition: WeatherCondition | null } = $props();
+  import { scene, type SkyFamily, type TimeOfDay } from '$lib/weather/scene.svelte';
+  import WeatherFx from './WeatherFx.svelte';
 
   type Sky = [top: string, bottom: string];
-  const DAY: Record<string, Sky> = {
-    clear: ['#2c64a8', '#8ab4dd'],
-    cloudy: ['#5b6e84', '#a1aebc'],
-    rain: ['#3c4c60', '#71808f'],
-    snow: ['#6e8098', '#bfcad6'],
-    fog: ['#7d8794', '#b8bec6'],
-    storm: ['#262e3b', '#545d6b'],
-  };
-  const NIGHT: Record<string, Sky> = {
-    clear: ['#08152c', '#21406c'],
-    cloudy: ['#1b2431', '#3a4656'],
-    rain: ['#151c27', '#323d4c'],
-    snow: ['#28344a', '#566578'],
-    fog: ['#262c35', '#4a525d'],
-    storm: ['#0e1219', '#2a313c'],
-  };
 
-  function family(c: WeatherCondition | null): string {
-    switch (c) {
-      case 'cloudy':
-      case 'partlycloudy':
-      case 'windy-variant':
-        return c === 'partlycloudy' ? 'clear' : 'cloudy';
-      case 'rainy':
-      case 'pouring':
-      case 'snowy-rainy':
-        return 'rain';
-      case 'snowy':
-      case 'hail':
-        return 'snow';
-      case 'fog':
-        return 'fog';
-      case 'lightning':
-      case 'lightning-rainy':
-        return 'storm';
-      default:
-        return 'clear';
-    }
-  }
-
-  let now = $state(new Date());
-  $effect(() => {
-    const t = setInterval(() => (now = new Date()), 5 * 60_000);
-    return () => clearInterval(t);
-  });
+  const SKIES: Record<TimeOfDay, Record<SkyFamily, Sky>> = {
+    day: {
+      clear: ['#2a62a8', '#8cb7e0'],
+      partly: ['#3a6aa4', '#9dbbd9'],
+      cloudy: ['#5b6d82', '#a4b1bf'],
+      rain: ['#3b4a5d', '#6f7f90'],
+      snow: ['#6b7d95', '#c3ced9'],
+      fog: ['#7c8692', '#bcc2ca'],
+      storm: ['#252d3a', '#566070'],
+    },
+    dawn: {
+      clear: ['#3c5d93', '#f0b27a'],
+      partly: ['#4a5f8a', '#d9a582'],
+      cloudy: ['#58627a', '#a99a96'],
+      rain: ['#3d4659', '#7a7a84'],
+      snow: ['#5f6c87', '#c4b8b8'],
+      fog: ['#6f7585', '#b9adab'],
+      storm: ['#262b38', '#5b5560'],
+    },
+    dusk: {
+      clear: ['#2d3f78', '#e8956a'],
+      partly: ['#36446f', '#c98a73'],
+      cloudy: ['#4a5068', '#93807f'],
+      rain: ['#323a4c', '#6a6670'],
+      snow: ['#4f5874', '#ab9fa3'],
+      fog: ['#5d6273', '#9e9294'],
+      storm: ['#1f2330', '#4c4652'],
+    },
+    night: {
+      clear: ['#07132a', '#1f3d68'],
+      partly: ['#0f1b31', '#2b4366'],
+      cloudy: ['#1a2230', '#394454'],
+      rain: ['#141b26', '#313b4a'],
+      snow: ['#263248', '#536276'],
+      fog: ['#252b34', '#48505b'],
+      storm: ['#0d1118', '#29303b'],
+    },
+  };
 
   $effect(() => {
-    const palette = isNight(now) ? NIGHT : DAY;
-    const [top, bottom] = palette[family(condition)] ?? palette.clear!;
+    const [top, bottom] = SKIES[scene.tod][scene.family];
     document.body.style.setProperty('--sky-top', top);
     document.body.style.setProperty('--sky-bottom', bottom);
-    document
-      .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', top);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', top);
   });
 </script>
+
+<WeatherFx family={scene.family} tod={scene.tod} condition={scene.condition} />
