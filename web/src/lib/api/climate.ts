@@ -90,4 +90,14 @@ export async function normalHigh(date = new Date()): Promise<number | null> {
   return v == null || Number.isNaN(v) ? null : v;
 }
 
+/** Normal daily highs for consecutive days starting at `first` (noon dates). */
+export async function normalHighs(days: Date[]): Promise<(number | null)[]> {
+  const cached = load();
+  const n = cached ?? (await (inflight ??= fetchNormals().finally(() => (inflight = null))));
+  return days.map((d) => {
+    const v = n.tmax[doy(d)];
+    return v == null || Number.isNaN(v) ? null : v;
+  });
+}
+
 export const NORMAL_PERIOD = `${START}–${END}`;

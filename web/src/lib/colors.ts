@@ -44,6 +44,17 @@ export function tempGradient(low: number, high: number): string {
   return `linear-gradient(to right, ${parts.join(', ')})`;
 }
 
+const UV: Stop[] = [
+  [0, [52, 199, 89]],
+  [3, [255, 214, 10]],
+  [6, [255, 159, 10]],
+  [8, [255, 69, 58]],
+  [11, [191, 90, 242]],
+];
+
+/** WHO UV band colour for a UV index. */
+export const uvColor = (uv: number) => scale(UV, uv);
+
 /** WHO UV scale, 0–11+. */
 export const UV_GRADIENT =
   'linear-gradient(to right, #34c759 0%, #ffd60a 27%, #ff9f0a 50%, #ff453a 73%, #bf5af2 100%)';

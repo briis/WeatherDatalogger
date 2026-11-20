@@ -12,8 +12,15 @@
     title,
     icon,
     onclose,
+    size = 'normal',
     children,
-  }: { title: string; icon: IconName; onclose: () => void; children: Snippet } = $props();
+  }: {
+    title: string;
+    icon: IconName;
+    onclose: () => void;
+    size?: 'normal' | 'large';
+    children: Snippet;
+  } = $props();
 
   let dialog: HTMLDialogElement;
 
@@ -36,7 +43,7 @@
   }}
   aria-labelledby="popup-title"
 >
-  <div class="sheet">
+  <div class="sheet" class:large={size === 'large'}>
     <header>
       <h2 id="popup-title"><Icon name={icon} size={18} /> {title}</h2>
       <button class="close" type="button" onclick={onclose} aria-label="Luk">
@@ -115,6 +122,19 @@
     padding: 8px 20px 24px;
   }
 
+  /* Large: near full-screen, content fills the height (maps) */
+  .sheet.large {
+    height: 94dvh;
+    max-height: none;
+  }
+  .sheet.large .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 12px 12px;
+  }
+
   @media (min-width: 700px) {
     dialog {
       align-items: center;
@@ -124,6 +144,11 @@
       max-height: min(86dvh, 860px);
       border-radius: 20px;
       animation: pop 0.3s var(--ease);
+    }
+    .sheet.large {
+      width: min(1200px, calc(100% - 48px));
+      height: min(90dvh, 1000px);
+      max-height: none;
     }
   }
 

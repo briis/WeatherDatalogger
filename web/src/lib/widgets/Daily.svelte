@@ -10,9 +10,10 @@
   import { dayLabel, forecastDay, localDay, num, temp } from '$lib/format';
   import { forecast, live } from '$lib/stores/weather.svelte';
   import { scene } from '$lib/weather/scene.svelte';
+  import { ui } from '$lib/stores/ui.svelte';
   import type { WidgetDef } from './registry';
 
-  let { def: _def }: { def: WidgetDef } = $props();
+  let { def }: { def: WidgetDef } = $props();
 
   const DAYS = 10;
   const nowT = $derived(live.current?.air_temperature_c ?? null);
@@ -56,6 +57,13 @@
   <ol class="days">
     {#each rows as r (r.d.forecast_time)}
       <li>
+        <button
+          type="button"
+          class="row interactive"
+          aria-label="Vis {dayLabel(r.d.forecast_time, scene.now)}"
+          onclick={() =>
+            ui.open(def.id, r.isToday ? null : localDay(forecastDay(r.d.forecast_time)))}
+        >
         <span class="day">{dayLabel(r.d.forecast_time, scene.now)}</span>
         <span class="icon">
           <WeatherIcon condition={r.d.weather_condition} size={26} />
@@ -78,6 +86,7 @@
           {/if}
         </span>
         <span class="hi">{temp(r.hi)}</span>
+        </button>
       </li>
     {/each}
   </ol>
@@ -98,17 +107,34 @@
   }
   li {
     flex: 1;
+    display: flex;
+    border-top: 1px solid var(--hairline);
+  }
+  li:first-child {
+    border-top: 0;
+  }
+  .row {
+    flex: 1;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
     display: grid;
     grid-template-columns: 3.4em 38px 2.4em 1fr 2.4em;
     align-items: center;
     gap: 8px;
     min-height: 44px;
-    border-top: 1px solid var(--hairline);
     font-size: 17px;
     font-weight: 500;
   }
-  li:first-child {
-    border-top: 0;
+  .row:focus-visible {
+    outline: 2px solid rgb(255 255 255 / 0.6);
+    outline-offset: -2px;
+    border-radius: 8px;
   }
   .day {
     font-weight: 600;

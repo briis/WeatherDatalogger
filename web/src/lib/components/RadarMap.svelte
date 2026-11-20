@@ -7,7 +7,7 @@
   phase 4, interactive + animated in its popup via `frame`.
 -->
 <script lang="ts">
-  import { Map as MlMap, Marker, setWorkerUrl, type ImageSource } from 'maplibre-gl';
+  import { Map as MlMap, Marker, NavigationControl, setWorkerUrl, type ImageSource } from 'maplibre-gl';
   import 'maplibre-gl/dist/maplibre-gl.css';
   // MapLibre 6 resolves its worker relative to its own module, which breaks
   // once Vite has bundled it — hand it a Vite-built worker URL instead.
@@ -118,7 +118,12 @@
       minZoom: 4,
       maxZoom: 11,
       fadeDuration: 0,
+      locale: {
+        'NavigationControl.ZoomIn': 'Zoom ind',
+        'NavigationControl.ZoomOut': 'Zoom ud',
+      },
     });
+    if (interactive) m.addControl(new NavigationControl({ showCompass: false }), 'top-right');
     m.on('style.load', () => {
       prepareStyle(m);
       styleReady++;
