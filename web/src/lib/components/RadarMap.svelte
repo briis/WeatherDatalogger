@@ -44,7 +44,8 @@
   /**
    * After every (re)loaded style:
    *  - labels in Danish where OSM has a Danish name (København, Danmark),
-   *    otherwise the local name
+   *    otherwise the local name; point labels may switch side to avoid
+   *    collisions instead of disappearing
    *  - an invisible 44 px symbol at the station, on top, so MapLibre's label
    *    collision keeps place names out from under the temperature bubble
    */
@@ -59,6 +60,14 @@
         ['get', 'name:da'],
         ['get', 'name'],
       ]);
+      // Point labels (cities, towns) may move to another side of their dot
+      // instead of vanishing when they'd collide — e.g. København next to
+      // the station bubble. Line labels (roads, rivers) stay as they are.
+      if ((m.getLayoutProperty(layer.id, 'symbol-placement') ?? 'point') === 'point') {
+        m.setLayoutProperty(layer.id, 'text-variable-anchor', ['right', 'left', 'top', 'bottom']);
+        m.setLayoutProperty(layer.id, 'text-radial-offset', 0.6);
+        m.setLayoutProperty(layer.id, 'text-justify', 'auto');
+      }
     }
     if (!m.hasImage('station-blocker')) {
       m.addImage('station-blocker', { width: 44, height: 44, data: new Uint8Array(44 * 44 * 4) });
