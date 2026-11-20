@@ -14,14 +14,13 @@
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
   },
   "dependencies": {
-    "leaflet": "^1.9.4",
+    "maplibre-gl": "^6.19.0",
     "suncalc": "^1.9.0",
     "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tsconfig/svelte": "^5.0.9",
-    "@types/leaflet": "^1.9.22",
     "@types/suncalc": "^1.9.2",
     "svelte": "^5.58.1",
     "svelte-check": "^4.7.8",

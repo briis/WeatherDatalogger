@@ -36,6 +36,8 @@ export default defineConfig(({ mode }) => {
     build: {
       target: 'es2022',
       sourcemap: false,
+      // maplibre-gl (~300 kB gz) is one lazy chunk, loaded only with the radar widget
+      chunkSizeWarningLimit: 1200,
     },
   };
 });

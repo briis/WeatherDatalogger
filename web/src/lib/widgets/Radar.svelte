@@ -20,7 +20,7 @@
 </script>
 
 <div class="wrap">
-  <RadarMap zoom={7} />
+  <RadarMap />
   <div class="tag" class:stale>
     {#if latest}
       Radar {clock(latest.time)}{#if stale}&nbsp;· {ago(latest.time, scene.now)}{/if}

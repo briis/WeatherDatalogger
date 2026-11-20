@@ -1,13 +1,20 @@
 <!--
-  Leaflet map with the DMI radar overlay and a temperature bubble at the
-  station. Basemap: CARTO light by day, dark by night (scene.night).
+  MapLibre map with the DMI radar overlay and a temperature bubble at the
+  station. Basemap: OpenFreeMap vector tiles (no API key, no limits) —
+  Positron by day, Dark by night (scene.night).
 
-  Used static in the Vindkort/Radar widget (interactive = false) and, in
+  Used static in the Nedbørsradar widget (interactive = false) and, in
   phase 4, interactive + animated in its popup via `frame`.
 -->
 <script lang="ts">
-  import L from 'leaflet';
-  import 'leaflet/dist/leaflet.css';
+  import { Map as MlMap, Marker, setWorkerUrl, type ImageSource } from 'maplibre-gl';
+  import 'maplibre-gl/dist/maplibre-gl.css';
+  // MapLibre 6 resolves its worker relative to its own module, which breaks
+  // once Vite has bundled it — hand it a Vite-built worker URL instead.
+  import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+
+  setWorkerUrl(workerUrl);
+  import { untrack } from 'svelte';
   import { STATION } from '$lib/astro';
   import { temp } from '$lib/format';
   import { radar, type RadarFrame } from '$lib/stores/radar.svelte';
@@ -17,74 +24,105 @@
   let {
     interactive = false,
     frame = null,
-    zoom = 7,
+    zoom = 5.7,
   }: { interactive?: boolean; frame?: RadarFrame | null; zoom?: number } = $props();
 
+  const STYLE = {
+    day: 'https://tiles.openfreemap.org/styles/positron',
+    night: 'https://tiles.openfreemap.org/styles/dark',
+  };
+  const SOURCE = 'dmi-radar';
+
   let el: HTMLDivElement;
-  let map: L.Map | undefined;
-  let tiles: L.TileLayer | undefined;
-  let overlay: L.ImageOverlay | undefined;
-  let marker: L.Marker | undefined;
+  let map = $state<MlMap | null>(null);
+  let styleReady = $state(0); // bumps on every (re)loaded style
+  let bubble: HTMLDivElement | undefined;
 
   const shown = $derived(frame ?? radar.latest);
   const night = $derived(scene.night);
 
-  const ATTRIBUTION =
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a> · Radar: <a href="https://www.dmi.dk/friedata">DMI</a>';
+  /** [[S, W], [N, E]] → MapLibre corner order TL, TR, BR, BL as [lon, lat]. */
+  function corners(b: [[number, number], [number, number]]) {
+    const [[s, w], [n, e]] = b;
+    return [
+      [w, n],
+      [e, n],
+      [e, s],
+      [w, s],
+    ] as [[number, number], [number, number], [number, number], [number, number]];
+  }
 
   $effect(() => {
-    map = L.map(el, {
-      center: [STATION.lat, STATION.lon],
+    const m = new MlMap({
+      container: el,
+      style: untrack(() => (night ? STYLE.night : STYLE.day)),
+      center: [STATION.lon, STATION.lat],
       zoom,
-      zoomControl: interactive,
-      attributionControl: true,
-      dragging: interactive,
-      scrollWheelZoom: interactive,
-      doubleClickZoom: interactive,
-      touchZoom: interactive,
-      boxZoom: interactive,
-      keyboard: interactive,
-      minZoom: 5,
+      interactive,
+      // Static widget: show the attribution in full (it can't be tapped open)
+      attributionControl: {
+        compact: interactive,
+        customAttribution: 'Radar: <a href="https://www.dmi.dk/friedata" target="_blank" rel="noopener">DMI</a>',
+      },
+      minZoom: 4,
       maxZoom: 11,
+      fadeDuration: 0,
     });
-    map.attributionControl.setPrefix(false);
-    // Card sizes settle after layout; keep Leaflet in sync
-    const ro = new ResizeObserver(() => map?.invalidateSize());
+    m.on('style.load', () => styleReady++);
+
+    bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    new Marker({ element: bubble }).setLngLat([STATION.lon, STATION.lat]).addTo(m);
+
+    map = m;
+    const ro = new ResizeObserver(() => m.resize());
     ro.observe(el);
     return () => {
       ro.disconnect();
-      map?.remove();
-      map = tiles = overlay = marker = undefined;
+      m.remove();
+      map = null;
     };
   });
 
-  // Basemap follows day/night
+  // Basemap follows day/night; the radar layer is re-added on style.load
+  let currentStyle = '';
   $effect(() => {
+    const url = night ? STYLE.night : STYLE.day;
     if (!map) return;
-    const style = night ? 'dark_all' : 'light_all';
-    tiles?.remove();
-    tiles = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`, {
-      subdomains: 'abcd',
-      attribution: ATTRIBUTION,
-      maxZoom: 19,
-    }).addTo(map);
-    tiles.bringToBack();
+    if (currentStyle && currentStyle !== url) map.setStyle(url);
+    currentStyle = url;
   });
 
-  // Radar frame
+  // Radar overlay — (re)created after each style load, otherwise just swapped
   $effect(() => {
-    if (!map || !radar.bounds || !shown) return;
-    if (overlay) overlay.setUrl(shown.url);
-    else overlay = L.imageOverlay(shown.url, radar.bounds, { opacity: 0.85, interactive: false, className: 'radar-img' }).addTo(map);
+    void styleReady;
+    const m = map;
+    const b = radar.bounds;
+    const f = shown;
+    if (!m || !b || !f || !m.isStyleLoaded()) return;
+    const src = m.getSource(SOURCE) as ImageSource | undefined;
+    if (src) {
+      src.updateImage({ url: f.url, coordinates: corners(b) });
+      return;
+    }
+    m.addSource(SOURCE, { type: 'image', url: f.url, coordinates: corners(b) });
+    // Put radar under the first label layer so place names stay readable
+    const firstLabel = m.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+    m.addLayer(
+      {
+        id: SOURCE,
+        type: 'raster',
+        source: SOURCE,
+        paint: { 'raster-opacity': 0.85, 'raster-resampling': 'linear', 'raster-fade-duration': 0 },
+      },
+      firstLabel,
+    );
   });
 
   // Station bubble with the current temperature
   $effect(() => {
-    if (!map) return;
-    const html = `<div class="bubble">${temp(live.current?.air_temperature_c)}</div>`;
-    const icon = L.divIcon({ className: 'station-pin', html, iconSize: [36, 36], iconAnchor: [18, 18] });
-    if (marker) marker.setIcon(icon);
-    else marker = L.marker([STATION.lat, STATION.lon], { icon, interactive: false, keyboard: false }).addTo(map);
+    const t = temp(live.current?.air_temperature_c);
+    if (bubble) bubble.textContent = t;
   });
 </script>
 
@@ -97,15 +135,12 @@
     min-height: 180px;
     border-radius: 12px;
     overflow: hidden;
-    background: #d9dee5;
+    background: #e8eaed;
   }
   .map.night {
-    background: #1a1d22;
+    background: #1b1d21;
   }
-  .map :global(.radar-img) {
-    image-rendering: auto;
-  }
-  .map :global(.station-pin .bubble) {
+  .map :global(.bubble) {
     display: grid;
     place-items: center;
     width: 36px;
@@ -117,16 +152,14 @@
     color: #fff;
     font: 600 13px var(--font);
   }
-  .map :global(.leaflet-control-attribution) {
-    font-size: 9px;
-    background: rgb(255 255 255 / 0.6);
-    color: #333;
+  .map :global(.maplibregl-ctrl-attrib) {
+    font-size: 10px;
   }
-  .map.night :global(.leaflet-control-attribution) {
-    background: rgb(0 0 0 / 0.45);
+  .map.night :global(.maplibregl-ctrl-attrib) {
+    background: rgb(0 0 0 / 0.5);
     color: #ccc;
   }
-  .map.night :global(.leaflet-control-attribution a) {
+  .map.night :global(.maplibregl-ctrl-attrib a) {
     color: #ddd;
   }
 </style>

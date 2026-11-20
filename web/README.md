@@ -65,7 +65,7 @@ DMI udgiver radaren som HDF5-filer (ODIM, stereografisk gitter, 500 m, hvert 10.
 3. Farvelægger dBZ via en 256-trins opslagstabel og omprojicerer til et Web Mercator-gitter over `bounds` (projektionen regnes i numpy; opslaget beregnes én gang pr. gitter)
 4. Skriver `/var/lib/weather-web/radar/<tid>.png` + `frames.json` (bounds, billeder, regn ved stationen) og sletter billeder ældre end `keep_minutes`
 
-Caddy serverer mappen som `/radar/*`. Widgetten lægger det nyeste billede på et CARTO-kort (lyst om dagen, mørkt om natten) med Leaflet. Læsning, skalering og projektion er overtaget fra radar-spiken i `briis/pydmi` (branch `spike/radar`).
+Caddy serverer mappen som `/radar/*`. Widgetten lægger det nyeste billede på et [OpenFreeMap](https://openfreemap.org)-vektorkort (Positron om dagen, Dark om natten — ingen API-nøgle) med MapLibre GL. MapLibre (~300 kB gz) indlæses kun sammen med radar-widgetten. Læsning, skalering og projektion er overtaget fra radar-spiken i `briis/pydmi` (branch `spike/radar`).
 
 Indstillinger: `/etc/weather-radar.ini` (oprettes fra `radar/radar.example.ini` ved første deploy). Fejlsøgning:
 
