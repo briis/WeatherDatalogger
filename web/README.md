@@ -17,7 +17,7 @@ Browser ──► Caddy (weather-web LXC)
 | Fase | Indhold | Status |
 |---|---|---|
 | 1 — Struktur | API-endpoints (`/forecast`, `/history`, `/daily`, WS header-auth), datalag (WebSocket + REST-fallback, forecast-polling), da-DK formatering, design-tokens, responsivt grid, popup-skal, LXC/deploy | ✅ |
-| 2 — Hovedside | Hero, dynamisk himmel (sky/regn/stjerner-lag), grid-finpudsning, offline/forældet-tilstand | ⏳ |
+| 2 — Hovedside | Hero med kompakt header ved scroll, animeret himmel (skyer, regn, sne, stjerner, lyn, tåge, sol/skumring), vejrtype fra station + prognose, offline/forældet-banner, PWA | ✅ |
 | 3 — Widgets | Timeprognose, 10-dages, Vind, Luftkvalitet, Føles som, UV, Sol, Måne, Nedbør, Sigtbarhed, Luftfugtighed, Lufttryk, Lyn, Solstråling, Gennemsnit, Vindkort | ⏳ |
 | 4 — Popups | Dag-vælger, graf (målt → prognose), forklaringstekster pr. widget | ⏳ |
 
@@ -43,6 +43,19 @@ web/
 ```
 
 Ny widget = én linje i `registry.ts` + `widgets/X.svelte` + `popups/X.svelte`.
+
+### Himlen
+
+`lib/weather/scene.svelte.ts` afgør vejrtypen: prognosens type, men stationen vinder, når den selv måler regn (≥ 0,2 mm/t → regn/slud/sne efter temperatur, ≥ 7,6 mm/t → kraftig regn), lyn inden for 15 min eller hård vind. Tid på døgnet (dag/nat/solopgang/solnedgang ±45 min) kommer fra SunCalc. `Sky.svelte` vælger gradient, `WeatherFx.svelte` tegner effekterne på én canvas.
+
+Se alle udseender uden at vente på vejret — tilføj til URL'en:
+
+```
+?sky=rainy                    regn
+?sky=lightning-rainy&tod=night  torden om natten
+?sky=snowy&tod=dusk           sne ved solnedgang
+?sky=fog | cloudy | partlycloudy | pouring | snowy-rainy | windy | clear-night
+```
 
 ## Udvikling (Mac)
 

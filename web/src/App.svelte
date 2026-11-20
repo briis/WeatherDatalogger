@@ -3,6 +3,7 @@
   import Grid from '$lib/components/Grid.svelte';
   import Hero from '$lib/components/Hero.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
   import Sky from '$lib/components/Sky.svelte';
   import StatusFooter from '$lib/components/StatusFooter.svelte';
   import { forecast, live } from '$lib/stores/weather.svelte';
@@ -17,10 +18,11 @@
   const openDef = $derived(WIDGETS.find((w) => w.id === ui.popup));
 </script>
 
-<Sky condition={forecast.current?.weather_condition ?? null} />
+<Sky />
 
 <main>
   <Hero />
+  <ConnectionBanner />
   <Grid />
   <StatusFooter />
 </main>
@@ -35,6 +37,8 @@
 
 <style>
   main {
+    position: relative;
+    z-index: 1;
     max-width: var(--page-max);
     margin: 0 auto;
     padding: env(safe-area-inset-top) max(12px, env(safe-area-inset-right)) 0
