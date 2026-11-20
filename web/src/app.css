@@ -1,0 +1,100 @@
+/* Design tokens — Apple Weather-inspired frosted glass on a sky gradient.
+   The sky gradient itself is set per condition/time of day by Sky.svelte via
+   the --sky-top / --sky-bottom custom properties on <body>. */
+
+:root {
+  color-scheme: dark;
+
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI',
+    Roboto, sans-serif;
+
+  --text: rgb(255 255 255);
+  --text-2: rgb(255 255 255 / 0.72);
+  --text-3: rgb(255 255 255 / 0.5);
+  --hairline: rgb(255 255 255 / 0.16);
+
+  --card-bg: rgb(30 60 110 / 0.28);
+  --card-bg-hover: rgb(30 60 110 / 0.36);
+  --card-border: rgb(255 255 255 / 0.08);
+  --card-radius: 16px;
+  --card-pad: 14px;
+  --card-blur: 24px;
+
+  --sheet-bg: rgb(28 32 44 / 0.86);
+
+  --gap: 12px;
+  --page-max: 1080px;
+
+  /* Data colours */
+  --temp-cold: #5ac8fa;
+  --temp-mild: #a5e05c;
+  --temp-warm: #ffcc00;
+  --temp-hot: #ff6b3d;
+  --rain: #64b5ff;
+  --accent: #fff;
+
+  --sky-top: #2c64a8;
+  --sky-bottom: #8ab4dd;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-bottom) 100%) fixed;
+  transition: --sky-top 2s, --sky-bottom 2s;
+  min-height: 100dvh;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Animatable custom properties (Chromium/Safari) so sky changes fade */
+@property --sky-top {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #2c64a8;
+}
+@property --sky-bottom {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #8ab4dd;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

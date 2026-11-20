@@ -19,7 +19,7 @@ database credentials or MQTT access.
 - Single shared API-key auth (`X-API-Key` header for REST, `?api_key=` query parameter for WebSocket)
 - Uses its own SELECT-only database user (`weatherdatalogger_api`) — never the `weatherlogger` writer user
 
-This is v1 scope: just the two combined-view "current conditions" endpoints. Historical (`history_charting`) and forecast (`forecast_*`) endpoints can be added later the same way if needed.
+- `GET /api/v1/forecast`, `GET /api/v1/history`, `GET /api/v1/daily` — forecast and `history_charting` data, queried on demand and cached for `query_cache_ttl_s` (used by the [web frontend](../../web/))
 
 ---
 
@@ -79,6 +79,9 @@ All settings live in the shared `/opt/weatherdatalogger/config.ini`, under `[api
 | `db_host` / `db_port` / `db_name` | `localhost` / `3306` / `weatherdatalogger` | Database connection |
 | `db_user` | `weatherdatalogger_api` | **Use a SELECT-only user** — see Setup step 1 |
 | `db_password` | _(empty)_ | **Required** |
+| `forecast_provider` / `forecast_location` | `openmeteo` / `home` | Which `forecast_*` rows `/api/v1/forecast` serves |
+| `query_cache_ttl_s` | `60` | Cache lifetime for `/forecast`, `/history`, `/daily` |
+| `timezone` | `Europe/Copenhagen` | Calendar-day boundary for `/daily` |
 
 ---
 
@@ -92,7 +95,7 @@ Every endpoint except `/api/v1/health` and the docs (`/docs`, `/redoc`, `/openap
 curl -H "X-API-Key: <your key>" http://localhost:8000/api/v1/current
 ```
 
-**WebSocket** — browsers can't set custom headers on the handshake, so send it as a query parameter instead:
+**WebSocket** — browsers can't set custom headers on the handshake, so send it as a query parameter instead (a reverse proxy may instead inject the `X-API-Key` header, which is also accepted — that's how `web/` keeps the key out of the browser):
 
 ```
 ws://localhost:8000/api/v1/ws/current?api_key=<your key>
@@ -141,6 +144,35 @@ Returns the latest snapshot of both views. `503` if no station reporting the `wi
 - `updated_at` — UTC timestamp of the poll that produced this snapshot (not the same as `combined_realtime.recorded_at`, which is when the underlying station reading was taken)
 - Field names, types, units, and which physical station sources each field are documented in [`database/README.md`](../database/README.md#combined_realtime-view) — this API is a thin pass-through and doesn't duplicate that reference
 - `NULL` fields mean that role's station isn't registered yet (e.g. no AirLink configured → all `pm_*`/`aqi_*`/`caqi_*` fields are `null`)
+
+### `GET /api/v1/forecast`
+
+Latest forecast fetch for the configured provider/location:
+
+```json
+{
+  "provider": "openmeteo",
+  "location": "home",
+  "current": {"weather_condition": "sunny", "temperature_c": 4.1, "...": "one key per forecast_current column"},
+  "hourly": [{"forecast_time": "2026-11-20T13:00:00", "temperature_c": 4.0, "precipitation_probability_pct": 0, "...": "..."}],
+  "daily":  [{"forecast_time": "2026-11-20T00:00:00", "temperature_high_c": 4, "temperature_low_c": 0, "...": "..."}]
+}
+```
+
+`hourly` starts one hour before now. Column reference: [`database/README.md`](../database/README.md#forecast_current-forecast_hourly-forecast_daily).
+
+### `GET /api/v1/history?hours=24&fields=air_temperature_c,wind_gust_ms`
+
+`history_charting` rows (10-minute windows, UTC `window_start`) for the trailing `hours` (1–336). `fields` is a comma-separated list of that table's column names; unknown names get a `422`.
+
+```json
+{"hours": 24, "fields": ["air_temperature_c", "wind_gust_ms"],
+ "rows": [{"window_start": "2026-11-20T12:30:00", "air_temperature_c": 5.5, "wind_gust_ms": 6.5}]}
+```
+
+### `GET /api/v1/daily?days=30`
+
+One row per local calendar day (`timezone`) for the trailing `days` (1–400), aggregated from `history_charting`: `air_temp_high_c`/`low_c`/`avg_c`, `relative_humidity_avg_pct`, `dew_point_avg_c`, `feels_like_low_c`/`high_c`, `sea_level_pressure_avg_mb`/`low_mb`/`high_mb`, `wind_avg_ms`, `wind_gust_max_ms`, `rain_total_mm`, `rain_rate_max_mmh`, `uv_index_max`, `solar_radiation_max_wm2`, `caqi_pm2p5_max`, `aqi_pm2p5_max`, `samples` (number of 10-min windows — 144 for a complete day).
 
 ---
 
@@ -215,8 +247,9 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--api-key", required=True)
-    parser.add_argument("--tls", action="store_true",
-                        help="use wss:// instead of ws://")
+    parser.add_argument(
+        "--tls", action="store_true", help="use wss:// instead of ws://"
+    )
     args = parser.parse_args()
 
     asyncio.run(main(args.host, args.port, args.api_key, args.tls))

@@ -236,3 +236,6 @@ images/.DS_Store
 */.DS_Store
 .DS_Store
 test_ws.py
+
+# web/ frontend source lives in src/lib (not a Python build dir)
+!web/src/lib/

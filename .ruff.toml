@@ -29,6 +29,11 @@ max-complexity = 25
     "S311",  # random is fine for weather simulation data
     "T201",  # print is fine in CLI dev scripts
 ]
+"web/dev/**" = [
+    "S311",    # random is fine for fake dev data
+    "PLR2004", # magic numbers are the point of fake data
+    "E501",
+]
 "tests/**" = [
     "S101",    # assert is expected in tests
     "ANN",     # type annotations not required in tests

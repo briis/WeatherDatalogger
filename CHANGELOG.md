@@ -10,6 +10,16 @@ what's installed, and quote it when asking for a change or filing an issue.
 This changelog starts at `0.1.0`, the first version tracked this way —
 earlier history isn't backfilled entry-by-entry here; see `git log` for that.
 
+## [0.8.0] - 2026-11-20
+
+### Added
+- API: `GET /api/v1/forecast` — latest forecast fetch (current + hourly + daily) for `[api] forecast_provider`/`forecast_location` (default `openmeteo`/`home`)
+- API: `GET /api/v1/history?hours=&fields=` — 10-minute `history_charting` rows (max 14 days); `fields` is validated against the table's actual columns
+- API: `GET /api/v1/daily?days=` — one summary row per local (`[api] timezone`) calendar day from `history_charting`: temperature high/low/avg, pressure, wind, rain total, UV/solar max, AQI/CAQI max
+- These three are fetched on demand and cached for `[api] query_cache_ttl_s` (default 60 s), on their own DB connection — the 5 s poll of the combined views is unchanged
+- API: `WS /api/v1/ws/current` also accepts the key as an `X-API-Key` header (for reverse proxies that inject it), in addition to `?api_key=`
+- New `web/` — Danish, Apple Weather-style web frontend (Svelte 5 + TypeScript + Vite), served as a static site by Caddy in its own LXC, with Caddy proxying a whitelist of API endpoints and injecting the API key so it never reaches the browser. Phase 1: structure, data layer (WebSocket with REST fallback, forecast polling), design tokens, responsive grid, popup shell, LXC/deploy scripts. See `web/README.md`
+
 ## [0.7.0] - 2026-11-19
 
 ### Added
