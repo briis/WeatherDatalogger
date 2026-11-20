@@ -30,6 +30,8 @@ export interface WidgetDef {
   popupSize?: 'normal' | 'large';
   /** Header text that changes with time (e.g. Solnedgang ↔ Solopgang). */
   liveTitle?: () => string;
+  /** Phone layout only: place this widget right after the widget with this id. */
+  phoneAfter?: string;
   /** Phase in which the real implementation lands (for placeholders). */
   phase: number;
 }
@@ -46,7 +48,7 @@ function sunTitle(): string {
 
 export const WIDGETS: WidgetDef[] = (
   [
-    { id: 'airquality', slug: 'luftkvalitet', title: 'Luftkvalitet', icon: 'aqi', size: 'medium', widget: () => import('./AirQuality.svelte'), popup: () => import('../popups/AirQualityPopup.svelte') },
+    { id: 'airquality', slug: 'luftkvalitet', title: 'Luftkvalitet', icon: 'aqi', size: 'medium', phoneAfter: 'radar', widget: () => import('./AirQuality.svelte'), popup: () => import('../popups/AirQualityPopup.svelte') },
     { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide', widget: () => import('./Hourly.svelte'), popup: conditions },
     { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium', widget: () => import('./Wind.svelte'), popup: conditions },
     { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall', widget: () => import('./Daily.svelte'), popup: conditions },

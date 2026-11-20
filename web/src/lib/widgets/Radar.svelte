@@ -34,6 +34,8 @@
 <div class="foot w-muted">
   {#if radar.rainNow != null && radar.rainNow >= 0.1}
     Radaren ser {num(radar.rainNow, 1)} mm/t ved stationen.
+  {:else if radar.outlook}
+    {radar.outlook}
   {:else if latest}
     Ingen nedbør på radaren ved stationen.
   {:else}

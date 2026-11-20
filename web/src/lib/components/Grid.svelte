@@ -10,12 +10,19 @@
   import { scene } from '$lib/weather/scene.svelte';
 
   // Re-evaluated every minute via scene.now
+  // Phone order: registry order (×2), except widgets with `phoneAfter`, which
+  // slot in right after their anchor (odd number between two neighbours).
+  const phoneOrder = (def: (typeof WIDGETS)[number], i: number) => {
+    const anchor = def.phoneAfter ? WIDGETS.findIndex((w) => w.id === def.phoneAfter) : -1;
+    return anchor >= 0 ? anchor * 2 + 1 : i * 2;
+  };
+
   const titleOf = (def: (typeof WIDGETS)[number]) => (scene.now, def.liveTitle?.() ?? def.title);
 </script>
 
 <div class="grid">
-  {#each WIDGETS as def (def.id)}
-    <div class="cell {def.size}">
+  {#each WIDGETS as def, i (def.id)}
+    <div class="cell {def.size}" style:--phone-order={phoneOrder(def, i)}>
       <Card
         title={titleOf(def)}
         icon={def.icon}
@@ -39,6 +46,11 @@
   }
   .cell {
     min-width: 0;
+  }
+  @media (max-width: 639px) {
+    .cell {
+      order: var(--phone-order);
+    }
   }
   .medium,
   .wide {

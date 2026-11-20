@@ -10,9 +10,15 @@
   import { ago, forecastDay, localDay, mm, num, pct, temp, weekdayFull } from '$lib/format';
   import { forecast, live } from '$lib/stores/weather.svelte';
   import { scene } from '$lib/weather/scene.svelte';
+  import { radar } from '$lib/stores/radar.svelte';
   import type { WidgetDef } from './registry';
 
   let { def }: { def: WidgetDef } = $props();
+
+  // The Nedbør widget uses the radar nowcast ("Regn ventes om ca. 25 min.")
+  $effect(() => {
+    if (def.id === 'precipitation') radar.start();
+  });
 
   const c = $derived(live.current);
   const f = $derived(forecast.current);
@@ -55,7 +61,9 @@
           foot:
             rate >= 0.2
               ? `Regner nu: ${num(rate, 1)} mm/t.`
-              : next
+              : radar.outlook && !radar.outlook.startsWith('Nærmeste')
+                ? radar.outlook
+                : next
                 ? `Næste forventet: ${mm(next.precipitation_mm)} ${weekdayFull(forecastDay(next.forecast_time)).toLowerCase()}.`
                 : 'Ingen nedbør forventet de næste dage.',
         };

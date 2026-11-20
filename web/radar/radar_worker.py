@@ -49,7 +49,7 @@ import numpy as np
 import pyfive
 from PIL import Image
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 BASE = "https://opendataapi.dmi.dk/v1/radardata"
 UA = f"weatherdatalogger-web-radar/{VERSION} (+https://github.com/briis/WeatherDatalogger)"
 
@@ -59,6 +59,10 @@ DEFAULT_CONFIG: dict[str, dict[str, str]] = {
         "scan_type": "doppler",  # doppler | fullRange
         "keep_minutes": "120",
         "output_dir": "/var/lib/weather-web/radar",
+        # Last frame + fixed-echo statistics between runs (not served)
+        "state_dir": "/var/lib/weather-web/radar-state",
+        # Extrapolated frames for the next hour (0 = off)
+        "forecast": "true",
         # Area rendered (W, S, E, N). Default: DMI's radar coverage over DK
         "bounds": "6.6,53.9,16.0,58.2",
         "width_px": "1200",
@@ -305,33 +309,311 @@ def render(raw: np.ndarray, what: dict[str, Any], grid: Grid, min_dbz: float) ->
     return buf.getvalue()
 
 
-def rain_at(
-    raw: np.ndarray, what: dict[str, Any], where: dict[str, Any], lat: float, lon: float
-) -> float | None:
-    """mm/h at a point: mean of 3x3 pixels (1.5 km), Marshall-Palmer Z=200R^1.6."""
+# ── Nowcast: motion, ETA, nearest rain, forecast frames ───────────────────
+#
+# Ported from the pydmi radar spike (briis/pydmi, spike/radar), which was
+# checked against the station's rain gauge: plain FFT cross-correlation of
+# the log rain fields (big areas dominate; phase correlation locked onto
+# echoes that never move) plus a "fixed echo" mask — pixels that echo in
+# >= 80 % of recent frames (masts, turbines, ships at anchor) are ignored.
+
+RAIN_MMH = 0.2
+MAX_SPEED_KMH = 150
+WINDOW_KM = 150
+CLUTTER_FRAMES = 36  # ~6 h of history (EMA horizon)
+CLUTTER_FREQ = 0.8
+CLUTTER_MIN_FRAMES = 18  # only after ~3 h of history
+FORECAST_STEPS_MIN = (10, 20, 30, 40, 50, 60)
+MIN_TRACK_QUALITY = 0.3
+COMPASS_DA = ["N", "NØ", "Ø", "SØ", "S", "SV", "V", "NV"]
+
+
+def rate_from_raw(raw: np.ndarray, what: dict[str, Any]) -> np.ndarray:
+    """mm/h grid (float32); nodata → NaN, undetect / weak echo → 0."""
+    gain, offset = float(what.get("gain", 1.0)), float(what.get("offset", 0.0))
+    dbz = raw.astype(np.float32) * gain + offset
+    with np.errstate(invalid="ignore", over="ignore"):
+        rate = (np.power(10.0, dbz / 10.0) / 200.0) ** (1.0 / 1.6)
+    rate[dbz < 7] = 0.0  # noqa: PLR2004 — below DMI's own map threshold
+    if "undetect" in what:
+        rate[raw == int(what["undetect"])] = 0.0
+    if "nodata" in what:
+        rate[raw == int(what["nodata"])] = np.nan
+    return rate
+
+
+def to_pixels(
+    where: dict[str, Any], lat: float, lon: float
+) -> tuple[float, float, float]:
+    """(col, row, pixel size m) of a point in the radar grid."""
     x, y = stere_xy(where["projdef"], np.array(lat), np.array(lon))
-    ul_x, ul_y = stere_xy(
+    ux, uy = stere_xy(
         where["projdef"],
         np.array(float(where["UL_lat"])),
         np.array(float(where["UL_lon"])),
     )
-    c = int((float(x) - float(ul_x)) / float(where["xscale"]))
-    r = int((float(ul_y) - float(y)) / float(where["yscale"]))
-    if not (1 <= r < raw.shape[0] - 1 and 1 <= c < raw.shape[1] - 1):
+    px = float(where["xscale"])
+    return (
+        (float(x) - float(ux)) / px,
+        (float(uy) - float(y)) / float(where["yscale"]),
+        px,
+    )
+
+
+def grid_north_deg(where: dict[str, Any], lat: float, lon: float) -> float:
+    """Clockwise angle of true north as seen in the grid at the point."""
+    x0, y0 = stere_xy(where["projdef"], np.array(lat), np.array(lon))
+    x1, y1 = stere_xy(where["projdef"], np.array(lat + 0.01), np.array(lon))
+    return math.degrees(math.atan2(float(x1 - x0), float(y1 - y0)))
+
+
+def _neighbours(mask: np.ndarray) -> np.ndarray:
+    p = np.pad(mask.astype(np.uint8), 1)
+    h, w = mask.shape
+    return sum(p[dy : dy + h, dx : dx + w] for dy in range(3) for dx in range(3))
+
+
+def local_rate(rate: np.ndarray, col: float, row: float, half: int = 1) -> float:
+    """Mean over (2·half+1)² pixels (3x3 = 1.5 km), NaN-safe."""
+    c, r = round(col), round(row)
+    h, w = rate.shape
+    box = rate[
+        max(0, r - half) : min(h, r + half + 1), max(0, c - half) : min(w, c + half + 1)
+    ]
+    if box.size == 0 or np.all(np.isnan(box)):
+        return float("nan")
+    return float(np.nanmean(box))
+
+
+class EchoState:
+    """Last frame + fixed-echo frequency, kept between runs in state_dir."""
+
+    def __init__(self, path: Path) -> None:
+        """Load state if present (and compatible), else start empty."""
+        self.path = path
+        self.raw: np.ndarray | None = None
+        self.what: dict[str, Any] = {}
+        self.time: str | None = None
+        self.freq: np.ndarray | None = None
+        self.n = 0
+        try:
+            z = np.load(path, allow_pickle=False)
+            self.raw, self.freq, self.n = (
+                z["raw"],
+                z["freq"].astype(np.float32),
+                int(z["n"]),
+            )
+            self.time = str(z["time"])
+            self.what = json.loads(str(z["what"]))
+        except (OSError, KeyError, ValueError):
+            pass
+
+    def add(
+        self, raw: np.ndarray, what: dict[str, Any], stamp: str, min_dbz: float
+    ) -> None:
+        """Fold one frame into the echo frequency (EMA over ~CLUTTER_FRAMES)."""
+        gain, offset = float(what.get("gain", 1.0)), float(what.get("offset", 0.0))
+        echo = ((raw.astype(np.float32) * gain + offset) >= min_dbz).astype(np.float32)
+        if "nodata" in what:
+            echo[raw == int(what["nodata"])] = 0.0
+        if self.freq is None or self.freq.shape != raw.shape:
+            self.freq, self.n = echo, 1
+        else:
+            a = 1.0 / min(self.n + 1, CLUTTER_FRAMES)
+            self.freq = (1 - a) * self.freq + a * echo
+            self.n += 1
+        self.raw, self.what, self.time = raw, what, stamp
+
+    def clutter(self) -> np.ndarray | None:
+        """Pixels treated as fixed echoes (None until enough history)."""
+        if self.freq is None or self.n < CLUTTER_MIN_FRAMES:
+            return None
+        return self.freq >= CLUTTER_FREQ
+
+    def save(self) -> None:
+        """Persist atomically."""
+        if self.raw is None or self.freq is None:
+            return
+        tmp = self.path.with_suffix(".tmp.npz")
+        np.savez_compressed(
+            tmp,
+            raw=self.raw,
+            freq=self.freq.astype(np.float16),
+            n=self.n,
+            time=self.time or "",
+            what=json.dumps(
+                {k: v for k, v in self.what.items() if isinstance(v, (int, float, str))}
+            ),
+        )
+        tmp.replace(self.path)
+
+
+def track(  # noqa: PLR0913, PLR0917
+    prev: np.ndarray,
+    now: np.ndarray,
+    minutes: float,
+    col: float,
+    row: float,
+    px: float,
+    clutter: np.ndarray | None,
+) -> dict[str, float] | None:
+    """Shift (pixels per minute) of the rain field between two rate grids."""
+    half = int(WINDOW_KM * 1000 / px)
+    r, c = round(row), round(col)
+    h, w = now.shape
+    r0, r1, c0, c1 = (
+        max(0, r - half),
+        min(h, r + half),
+        max(0, c - half),
+        min(w, c + half),
+    )
+
+    def field(rate: np.ndarray) -> np.ndarray:
+        f = np.nan_to_num(rate[r0:r1, c0:c1], nan=0.0)
+        if clutter is not None:
+            f = np.where(clutter[r0:r1, c0:c1], 0.0, f)
+        f = np.where(f >= RAIN_MMH, f, 0.0)
+        f = np.where(_neighbours(f > 0) >= 3, f, 0.0)  # noqa: PLR2004 — despeckle
+        return np.log1p(f)
+
+    a, b = field(now), field(prev)
+    if min((a > 0).sum(), (b > 0).sum()) < 50:  # noqa: PLR2004
         return None
-    win = raw[r - 1 : r + 2, c - 1 : c + 2].astype(np.float64)
-    gain, offset = float(what.get("gain", 1.0)), float(what.get("offset", 0.0))
-    nodata, undetect = what.get("nodata"), what.get("undetect")
-    rates = []
-    for v in win.ravel():
-        if nodata is not None and v == nodata:
-            continue
-        if undetect is not None and v == undetect:
-            rates.append(0.0)
-            continue
-        dbz = v * gain + offset
-        rates.append(0.0 if dbz < 7 else (10 ** (dbz / 10) / 200) ** (1 / 1.6))  # noqa: PLR2004
-    return round(sum(rates) / len(rates), 2) if rates else None
+    win = np.outer(np.hanning(a.shape[0]), np.hanning(a.shape[1]))
+    a, b = (a - a.mean()) * win, (b - b.mean()) * win
+    shape = (a.shape[0] * 2, a.shape[1] * 2)
+    cc = np.fft.irfft2(np.fft.rfft2(a, shape) * np.conj(np.fft.rfft2(b, shape)), shape)
+    cc /= math.sqrt(float((a * a).sum() * (b * b).sum())) or 1.0
+    max_px = int(MAX_SPEED_KMH * minutes / 60 * 1000 / px) + 1
+    lags = np.r_[0 : max_px + 1, -max_px:0]
+    sub = cc[np.ix_(lags % shape[0], lags % shape[1])]
+    i, j = np.unravel_index(int(np.argmax(sub)), sub.shape)
+    return {
+        "vx": float(lags[j]) / minutes,
+        "vy": float(lags[i]) / minutes,
+        "quality": float(sub[i, j]),
+    }
+
+
+def shift_raw(
+    raw: np.ndarray, dx: int, dy: int, what: dict[str, Any], clutter: np.ndarray | None
+) -> np.ndarray:
+    """Move the echo field by (dx, dy) pixels; coverage (nodata) stays put."""
+    undetect = int(what.get("undetect", 0))
+    nodata = int(what["nodata"]) if "nodata" in what else None
+    src = raw.copy()
+    if clutter is not None:
+        src[clutter] = undetect
+    if nodata is not None:
+        src[src == nodata] = undetect
+    out = np.full_like(raw, undetect)
+    h, w = raw.shape
+    ys, yd = (
+        (slice(0, h - dy), slice(dy, h))
+        if dy >= 0
+        else (slice(-dy, h), slice(0, h + dy))
+    )
+    xs, xd = (
+        (slice(0, w - dx), slice(dx, w))
+        if dx >= 0
+        else (slice(-dx, w), slice(0, w + dx))
+    )
+    out[yd, xd] = src[ys, xs]
+    if nodata is not None:
+        out[raw == nodata] = nodata
+    return out
+
+
+def nowcast(  # noqa: PLR0913, PLR0917
+    state: EchoState,
+    prev_raw: np.ndarray | None,
+    prev_time: str | None,
+    where: dict[str, Any],
+    lat: float,
+    lon: float,
+) -> tuple[dict[str, Any], dict[str, float] | None]:
+    """Sensors for the newest frame: rain now, nearest rain, motion, ETA."""
+    if state.raw is None:
+        return {}, None
+    rate = rate_from_raw(state.raw, state.what)
+    clutter = state.clutter()
+    if clutter is not None:
+        rate = np.where(clutter, 0.0, rate)
+    col, row, px = to_pixels(where, lat, lon)
+    here = local_rate(rate, col, row)
+    out: dict[str, Any] = {
+        "time": state.time,
+        "rain_rate_mmh": None if math.isnan(here) else round(here, 2),
+    }
+
+    # Nearest solid rain within 100 km
+    rad = int(100_000 / px)
+    r, c = round(row), round(col)
+    h, w = rate.shape
+    r0, r1, c0, c1 = (
+        max(0, r - rad),
+        min(h, r + rad + 1),
+        max(0, c - rad),
+        min(w, c + rad + 1),
+    )
+    win = np.nan_to_num(rate[r0:r1, c0:c1], nan=0.0)
+    solid = (win >= RAIN_MMH) & (_neighbours(win >= RAIN_MMH) >= 3)  # noqa: PLR2004
+    north = grid_north_deg(where, lat, lon)
+    if not math.isnan(here) and here >= RAIN_MMH:
+        out.update(nearest_rain_km=0.0, nearest_rain_direction=None)
+    elif solid.any():
+        yy, xx = np.mgrid[r0:r1, c0:c1]
+        d = np.where(solid, np.hypot(xx - col, yy - row) * px / 1000, np.inf)
+        k = np.unravel_index(int(np.argmin(d)), d.shape)
+        bearing = (math.degrees(math.atan2(xx[k] - col, -(yy[k] - row))) - north) % 360
+        out.update(
+            nearest_rain_km=round(float(d[k]), 1),
+            nearest_rain_direction=COMPASS_DA[round(bearing / 45) % 8],
+        )
+    else:
+        out.update(nearest_rain_km=None, nearest_rain_direction=None)
+
+    # Motion between the two newest frames
+    motion = None
+    if (
+        prev_raw is not None
+        and prev_time
+        and state.time
+        and prev_raw.shape == state.raw.shape
+    ):
+        minutes = (
+            datetime.fromisoformat(state.time) - datetime.fromisoformat(prev_time)
+        ).total_seconds() / 60
+        if 4 <= minutes <= 30:  # noqa: PLR2004 — consecutive frames only
+            prev_rate = rate_from_raw(prev_raw, state.what)
+            motion = track(prev_rate, rate, minutes, col, row, px, clutter)
+    if motion and motion["quality"] >= MIN_TRACK_QUALITY:
+        east, northm = motion["vx"] * px, -motion["vy"] * px  # m per minute
+        speed = math.hypot(east, northm) * 60 / 1000
+        towards = (math.degrees(math.atan2(east, northm)) - north) % 360
+        out.update(
+            motion_speed_kmh=round(speed, 1),
+            motion_from=COMPASS_DA[round(((towards + 180) % 360) / 45) % 8]
+            if speed >= 1
+            else None,
+            motion_quality=round(motion["quality"], 2),
+        )
+        # ETA: follow the motion back from the station in 5-min steps, up to 2 h
+        eta = None
+        for t in range(0, 121, 5):
+            pc, pr = col - motion["vx"] * t, row - motion["vy"] * t
+            if not (1 <= pc < w - 1 and 1 <= pr < h - 1):
+                break
+            if local_rate(rate, pc, pr) >= RAIN_MMH:
+                eta = t
+                break
+            if speed < 1:
+                break
+        out["rain_expected_in_min"] = eta
+    else:
+        motion = None
+        out.update(motion_speed_kmh=None, motion_from=None, rain_expected_in_min=None)
+    return out, motion
 
 
 # ── Main loop ──────────────────────────────────────────────────────────────
@@ -343,7 +625,7 @@ def _write_atomic(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def run(
+def run(  # noqa: PLR0912, PLR0915
     cfg: configparser.ConfigParser, files: list[Path] | None = None
 ) -> dict[str, Any]:
     """Fetch, render, prune; return the manifest written to frames.json."""
@@ -386,13 +668,25 @@ def run(
             sources.append((it["time"], http_get(it["href"], timeout)))
             log.debug("Downloaded %s in %.2fs", it["id"], time.perf_counter() - t0)
 
-    latest_rain: tuple[str, float | None] | None = None
+    state_dir = Path(r["state_dir"])
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state = EchoState(state_dir / "state.npz")
+    prev_raw, prev_time = state.raw, state.time
+    last_where: dict[str, Any] | None = None
+    last_grid: Grid | None = None
+    rendered_any = False
+
+    decoded = []
     for listed_time, blob in sources:
         raw, what, where = read_odim(blob)
         t = listed_time or scan_time(what)
         if t is None:
             log.warning("Skipping a file without scan time")
             continue
+        decoded.append((t, raw, what, where))
+
+    # Oldest first, so the echo statistics and "previous frame" stay in order
+    for t, raw, what, where in sorted(decoded, key=lambda d: d[0]):
         k = Grid.key(where, raw.shape, bounds, width)
         grid = grids.get(k) or grids.setdefault(
             k, Grid(where, raw.shape, bounds, width)
@@ -401,8 +695,11 @@ def run(
         name = f"{t.strftime('%Y%m%dT%H%MZ')}.png"
         _write_atomic(out / name, render(raw, what, grid, min_dbz))
         known[stamp] = {"time": stamp, "url": f"/radar/{name}"}
-        if latest_rain is None or stamp > latest_rain[0]:
-            latest_rain = (stamp, rain_at(raw, what, where, lat, lon))
+        if state.time is None or stamp > state.time:
+            prev_raw, prev_time = state.raw, state.time
+            state.add(raw, what, stamp, min_dbz)
+            last_where, last_grid = where, grid
+            rendered_any = True
         log.info("Rendered %s", name)
 
     # Prune (keep everything when rendering local files for testing)
@@ -414,9 +711,43 @@ def run(
                 (out / Path(f["url"]).name).unlink()
         frames = [f for f in frames if f["time"] >= cutoff]
 
-    nowcast = old.get("nowcast", {})
-    if latest_rain and frames and latest_rain[0] == frames[-1]["time"]:
-        nowcast = {"time": latest_rain[0], "rain_rate_mmh": latest_rain[1]}
+    # Nowcast + forecast frames — only when a new newest frame arrived
+    nowcast_info = old.get("nowcast", {})
+    forecast_frames = old.get("forecast", [])
+    if (
+        rendered_any
+        and last_where is not None
+        and last_grid is not None
+        and state.raw is not None
+    ):
+        nowcast_info, motion = nowcast(state, prev_raw, prev_time, last_where, lat, lon)
+        for f in out.glob("f*.png"):
+            f.unlink(missing_ok=True)
+        forecast_frames = []
+        if motion and cfg.getboolean("radar", "forecast"):
+            base = datetime.fromisoformat(state.time)  # type: ignore[arg-type]
+            for step in FORECAST_STEPS_MIN:
+                dx, dy = round(motion["vx"] * step), round(motion["vy"] * step)
+                shifted = shift_raw(state.raw, dx, dy, state.what, state.clutter())
+                ft = base + timedelta(minutes=step)
+                fname = f"f{base.strftime('%Y%m%dT%H%MZ')}+{step}.png"
+                _write_atomic(
+                    out / fname, render(shifted, state.what, last_grid, min_dbz)
+                )
+                forecast_frames.append(
+                    {
+                        "time": ft.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "url": f"/radar/{fname}",
+                    }
+                )
+            log.info(
+                "Nowcast: %s; %d forecast frames", nowcast_info, len(forecast_frames)
+            )
+        else:
+            log.info(
+                "Nowcast: %s; no reliable motion → no forecast frames", nowcast_info
+            )
+        state.save()
 
     first = next(iter(grids.values()), None)
     manifest = {
@@ -428,7 +759,8 @@ def run(
         "bounds": [[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
         "size": [first.width, first.height] if first else old.get("size"),
         "frames": frames,
-        "nowcast": nowcast,
+        "forecast": forecast_frames,
+        "nowcast": nowcast_info,
     }
     _write_atomic(manifest_path, json.dumps(manifest, indent=1).encode())
     return manifest
