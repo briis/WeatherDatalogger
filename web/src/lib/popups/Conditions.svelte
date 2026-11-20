@@ -33,6 +33,8 @@
     humidity: 'humidity',
     pressure: 'pressure',
     uv: 'uv',
+    visibility: 'visibility',
+    solar: 'solar',
   };
   // Starting metric only — the menu changes it afterwards
   let metricId = $state<MetricId>(untrack(() => INITIAL[def.id] ?? 'temp'));
@@ -56,6 +58,7 @@
     'dew_point_c',
     'sea_level_pressure_mb',
     'uv_index',
+    'solar_radiation_wm2',
   ];
   let history = $state<HistoryRow[]>([]);
   $effect(() => {

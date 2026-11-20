@@ -45,22 +45,22 @@ function sunTitle(): string {
 
 export const WIDGETS: WidgetDef[] = (
   [
-    { id: 'airquality', slug: 'luftkvalitet', title: 'Luftkvalitet', icon: 'aqi', size: 'medium', widget: () => import('./AirQuality.svelte') },
+    { id: 'airquality', slug: 'luftkvalitet', title: 'Luftkvalitet', icon: 'aqi', size: 'medium', widget: () => import('./AirQuality.svelte'), popup: () => import('../popups/AirQualityPopup.svelte') },
     { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide', widget: () => import('./Hourly.svelte'), popup: conditions },
     { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium', widget: () => import('./Wind.svelte'), popup: conditions },
     { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall', widget: () => import('./Daily.svelte'), popup: conditions },
     { id: 'radar', slug: 'radar', title: 'Nedbørsradar', icon: 'map', size: 'tall', widget: () => import('./Radar.svelte') },
-    { id: 'moon', slug: 'maane', title: 'Måne', icon: 'moon', size: 'medium', widget: () => import('./Moon.svelte') },
-    { id: 'sun', slug: 'sol', title: 'Solnedgang', liveTitle: sunTitle, icon: 'sunset', size: 'small', widget: () => import('./Sun.svelte') },
+    { id: 'moon', slug: 'maane', title: 'Måne', icon: 'moon', size: 'medium', widget: () => import('./Moon.svelte'), popup: () => import('../popups/MoonPopup.svelte') },
+    { id: 'sun', slug: 'sol', title: 'Solnedgang', liveTitle: sunTitle, icon: 'sunset', size: 'small', widget: () => import('./Sun.svelte'), popup: () => import('../popups/SunPopup.svelte') },
     { id: 'uv', slug: 'uv', title: 'UV-indeks', icon: 'sun', size: 'small', widget: () => import('./Uv.svelte'), popup: conditions },
     { id: 'feelslike', slug: 'foeles-som', title: 'Føles som', icon: 'thermometer', size: 'small', widget: small, popup: conditions },
-    { id: 'averages', slug: 'gennemsnit', title: 'Gennemsnit', icon: 'chart', size: 'small', widget: () => import('./Averages.svelte') },
+    { id: 'averages', slug: 'gennemsnit', title: 'Gennemsnit', icon: 'chart', size: 'small', widget: () => import('./Averages.svelte'), popup: () => import('../popups/AveragesPopup.svelte') },
     { id: 'precipitation', slug: 'nedboer', title: 'Nedbør', icon: 'drop', size: 'small', widget: small, popup: conditions },
-    { id: 'visibility', slug: 'sigtbarhed', title: 'Sigtbarhed', icon: 'eye', size: 'small', widget: small },
+    { id: 'visibility', slug: 'sigtbarhed', title: 'Sigtbarhed', icon: 'eye', size: 'small', widget: small, popup: conditions },
     { id: 'humidity', slug: 'luftfugtighed', title: 'Luftfugtighed', icon: 'humidity', size: 'small', widget: small, popup: conditions },
     { id: 'pressure', slug: 'lufttryk', title: 'Lufttryk', icon: 'gauge', size: 'small', widget: () => import('./Pressure.svelte'), popup: conditions },
-    { id: 'lightning', slug: 'lyn', title: 'Lyn', icon: 'bolt', size: 'small', widget: small },
-    { id: 'solar', slug: 'solstraaling', title: 'Solstråling', icon: 'sun', size: 'small', widget: small },
+    { id: 'lightning', slug: 'lyn', title: 'Lyn', icon: 'bolt', size: 'small', widget: small, popup: () => import('../popups/LightningPopup.svelte') },
+    { id: 'solar', slug: 'solstraaling', title: 'Solstråling', icon: 'sun', size: 'small', widget: small, popup: conditions },
   ] satisfies Omit<WidgetDef, 'popup' | 'phase'>[] | Partial<WidgetDef>[]
 ).map((w) => ({ phase: 4, popup: popupPlaceholder, ...w }) as WidgetDef);
 

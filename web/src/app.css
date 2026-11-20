@@ -163,3 +163,31 @@ button {
   border: 1.5px solid rgb(0 0 0 / 0.35);
   transform: translate(-50%, -50%);
 }
+
+/* ── Shared popup building blocks ───────────────────────────────────── */
+.p-box {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.06);
+  margin-bottom: 10px;
+}
+.p-box > h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.p-box > p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.p-big {
+  font-family: var(--font-display);
+  font-size: 40px;
+  line-height: 1.05;
+}
+.p-sub {
+  font-size: 14px;
+  color: var(--text-2);
+}

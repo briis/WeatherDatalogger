@@ -47,7 +47,7 @@ export interface MoonInfo {
 const SYNODIC_DAYS = 29.530588853;
 
 /** Step forward from `from` until SunCalc's phase crosses `target`. */
-function nextPhase(from: Date, target: number): Date {
+export function nextPhase(from: Date, target: number): Date {
   const start = SunCalc.getMoonIllumination(from).phase;
   let delta = target - start;
   if (delta <= 0.0001) delta += 1;

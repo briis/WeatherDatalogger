@@ -32,6 +32,8 @@
     minSpan = 2,
     format,
     arrows = [],
+    axis = 'hours',
+    height = 220,
     onhover,
   }: {
     series: ChartSeries[];
@@ -44,6 +46,9 @@
     minSpan?: number;
     format: (v: number | null) => string;
     arrows?: { t: number; deg: number }[];
+    /** x labels: hours of one day, or day numbers across a month */
+    axis?: 'hours' | 'days';
+    height?: number;
     onhover?: (h: { t: number; values: (number | null)[] } | null) => void;
   } = $props();
 
@@ -138,7 +143,18 @@
     return out;
   };
 
+  const daySplits = (_u: uPlot, _ax: number, min: number, max: number) => {
+    // the 1st and every 5th day, at local noon
+    const out: number[] = [];
+    for (let t = min + 12 * 3600; t <= max; t += 86400) {
+      const d = Number(cphDay.format(new Date(t * 1000)).replace('.', ''));
+      if (d === 1 || d % 5 === 0) out.push(t);
+    }
+    return out;
+  };
+
   const cphHour = new Intl.DateTimeFormat('da-DK', { timeZone: 'Europe/Copenhagen', hour: '2-digit' });
+  const cphDay = new Intl.DateTimeFormat('da-DK', { timeZone: 'Europe/Copenhagen', day: 'numeric' });
 
   $effect(() => {
     const data = build();
@@ -160,8 +176,8 @@
 
     const opts: uPlot.Options = {
       width: el.clientWidth || 600,
-      height: 220,
-      padding: [arrows.length ? 26 : 12, 8, 0, 0],
+      height,
+      padding: [arrows.length ? 26 : 12, 8, 0, 12],
       legend: { show: false },
       cursor: { y: false, points: { show: false }, drag: { x: false, y: false } },
       scales: { x: { time: false, range: () => range }, y: { range: () => yRange } },
@@ -170,8 +186,9 @@
           stroke: 'rgb(255 255 255 / 0.6)',
           grid: { stroke: 'rgb(255 255 255 / 0.08)', width: 1 },
           ticks: { show: false },
-          splits: hourSplits,
-          values: (_u, splits) => splits.map((t) => cphHour.format(new Date(t * 1000))),
+          splits: axis === 'days' ? daySplits : hourSplits,
+          values: (_u, splits) =>
+            splits.map((t) => (axis === 'days' ? cphDay : cphHour).format(new Date(t * 1000)).replace('.', '')),
           font: '11px system-ui',
         },
         {
@@ -257,7 +274,7 @@
     };
 
     const plot = new uPlot(opts, data, el);
-    const ro = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height: 220 }));
+    const ro = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height }));
     ro.observe(el);
     return () => {
       ro.disconnect();
@@ -271,7 +288,6 @@
 <style>
   .chart {
     width: 100%;
-    min-height: 220px;
     touch-action: pan-y;
   }
   .chart :global(.u-cursor-x) {

@@ -8,7 +8,16 @@ import type { CombinedRealtime, ForecastHour, HistoryRow } from '$lib/api/types'
 import { PRESSURE_TREND, compass, uvLevel } from '$lib/i18n/da';
 import { clock, num, temp } from '$lib/format';
 
-export type MetricId = 'temp' | 'feels' | 'precip' | 'wind' | 'humidity' | 'pressure' | 'uv';
+export type MetricId =
+  | 'temp'
+  | 'feels'
+  | 'precip'
+  | 'wind'
+  | 'humidity'
+  | 'pressure'
+  | 'uv'
+  | 'visibility'
+  | 'solar';
 
 export interface Series {
   label: string;
@@ -268,6 +277,65 @@ export const METRICS: Record<MetricId, Metric> = {
     about:
       'UV-indekset angiver styrken af solens ultraviolette stråling, der kan give solskoldning. 0–2 er lav, 3–5 moderat, 6–7 høj, 8–10 meget høj og 11+ ekstrem. Fra 3 og op anbefales solcreme, solbriller og skygge midt på dagen. Målt af din Tempest indtil nu.',
   },
+  visibility: {
+    id: 'visibility',
+    label: 'Sigtbarhed',
+    unit: 'km',
+    kind: 'line',
+    yMin: 0,
+    minSpan: 10,
+    series: [{ label: 'Sigtbarhed', color: '#d1d9e6', history: null, forecast: 'visibility_km' }],
+    format: (v) => (v == null ? '–' : `${num(v, 0)} km`),
+    headline: (d) => ({
+      big: `${num(d.hour?.visibility_km, 0)} km`,
+      sub: d.min != null ? `Laveste ${num(d.min, 0)} km` : '',
+    }),
+    summary: (d) => {
+      const v = d.hour?.visibility_km ?? null;
+      const word =
+        v == null ? 'ukendt' : v >= 20 ? 'helt klart' : v >= 10 ? 'godt' : v >= 4 ? 'let diset' : v >= 1 ? 'diset' : 'tåget';
+      return `${d.isToday ? 'Udsynet er' : `${d.title}: udsynet ventes`} ${word} (${num(v, 0)} km)${
+        d.min != null && d.min < 1 ? '. Der kan komme tåge i løbet af dagen.' : '.'
+      }`;
+    },
+    about:
+      'Sigtbarhed er, hvor langt man kan se ved dagslys. Den sænkes af tåge, dis, nedbør og røg. Under 1 km kaldes tåge. Din station måler ikke sigtbarhed, så kurven er Open-Meteos prognose.',
+  },
+  solar: {
+    id: 'solar',
+    label: 'Solstråling',
+    unit: 'W/m²',
+    kind: 'line',
+    yMin: 0,
+    minSpan: 100,
+    series: [{ label: 'Solstråling', color: '#ffd60a', history: 'solar_radiation_wm2', forecast: 'solar_radiation_wm2' }],
+    format: (v) => (v == null ? '–' : `${num(v, 0)} W/m²`),
+    headline: (d) => ({
+      big: `${num(d.isToday ? (d.now?.solar_radiation_wm2 ?? d.hour?.solar_radiation_wm2) : d.max, 0)} W/m²`,
+      sub:
+        d.max != null && d.maxAt != null
+          ? `Højest ${num(d.max, 0)} W/m² kl. ${clock(new Date(d.maxAt * 1000))}`
+          : '',
+    }),
+    summary: (d) =>
+      (d.max ?? 0) < 1
+        ? `${d.isToday ? 'I dag' : d.title}: ingen nævneværdig solstråling.`
+        : `${d.isToday ? 'I dag' : d.title} topper solstrålingen med ${num(d.max, 0)} W/m²${
+            d.maxAt != null ? ` omkring kl. ${clock(new Date(d.maxAt * 1000))}` : ''
+          }. En klar sommerdag i Danmark når op omkring 800–900 W/m².`,
+    about:
+      'Solstråling (globalstråling) er den samlede energi fra solen, der rammer en vandret flade — direkte sol plus lys fra himlen. Skyer kan halvere den på få minutter. Målt af din Tempest indtil nu, derefter prognosen.',
+  },
 };
 
-export const METRIC_ORDER: MetricId[] = ['temp', 'feels', 'precip', 'wind', 'humidity', 'pressure', 'uv'];
+export const METRIC_ORDER: MetricId[] = [
+  'temp',
+  'feels',
+  'precip',
+  'wind',
+  'humidity',
+  'pressure',
+  'uv',
+  'solar',
+  'visibility',
+];
