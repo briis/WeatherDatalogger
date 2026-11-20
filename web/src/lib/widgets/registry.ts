@@ -34,6 +34,7 @@ export interface WidgetDef {
 
 const popupPlaceholder: Lazy = () => import('../popups/PopupPlaceholder.svelte');
 const small: Lazy = () => import('./StationSmall.svelte');
+const conditions: Lazy = () => import('../popups/Conditions.svelte');
 
 /** Sol: the header names the next event, like Apple's. */
 function sunTitle(): string {
@@ -45,9 +46,9 @@ function sunTitle(): string {
 export const WIDGETS: WidgetDef[] = (
   [
     { id: 'airquality', slug: 'luftkvalitet', title: 'Luftkvalitet', icon: 'aqi', size: 'medium', widget: () => import('./AirQuality.svelte') },
-    { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide', widget: () => import('./Hourly.svelte') },
-    { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium', widget: () => import('./Wind.svelte') },
-    { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall', widget: () => import('./Daily.svelte') },
+    { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide', widget: () => import('./Hourly.svelte'), popup: conditions },
+    { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium', widget: () => import('./Wind.svelte'), popup: conditions },
+    { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall', widget: () => import('./Daily.svelte'), popup: conditions },
     { id: 'radar', slug: 'radar', title: 'Nedbørsradar', icon: 'map', size: 'tall', widget: () => import('./Radar.svelte') },
     { id: 'moon', slug: 'maane', title: 'Måne', icon: 'moon', size: 'medium', widget: () => import('./Moon.svelte') },
     { id: 'sun', slug: 'sol', title: 'Solnedgang', liveTitle: sunTitle, icon: 'sunset', size: 'small', widget: () => import('./Sun.svelte') },
