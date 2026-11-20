@@ -6,8 +6,8 @@ import SunCalc from 'suncalc';
 
 /** Station position — Gundsømagle. Override via VITE_LAT / VITE_LON. */
 export const STATION = {
-  lat: Number(import.meta.env.VITE_LAT ?? 55.7289),
-  lon: Number(import.meta.env.VITE_LON ?? 12.1569),
+  lat: Number(import.meta.env.VITE_LAT ?? 55.7374),
+  lon: Number(import.meta.env.VITE_LON ?? 12.1659),
 };
 
 export interface SunInfo {

@@ -18,7 +18,7 @@ Browser ──► Caddy (weather-web LXC)
 |---|---|---|
 | 1 — Struktur | API-endpoints (`/forecast`, `/history`, `/daily`, WS header-auth), datalag (WebSocket + REST-fallback, forecast-polling), da-DK formatering, design-tokens, responsivt grid, popup-skal, LXC/deploy | ✅ |
 | 2 — Hovedside | Hero med kompakt header ved scroll, animeret himmel (skyer, regn, sne, stjerner, lyn, tåge, sol/skumring), vejrtype fra station + prognose, offline/forældet-banner, PWA | ✅ |
-| 3 — Widgets | Timeprognose, 10-dages, Vind, Luftkvalitet, Føles som, UV, Sol, Måne, Nedbør, Sigtbarhed, Luftfugtighed, Lufttryk, Lyn, Solstråling, Gennemsnit, Vindkort | ⏳ |
+| 3 — Widgets | Timeprognose (temp/nedbør/vind-faner, sol-markører), 10-dages med temperaturbjælker, Vind med kompas, Luftkvalitet, Føles som, UV, Sol med solbane, Måne med fase-tegning, Nedbør, Sigtbarhed, Luftfugtighed, Lufttryk med måler, Lyn, Solstråling, Gennemsnit (klimanormal 1991–2020) og Nedbørsradar (DMI) | ✅ |
 | 4 — Popups | Dag-vælger, graf (målt → prognose), forklaringstekster pr. widget | ⏳ |
 
 ## Struktur
@@ -38,11 +38,42 @@ web/
 │       ├── format.ts            da-DK tal/tid/datoer i Europe/Copenhagen
 │       ├── i18n/da.ts           tekster: vejrtyper, kompasretninger, Beaufort, UV/CAQI-niveauer, månefaser
 │       └── astro.ts             sol/måne for stationens position
-├── deploy/                      Caddyfile, create_lxc.sh, install.sh, deploy.sh, push_from_mac.sh
+├── radar/                       radar_worker.py (DMI HDF5 → PNG), requirements.txt, radar.example.ini
+├── deploy/                      Caddyfile, create_lxc.sh, install.sh, deploy.sh, push_from_mac.sh, systemd/
 └── dev/seed_dev_db.py           fyld en udviklings-DB med realistiske testdata
 ```
 
 Ny widget = én linje i `registry.ts` + `widgets/X.svelte` + `popups/X.svelte`.
+
+### Datakilder pr. widget
+
+| Widget | Kilde |
+|---|---|
+| Timeprognose, 10-dages, Sigtbarhed | Open-Meteo via API'et (`/forecast`); "Nu" og dagens H/L fra stationen |
+| Vind, Føles som, Luftfugtighed, Lufttryk, Nedbør (i dag), UV, Solstråling, Lyn | Stationen (`combined_realtime` + `_stats`) |
+| Luftkvalitet | AirLink/aqmonitor; sammenligning med i går fra `/daily` |
+| Sol, Måne | Beregnet lokalt (SunCalc) |
+| Nedbørsradar | DMI's radarkomposit, omsat til billeder af `weather-radar` i containeren (se nedenfor) |
+| Gennemsnit | Dagens højeste vs. normal for datoen (±7 dage, 1991–2020) hentet direkte fra Open-Meteos historiske arkiv og cachet i browseren |
+
+### Radar
+
+DMI udgiver radaren som HDF5-filer (ODIM, stereografisk gitter, 500 m, hvert 10. min. pr. scantype) på `opendataapi.dmi.dk` uden API-nøgle. Browseren kan ikke vise dem, så `radar/radar_worker.py` kører som systemd-timer (`weather-radar.timer`, hvert 5. min.) i weather-web-containeren:
+
+1. Henter de doppler-billeder fra de seneste 2 timer, der ikke er lavet endnu (doppler er ~5 min. friskere end fullRange)
+2. Læser filen med `pyfive` (ren Python, intet libhdf5) og DMI's skalering fra rodens `what`
+3. Farvelægger dBZ via en 256-trins opslagstabel og omprojicerer til et Web Mercator-gitter over `bounds` (projektionen regnes i numpy; opslaget beregnes én gang pr. gitter)
+4. Skriver `/var/lib/weather-web/radar/<tid>.png` + `frames.json` (bounds, billeder, regn ved stationen) og sletter billeder ældre end `keep_minutes`
+
+Caddy serverer mappen som `/radar/*`. Widgetten lægger det nyeste billede på et [OpenFreeMap](https://openfreemap.org)-vektorkort (Positron om dagen, Dark om natten — ingen API-nøgle) med MapLibre GL. MapLibre (~300 kB gz) indlæses kun sammen med radar-widgetten. Læsning, skalering og projektion er overtaget fra radar-spiken i `briis/pydmi` (branch `spike/radar`).
+
+Indstillinger: `/etc/weather-radar.ini` (oprettes fra `radar/radar.example.ini` ved første deploy). Fejlsøgning:
+
+```bash
+systemctl list-timers weather-radar.timer
+journalctl -u weather-radar -n 30
+cat /var/lib/weather-web/radar/frames.json
+```
 
 ### Himlen
 

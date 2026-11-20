@@ -42,6 +42,41 @@ install -m 0755 deploy/deploy.sh /usr/local/sbin/weather-web-deploy
 # `pct enter` gives a minimal PATH without /usr/local/sbin — link it into /usr/sbin too
 ln -sf /usr/local/sbin/weather-web-deploy /usr/sbin/weather-web-deploy
 
+# ── Radar worker (DMI radar → PNG frames) ────────────────────────────────
+echo "==> Radar worker"
+dpkg -s python3-venv >/dev/null 2>&1 || apt-get install -y -qq python3-venv
+id weatherradar >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin weatherradar
+install -d -m 0755 -o weatherradar -g weatherradar /var/lib/weather-web/radar
+install -d -m 0755 /opt/weather-web/radar
+install -m 0644 radar/radar_worker.py radar/requirements.txt /opt/weather-web/radar/
+# Outside /etc/weather-web (0750 root:caddy, holds the API key) — the radar
+# user must be able to read its config but has no business seeing the key
+if [[ -f /etc/weather-web/radar.ini && ! -f /etc/weather-radar.ini ]]; then
+  mv /etc/weather-web/radar.ini /etc/weather-radar.ini
+fi
+[[ -f /etc/weather-radar.ini ]] || install -m 0644 radar/radar.example.ini /etc/weather-radar.ini
+chmod 0644 /etc/weather-radar.ini
+if [[ ! -x /opt/weather-web/radar-venv/bin/python3 ]]; then
+  python3 -m venv /opt/weather-web/radar-venv
+fi
+REQ_HASH=$(sha256sum radar/requirements.txt | cut -d' ' -f1)
+if [[ "$(cat /opt/weather-web/radar-venv/.req-hash 2>/dev/null)" != "$REQ_HASH" ]]; then
+  /opt/weather-web/radar-venv/bin/pip install -q --upgrade pip
+  /opt/weather-web/radar-venv/bin/pip install -q -r radar/requirements.txt
+  echo "$REQ_HASH" >/opt/weather-web/radar-venv/.req-hash
+fi
+UNITS_CHANGED=0
+for u in deploy/systemd/weather-radar.service deploy/systemd/weather-radar.timer; do
+  if ! cmp -s "$u" "/etc/systemd/system/$(basename "$u")"; then
+    install -m 0644 "$u" /etc/systemd/system/
+    UNITS_CHANGED=1
+  fi
+done
+[[ $UNITS_CHANGED == 1 ]] && systemctl daemon-reload
+systemctl enable --now weather-radar.timer >/dev/null
+# Render once now so the map has a frame right after a fresh install
+systemctl start --no-block weather-radar.service
+
 RELEASE="$WEB_ROOT/releases/$(date +%Y%m%d-%H%M%S)-$SHA"
 rsync -a --delete dist/ "$RELEASE/"
 VERSION=$(cat package.json | grep -m1 '"version"' | cut -d'"' -f4)
@@ -49,7 +84,10 @@ echo "$VERSION ($SHA, $BRANCH) $(date -Iseconds)" >"$RELEASE/VERSION.txt"
 
 ln -sfn "$RELEASE" "$WEB_ROOT/current.tmp"
 mv -T "$WEB_ROOT/current.tmp" "$WEB_ROOT/current"
-[[ "${RELOAD_CADDY:-}" == 1 ]] && systemctl reload caddy
+if [[ "${RELOAD_CADDY:-}" == 1 ]]; then
+  # Graceful reload; fall back to a restart (e.g. a running config without the admin API)
+  systemctl reload caddy || systemctl restart caddy
+fi
 
 # Prune old releases
 ls -1dt "$WEB_ROOT"/releases/*/ | tail -n +$((KEEP + 1)) | xargs -r rm -rf

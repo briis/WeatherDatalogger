@@ -1,7 +1,7 @@
 {
   "name": "weatherdatalogger-web",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Apple Weather-style Danish web frontend for WeatherDatalogger",
   "type": "module",
   "engines": {
@@ -14,6 +14,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
   },
   "dependencies": {
+    "maplibre-gl": "^6.19.0",
     "suncalc": "^1.9.0",
     "uplot": "^1.6.32"
   },
