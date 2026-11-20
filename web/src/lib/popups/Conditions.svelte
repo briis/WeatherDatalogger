@@ -30,6 +30,9 @@
     wind: 'wind',
     feelslike: 'feels',
     precipitation: 'precip',
+    humidity: 'humidity',
+    pressure: 'pressure',
+    uv: 'uv',
   };
   // Starting metric only — the menu changes it afterwards
   let metricId = $state<MetricId>(untrack(() => INITIAL[def.id] ?? 'temp'));
@@ -49,6 +52,10 @@
     'wind_avg_ms',
     'wind_gust_ms',
     'wind_direction_deg',
+    'relative_humidity_pct',
+    'dew_point_c',
+    'sea_level_pressure_mb',
+    'uv_index',
   ];
   let history = $state<HistoryRow[]>([]);
   $effect(() => {
@@ -70,6 +77,23 @@
   const range = $derived<[number, number]>([start.getTime() / 1000, end.getTime() / 1000]);
 
   // ── Series for the chart ──────────────────────────────────────────────
+  const BLEND_H = 6;
+
+  /** Linear value at t from sorted [t, v] points (clamped to the ends). */
+  function interpolate(pts: [number, number | null][], t: number): number | null {
+    const ok = pts.filter((p): p is [number, number] => p[1] != null);
+    if (!ok.length) return null;
+    if (t <= ok[0]![0]) return ok[0]![1];
+    for (let i = 1; i < ok.length; i++) {
+      const [t1, v1] = ok[i]!;
+      if (t <= t1) {
+        const [t0, v0] = ok[i - 1]!;
+        return v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+      }
+    }
+    return ok.at(-1)![1];
+  }
+
   const chartSeries = $derived.by((): ChartSeries[] =>
     metric.series.map((s) => {
       let past: [number, number | null][] = [];
@@ -97,6 +121,20 @@
           (h[s.forecast] as number | null) ?? null,
         ])
         .filter(([t]) => !isToday || t >= nowS - (metric.kind === 'bars' ? 1800 : 0));
+      // Blend: start the forecast at what the station measures now and fade
+      // to the raw forecast over BLEND_H hours, so the curve has no step at
+      // "Nu" that doesn't exist in reality (lines only — bars are amounts)
+      const cur = s.history ? live.current?.[s.history] : null;
+      if (isToday && metric.kind === 'line' && typeof cur === 'number' && fut.length) {
+        const f0 = interpolate(fut, nowS);
+        if (f0 != null) {
+          const delta = cur - f0;
+          for (const p of fut) {
+            const w = Math.max(0, 1 - (p[0] - nowS) / (BLEND_H * 3600));
+            if (p[1] != null && w > 0) p[1] = p[1] + delta * w;
+          }
+        }
+      }
       return { label: s.label, color: s.color, dashed: s.dashed, points: [...past, ...fut] };
     }),
   );
@@ -121,7 +159,9 @@
 
   // ── Stats for headline / summary ──────────────────────────────────────
   const stats = $derived.by((): DayStats => {
-    const prim = (chartSeries[0]?.points ?? []).map((p) => p[1]).filter((v): v is number => v != null);
+    const primPts = (chartSeries[0]?.points ?? []).filter((p): p is [number, number] => p[1] != null);
+    const prim = primPts.map((p) => p[1]);
+    const peak = primPts.reduce<[number, number] | null>((a, p) => (!a || p[1] > a[1] ? p : a), null);
     const second = (chartSeries[1]?.points ?? []).map((p) => p[1]).filter((v): v is number => v != null);
     let min = prim.length ? Math.min(...prim) : null;
     let max = prim.length ? Math.max(...prim) : null;
@@ -145,6 +185,7 @@
       now: isToday ? (live.current as CombinedRealtime | null) : null,
       min,
       max,
+      maxAt: peak && peak[1] > 0 ? peak[0] : null,
       total,
       hour,
     };
@@ -152,6 +193,11 @@
 
   const head = $derived(metric.headline(stats));
   const cond = $derived(isToday ? scene.condition : (dailyRow?.weather_condition ?? null));
+
+  // "Om temperatur" but "Om UV-indeks" (keep acronyms)
+  const aboutTitle = $derived(
+    /^[A-ZÆØÅ][A-ZÆØÅ]/.test(metric.label) ? metric.label : metric.label.toLowerCase(),
+  );
 
   let hover = $state<{ t: number; values: (number | null)[] } | null>(null);
 </script>
@@ -195,6 +241,8 @@
       {range}
       now={nowS}
       yMin={metric.yMin}
+      yMax={metric.yMax}
+      minSpan={metric.minSpan}
       format={metric.format}
       {arrows}
       onhover={(h) => (hover = h)}
@@ -211,7 +259,7 @@
 </section>
 
 <section class="box">
-  <h3>Om {metric.label.toLowerCase()}</h3>
+  <h3>Om {aboutTitle}</h3>
   <p>{metric.about}</p>
 </section>
 

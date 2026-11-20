@@ -10,7 +10,7 @@
 <script lang="ts" module>
   export interface ChartSeries {
     label: string;
-    color: string; // CSS colour or 'temp'
+    color: string; // CSS colour, or 'temp' / 'uv' for a value-coloured line
     dashed?: boolean;
     /** [unix seconds, value] pairs, sorted */
     points: [number, number | null][];
@@ -20,7 +20,7 @@
 <script lang="ts">
   import uPlot from 'uplot';
   import 'uplot/dist/uPlot.min.css';
-  import { tempColor } from '$lib/colors';
+  import { tempColor, uvColor } from '$lib/colors';
 
   let {
     series,
@@ -28,6 +28,8 @@
     range,
     now,
     yMin,
+    yMax,
+    minSpan = 2,
     format,
     arrows = [],
     onhover,
@@ -37,6 +39,9 @@
     range: [number, number];
     now: number;
     yMin?: number;
+    yMax?: number;
+    /** smallest y-range shown, so a flat day doesn't look dramatic */
+    minSpan?: number;
     format: (v: number | null) => string;
     arrows?: { t: number; deg: number }[];
     onhover?: (h: { t: number; values: (number | null)[] } | null) => void;
@@ -78,15 +83,15 @@
     return [xs, ...cols] as uPlot.AlignedData;
   }
 
-  function tempStroke(alpha: number) {
+  function scaleStroke(colorOf: (v: number) => string, alpha: number) {
     return (u: uPlot) => {
       const { min = 0, max = 10 } = u.scales.y!;
       const y0 = u.valToPos(min, 'y', true);
       const y1 = u.valToPos(max, 'y', true);
-      if (!Number.isFinite(y0) || !Number.isFinite(y1) || y0 === y1) return tempColor(min);
+      if (!Number.isFinite(y0) || !Number.isFinite(y1) || y0 === y1) return colorOf(min);
       const g = u.ctx.createLinearGradient(0, y0, 0, y1);
       for (let i = 0; i <= 4; i++) {
-        const c = tempColor(min + ((max - min) * i) / 4);
+        const c = colorOf(min + ((max - min) * i) / 4);
         g.addColorStop(i / 4, alpha < 1 ? c.replace(')', ` / ${alpha})`) : c);
       }
       return g;
@@ -99,7 +104,8 @@
       for (const part of ['past', 'future'] as const) {
         const alpha = part === 'past' ? 0.5 : 1;
         const primary = si === 0;
-        const solid = s.color === 'temp' ? null : s.color;
+        const scaled = s.color === 'temp' ? tempColor : s.color === 'uv' ? uvColor : null;
+        const solid = scaled ? null : s.color;
         out.push({
           label: `${s.label} ${part}`,
           spanGaps: true,
@@ -111,12 +117,12 @@
               ? undefined
               : solid
                 ? withAlpha(solid, alpha)
-                : tempStroke(alpha),
+                : scaleStroke(scaled!, alpha),
           fill:
             kind === 'bars'
               ? solid
                 ? withAlpha(solid, alpha)
-                : undefined
+                : scaleStroke(scaled!, alpha)
               : undefined,
           paths: kind === 'bars' ? uPlot.paths.bars!({ size: [0.75, 28], align: 0 }) : undefined,
         });
@@ -140,7 +146,17 @@
     const lo = values.length ? Math.min(...values) : 0;
     const hi = values.length ? Math.max(...values) : 1;
     const pad = Math.max(1, (hi - lo) * 0.15);
-    const yRange: [number, number] = [yMin ?? Math.floor(lo - pad), Math.ceil(hi + pad)];
+    let y0 = yMin ?? Math.floor(lo - pad);
+    let y1 = yMax ?? Math.ceil(hi + pad);
+    if (y1 - y0 < minSpan) {
+      if (yMin != null) y1 = y0 + minSpan;
+      else {
+        const mid = (y0 + y1) / 2;
+        y0 = Math.floor(mid - minSpan / 2);
+        y1 = Math.ceil(mid + minSpan / 2);
+      }
+    }
+    const yRange: [number, number] = [y0, y1];
 
     const opts: uPlot.Options = {
       width: el.clientWidth || 600,

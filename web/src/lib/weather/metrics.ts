@@ -5,10 +5,10 @@
 // Add a metric = one entry here; the popup, chart and menu pick it up.
 
 import type { CombinedRealtime, ForecastHour, HistoryRow } from '$lib/api/types';
-import { compass } from '$lib/i18n/da';
-import { num, temp } from '$lib/format';
+import { PRESSURE_TREND, compass, uvLevel } from '$lib/i18n/da';
+import { clock, num, temp } from '$lib/format';
 
-export type MetricId = 'temp' | 'feels' | 'precip' | 'wind';
+export type MetricId = 'temp' | 'feels' | 'precip' | 'wind' | 'humidity' | 'pressure' | 'uv';
 
 export interface Series {
   label: string;
@@ -28,6 +28,8 @@ export interface DayStats {
   now: CombinedRealtime | null;
   min: number | null;
   max: number | null;
+  /** when the primary series peaks (unix s), e.g. for UV */
+  maxAt: number | null;
   /** extra numbers a metric may want (e.g. total precipitation) */
   total: number | null;
   /** forecast row for "now" or noon on other days */
@@ -40,8 +42,11 @@ export interface Metric {
   unit: string;
   kind: 'line' | 'bars';
   series: Series[];
-  /** Fixed y-range floor (e.g. 0 for wind/rain) */
+  /** Fixed y-range floor (e.g. 0 for wind/rain) / ceiling (100 % humidity) */
   yMin?: number;
+  yMax?: number;
+  /** Smallest y-span shown (keeps a flat pressure day from looking dramatic) */
+  minSpan?: number;
   /** History rows → values (e.g. cumulative rain → per-hour) */
   fromHistory?: (rows: HistoryRow[], field: keyof CombinedRealtime) => [number[], (number | null)[]];
   format: (v: number | null) => string;
@@ -102,7 +107,7 @@ export const METRICS: Record<MetricId, Metric> = {
         ? `Temperaturen er ${temp(d.now?.air_temperature_c)} lige nu. I dag ligger den mellem ${temp(d.min)} og ${temp(d.max)}.`
         : `${d.title}: temperaturen ventes mellem ${temp(d.min)} og ${temp(d.max)}.`,
     about:
-      'Temperaturen måles af din egen station 2 m over jorden. Kurven viser målingerne indtil nu og derefter prognosen fra Open-Meteo. Dagens højeste og laveste tager både det målte og det ventede med.',
+      'Temperaturen måles af din egen station 2 m over jorden. Kurven viser målingerne indtil nu og derefter prognosen fra Open-Meteo, der de første timer justeres mod det, stationen måler. Dagens højeste og laveste tager både det målte og det ventede med.',
   },
   feels: {
     id: 'feels',
@@ -174,6 +179,95 @@ export const METRICS: Record<MetricId, Metric> = {
     about:
       'Vindhastigheden er et gennemsnit, vindstød er de kraftigste kortvarige pust. Pilene viser, hvor vinden blæser hen — den kommer fra den modsatte retning. Målt af din station indtil nu, derefter prognosen.',
   },
+  humidity: {
+    id: 'humidity',
+    label: 'Luftfugtighed',
+    unit: '%',
+    kind: 'line',
+    yMin: 0,
+    yMax: 100,
+    series: [{ label: 'Luftfugtighed', color: '#5ac8fa', history: 'relative_humidity_pct', forecast: 'humidity_pct' }],
+    format: (v) => (v == null ? '–' : `${num(v, 0)} %`),
+    headline: (d) => ({
+      big: d.isToday
+        ? `${num(d.now?.relative_humidity_pct ?? d.hour?.humidity_pct, 0)} %`
+        : `${num(d.hour?.humidity_pct, 0)} %`,
+      sub: `Dugpunkt ${temp(d.isToday ? (d.now?.dew_point_c ?? d.hour?.dew_point_c) : d.hour?.dew_point_c)}`,
+    }),
+    summary: (d) => {
+      const dp = d.isToday ? d.now?.dew_point_c : d.hour?.dew_point_c;
+      const feel =
+        dp == null ? '' : dp < 10 ? ' Det føles ikke fugtigt.' : dp < 16 ? ' Det føles behageligt.' : dp < 20 ? ' Det føles lidt fugtigt.' : ' Det føles trykkende fugtigt.';
+      return d.isToday
+        ? `Luftfugtigheden er ${num(d.now?.relative_humidity_pct, 0)} % lige nu, og dugpunktet er ${temp(dp)}.${feel} I dag mellem ${num(d.min, 0)} og ${num(d.max, 0)} %.`
+        : `${d.title}: luftfugtighed mellem ${num(d.min, 0)} og ${num(d.max, 0)} %, dugpunkt omkring ${temp(dp)}.${feel}`;
+    },
+    about:
+      'Relativ luftfugtighed er, hvor meget vanddamp luften indeholder i forhold til det maksimale ved den aktuelle temperatur. Dugpunktet er den temperatur, luften skal køles ned til, før der dannes dug eller tåge — det siger mere om, hvor fugtigt det føles, end procenten gør.',
+  },
+  pressure: {
+    id: 'pressure',
+    label: 'Lufttryk',
+    unit: 'hPa',
+    kind: 'line',
+    minSpan: 10,
+    series: [{ label: 'Lufttryk', color: '#bf9cff', history: 'sea_level_pressure_mb', forecast: 'pressure_mb' }],
+    format: (v) => (v == null ? '–' : `${num(v, 0)} hPa`),
+    headline: (d) => {
+      const trend = d.now?.sea_level_pressure_trend ?? d.now?.pressure_trend ?? null;
+      return {
+        big: `${num(d.isToday ? (d.now?.sea_level_pressure_mb ?? d.hour?.pressure_mb) : d.hour?.pressure_mb, 0)} hPa`,
+        sub: d.isToday && trend ? `${PRESSURE_TREND[trend] ?? trend}` : `${num(d.min, 0)}–${num(d.max, 0)} hPa`,
+      };
+    },
+    summary: (d) => {
+      const delta = d.now?.sea_level_pressure_trend_mb ?? d.now?.pressure_trend_mb ?? null;
+      const trend =
+        delta == null
+          ? ''
+          : Math.abs(delta) < 1
+            ? ' Det har været stabilt de seneste 3 timer.'
+            : delta > 0
+              ? ` Det er steget ${num(delta, 1)} hPa på 3 timer — ofte et tegn på mere stabilt vejr.`
+              : ` Det er faldet ${num(-delta, 1)} hPa på 3 timer — ofte et tegn på skyer, regn eller vind.`;
+      return d.isToday
+        ? `Lufttrykket er ${num(d.now?.sea_level_pressure_mb, 0)} hPa lige nu.${trend}`
+        : `${d.title}: lufttryk mellem ${num(d.min, 0)} og ${num(d.max, 0)} hPa.`;
+    },
+    about:
+      'Lufttrykket er omregnet til havniveau, så det kan sammenlignes med andre stationer og vejrkort. Normalt tryk er omkring 1013 hPa. Højtryk giver typisk stille og tørt vejr, lavtryk skyer, regn og blæst. Hurtige fald er et varsel om dårligere vejr.',
+  },
+  uv: {
+    id: 'uv',
+    label: 'UV-indeks',
+    unit: '',
+    kind: 'line',
+    yMin: 0,
+    minSpan: 4,
+    series: [{ label: 'UV-indeks', color: 'uv', history: 'uv_index', forecast: 'uv_index' }],
+    format: (v) => (v == null ? '–' : num(v, 0)),
+    headline: (d) => {
+      const uv = d.isToday ? (d.now?.uv_index ?? d.hour?.uv_index ?? null) : d.max;
+      return {
+        big: `${num(uv, 0)} ${uvLevel(uv)}`,
+        sub:
+          d.max != null && d.maxAt != null
+            ? `Højest ${num(d.max, 0)} (${uvLevel(d.max).toLowerCase()}) kl. ${clock(new Date(d.maxAt * 1000))}`
+            : '',
+      };
+    },
+    summary: (d) => {
+      const peak = d.max ?? 0;
+      const when = d.maxAt != null ? ` omkring kl. ${clock(new Date(d.maxAt * 1000))}` : '';
+      const advice =
+        peak >= 3
+          ? ' Brug solbeskyttelse, når du er ude midt på dagen.'
+          : ' Det er ikke nødvendigt med solbeskyttelse.';
+      return `${d.isToday ? 'I dag' : d.title} når UV-indekset ${num(peak, 0)} (${uvLevel(peak).toLowerCase()})${when}.${advice}`;
+    },
+    about:
+      'UV-indekset angiver styrken af solens ultraviolette stråling, der kan give solskoldning. 0–2 er lav, 3–5 moderat, 6–7 høj, 8–10 meget høj og 11+ ekstrem. Fra 3 og op anbefales solcreme, solbriller og skygge midt på dagen. Målt af din Tempest indtil nu.',
+  },
 };
 
-export const METRIC_ORDER: MetricId[] = ['temp', 'feels', 'precip', 'wind'];
+export const METRIC_ORDER: MetricId[] = ['temp', 'feels', 'precip', 'wind', 'humidity', 'pressure', 'uv'];
