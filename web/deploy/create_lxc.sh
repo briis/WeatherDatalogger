@@ -25,6 +25,7 @@ MEMORY="${MEMORY:-512}"
 SWAP="${SWAP:-512}"
 DISK_GB="${DISK_GB:-4}"
 SSH_KEY_FILE="${SSH_KEY_FILE:-/root/.ssh/authorized_keys}"
+BRANCH="${BRANCH:-main}"   # e.g. BRANCH=feature/web-phase1 before the PR is merged
 
 echo "==> Finding latest Debian 13 template"
 pveam update >/dev/null
@@ -58,13 +59,13 @@ sleep 5
 echo "==> Bootstrapping"
 pct exec "$CTID" -- bash -c "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
 pct exec "$CTID" -- bash -c \
-  "curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/main/web/deploy/install.sh -o /root/install.sh"
+  "curl -fsSL https://raw.githubusercontent.com/briis/WeatherDatalogger/$BRANCH/web/deploy/install.sh -o /root/install.sh"
 
 cat <<EOF
 
 CT $CTID is running. Finish setup inside it:
 
   pct enter $CTID
-  bash /root/install.sh
+  BRANCH=$BRANCH bash /root/install.sh
 
 EOF
