@@ -25,6 +25,7 @@ Usage:
     python3 radar_worker.py [--config /etc/weather-web/radar.ini] [--file X.h5 ...]
 """
 
+# ruff: noqa: SIM118 — pyfive groups need .keys() for membership tests
 from __future__ import annotations
 
 import argparse
@@ -35,7 +36,6 @@ import io
 import json
 import logging
 import math
-import os
 import sys
 import tempfile
 import time
@@ -111,9 +111,8 @@ def list_frames(scan: str, since: datetime, timeout: float) -> list[dict[str, An
 def _attrs(obj: Any) -> dict[str, Any]:
     """Attributes as plain values (pyfive returns scalars as 1-element arrays)."""
     out: dict[str, Any] = {}
-    for k, v in obj.attrs.items():
-        if hasattr(v, "tolist"):
-            v = v.tolist()
+    for k, raw in obj.attrs.items():
+        v = raw.tolist() if hasattr(raw, "tolist") else raw
         if isinstance(v, list) and len(v) == 1:
             v = v[0]
         if isinstance(v, bytes):
@@ -213,8 +212,12 @@ def merc_y(lat: float) -> float:
 
 
 class Grid:
-    """Output grid: linear in Web Mercator over (W, S, E, N), plus the
-    lookup into the radar grid. Cached per (radar geometry, bounds, width)."""
+    """
+    Output grid, linear in Web Mercator over (W, S, E, N).
+
+    Holds the lookup from every output pixel into the radar grid; cached per
+    (radar geometry, bounds, width).
+    """
 
     def __init__(
         self,
@@ -305,7 +308,7 @@ def render(raw: np.ndarray, what: dict[str, Any], grid: Grid, min_dbz: float) ->
 def rain_at(
     raw: np.ndarray, what: dict[str, Any], where: dict[str, Any], lat: float, lon: float
 ) -> float | None:
-    """mm/h at a point: mean of 3×3 pixels (1.5 km), Marshall-Palmer Z=200R^1.6."""
+    """mm/h at a point: mean of 3x3 pixels (1.5 km), Marshall-Palmer Z=200R^1.6."""
     x, y = stere_xy(where["projdef"], np.array(lat), np.array(lon))
     ul_x, ul_y = stere_xy(
         where["projdef"],
@@ -337,7 +340,7 @@ def rain_at(
 def _write_atomic(path: Path, data: bytes) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(data)
-    os.replace(tmp, path)
+    tmp.replace(path)
 
 
 def run(
@@ -384,9 +387,9 @@ def run(
             log.debug("Downloaded %s in %.2fs", it["id"], time.perf_counter() - t0)
 
     latest_rain: tuple[str, float | None] | None = None
-    for t, blob in sources:
+    for listed_time, blob in sources:
         raw, what, where = read_odim(blob)
-        t = t or scan_time(what)
+        t = listed_time or scan_time(what)
         if t is None:
             log.warning("Skipping a file without scan time")
             continue
