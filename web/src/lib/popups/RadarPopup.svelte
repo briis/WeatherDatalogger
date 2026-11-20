@@ -18,11 +18,13 @@
   const FRAME_MS = 600;
   const HOLD_LAST_MS = 1800;
 
-  const frames = $derived(radar.frames);
-  let idx = $state(-1); // -1 = follow the newest frame
+  // Observed scans, then the extrapolated next hour (if the worker made one)
+  const frames = $derived([...radar.frames, ...radar.forecast]);
+  const lastObserved = $derived(radar.frames.length - 1);
+  let idx = $state(-1); // -1 = follow the newest observed frame
   let playing = $state(false);
-  const current = $derived(frames.length ? (frames[idx < 0 ? frames.length - 1 : idx] ?? null) : null);
-  const shownIdx = $derived(idx < 0 ? frames.length - 1 : idx);
+  const shownIdx = $derived(idx < 0 ? Math.max(0, lastObserved) : Math.min(idx, frames.length - 1));
+  const current = $derived(frames[shownIdx] ?? null);
 
   // Preload every frame once
   const preloaded = new Set<string>();
@@ -43,7 +45,8 @@
       const last = frames.length - 1;
       const i = shownIdx >= last ? 0 : shownIdx + 1;
       idx = i;
-      timer = setTimeout(step, i === last ? HOLD_LAST_MS : FRAME_MS);
+      // pause briefly on "now" and longer on the last frame before looping
+      timer = setTimeout(step, i === last ? HOLD_LAST_MS : i === lastObserved ? 1000 : FRAME_MS);
     };
     timer = setTimeout(step, FRAME_MS);
     return () => clearTimeout(timer);
@@ -76,9 +79,18 @@
     else if (e.key === 'ArrowRight') stepBy(1);
   }
 
-  const isNewest = $derived(shownIdx === frames.length - 1);
+  const isNewest = $derived(shownIdx === lastObserved);
   const stale = $derived(
-    frames.length > 0 && scene.now.getTime() - frames[frames.length - 1]!.time.getTime() > 45 * 60_000,
+    radar.latest != null && scene.now.getTime() - radar.latest.time.getTime() > 45 * 60_000,
+  );
+  // Where "Nu" (the newest scan) sits on the timeline, in %
+  const nowPos = $derived(
+    frames.length > 1 && lastObserved >= 0 ? (lastObserved / (frames.length - 1)) * 100 : 100,
+  );
+  const minsAhead = $derived(
+    current?.forecast && radar.latest
+      ? Math.round((current.time.getTime() - radar.latest.time.getTime()) / 60_000)
+      : 0,
   );
   // Ticks every 30 minutes on the timeline
   const ticks = $derived.by(() => {
@@ -99,6 +111,9 @@
 <div class="wrap">
   <div class="map">
     <RadarMap interactive frame={current} zoom={6.2} />
+    {#if current?.forecast}
+      <div class="badge">Prognose +{minsAhead} min.</div>
+    {/if}
 
     <div class="legend" aria-label="Forklaring">
       <div class="lt">Nedbør</div>
@@ -125,7 +140,10 @@
 
     <div class="info">
       <div class="when">
-        {#if current}
+        {#if current?.forecast}
+          Prognose kl. {clock(current.time)}
+          <span class="w-muted">· {minsAhead} min. efter seneste scan</span>
+        {:else if current}
           Radar kl. {clock(current.time)}
           <span class="w-muted">· {isNewest ? `seneste (${ago(current.time, scene.now)})` : ago(current.time, scene.now)}</span>
         {:else if radar.error}
@@ -147,8 +165,12 @@
           aria-label="Tidspunkt"
           disabled={frames.length < 2}
         />
+        {#if radar.forecast.length}
+          <span class="future" style:left="calc(8px + (100% - 16px) * {nowPos / 100})" aria-hidden="true"></span>
+          <span class="nu" style:left="calc(8px + (100% - 16px) * {nowPos / 100})">Nu</span>
+        {/if}
         <div class="ticks">
-          {#each ticks as t (t.label)}
+          {#each ticks.filter((t) => !radar.forecast.length || Math.abs(t.pos - nowPos) > 7) as t (t.label)}
             <span style:left="{t.pos}%">{t.label}</span>
           {/each}
         </div>
@@ -167,8 +189,10 @@
 
   <p class="note w-muted">
     {#if stale}<Icon name="clock" size={11} /> Radaren er ikke opdateret i over 45 min. ·{/if}
-    DMI's radarkomposit, de seneste {num(frames.length ? (frames.length - 1) * 10 : 0, 0)} min. i 10-minutters trin. Radaren
-    dækker Danmark og ca. 120 km ud; den kan se nedbør fra 1–2 km højde, så let støvregn kan mangle.
+    DMI's radarkomposit, de seneste {num(radar.frames.length ? (radar.frames.length - 1) * 10 : 0, 0)} min. i
+    10-minutters trin{#if radar.forecast.length}, og derefter en prognose for den næste time, hvor det seneste billede
+    flyttes med bygernes bevægelse (vækst og opløsning af byger er ikke med){/if}. Radaren dækker Danmark og ca. 120 km
+    ud; den ser nedbør i 1–2 km højde, så let støvregn kan mangle.
   </p>
 </div>
 
@@ -268,6 +292,40 @@
     width: 100%;
     accent-color: #fff;
     margin: 0;
+  }
+  .future {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    height: 6px;
+    border-radius: 3px;
+    background: repeating-linear-gradient(90deg, rgb(255 255 255 / 0.35) 0 4px, transparent 4px 8px);
+    pointer-events: none;
+    width: auto;
+  }
+  .nu {
+    position: absolute;
+    bottom: 0;
+    transform: translateX(-50%);
+    font-size: 10px;
+    line-height: 12px;
+    font-weight: 700;
+    color: var(--text);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .badge {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    background: rgb(90 60 200 / 0.85);
   }
   .ticks {
     position: absolute;

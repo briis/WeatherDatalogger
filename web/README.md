@@ -65,7 +65,9 @@ DMI udgiver radaren som HDF5-filer (ODIM, stereografisk gitter, 500 m, hvert 10.
 3. Farvelægger dBZ via en 256-trins opslagstabel og omprojicerer til et Web Mercator-gitter over `bounds` (projektionen regnes i numpy; opslaget beregnes én gang pr. gitter)
 4. Skriver `/var/lib/weather-web/radar/<tid>.png` + `frames.json` (bounds, billeder, regn ved stationen) og sletter billeder ældre end `keep_minutes`
 
-Caddy serverer mappen som `/radar/*`. Widgetten lægger det nyeste billede på et [OpenFreeMap](https://openfreemap.org)-vektorkort (Positron om dagen, Dark om natten — ingen API-nøgle) med MapLibre GL. MapLibre (~300 kB gz) indlæses kun sammen med radar-widgetten. Læsning, skalering og projektion er overtaget fra radar-spiken i `briis/pydmi` (branch `spike/radar`).
+5. **Nowcast** (porteret fra spiken, afprøvet mod regnmåleren): bevægelsen mellem de to nyeste billeder findes med FFT-krydskorrelation af regnfelterne; faste ekkoer (master, møller), der giver ekko i ≥ 80 % af billederne over ~6 t., ignoreres. Ud fra det beregnes regn ved stationen, nærmeste nedbør (afstand og retning), bevægelse (km/t, fra hvilken retning) og **hvornår regnen når stationen** (op til 2 t.). Det nyeste billede flyttes desuden langs bevægelsen til **6 prognosebilleder (+10 … +60 min.)** — `f<tid>+<min>.png`. Tilstand mellem kørslerne ligger i `/var/lib/weather-web/radar-state/` (ikke serveret)
+
+Caddy serverer mappen som `/radar/*`. Nedbør- og radar-widgetten viser fx "Regn ventes om ca. 25 min.", og radar-popuppen afspiller de sidste 2 timer efterfulgt af prognosen for den næste time (stiplet på tidslinjen). Prognosen er ren fremskrivning — byger, der opstår eller opløses, er ikke med. Widgetten lægger det nyeste billede på et [OpenFreeMap](https://openfreemap.org)-vektorkort (Positron om dagen, Dark om natten — ingen API-nøgle) med MapLibre GL. MapLibre (~300 kB gz) indlæses kun sammen med radar-widgetten. Læsning, skalering og projektion er overtaget fra radar-spiken i `briis/pydmi` (branch `spike/radar`).
 
 Indstillinger: `/etc/weather-radar.ini` (oprettes fra `radar/radar.example.ini` ved første deploy). Fejlsøgning:
 

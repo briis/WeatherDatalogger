@@ -47,6 +47,7 @@ echo "==> Radar worker"
 dpkg -s python3-venv >/dev/null 2>&1 || apt-get install -y -qq python3-venv
 id weatherradar >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin weatherradar
 install -d -m 0755 -o weatherradar -g weatherradar /var/lib/weather-web/radar
+install -d -m 0750 -o weatherradar -g weatherradar /var/lib/weather-web/radar-state
 install -d -m 0755 /opt/weather-web/radar
 install -m 0644 radar/radar_worker.py radar/requirements.txt /opt/weather-web/radar/
 # Outside /etc/weather-web (0750 root:caddy, holds the API key) — the radar

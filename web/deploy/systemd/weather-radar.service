@@ -16,5 +16,5 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/var/lib/weather-web/radar
+ReadWritePaths=/var/lib/weather-web/radar /var/lib/weather-web/radar-state
 SyslogIdentifier=weather-radar
