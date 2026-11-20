@@ -26,13 +26,14 @@ export interface WidgetDef {
   size: WidgetSize;
   widget: Lazy;
   popup?: Lazy;
+  /** 'large' = near full-screen sheet (the radar map) */
+  popupSize?: 'normal' | 'large';
   /** Header text that changes with time (e.g. Solnedgang ↔ Solopgang). */
   liveTitle?: () => string;
   /** Phase in which the real implementation lands (for placeholders). */
   phase: number;
 }
 
-const popupPlaceholder: Lazy = () => import('../popups/PopupPlaceholder.svelte');
 const small: Lazy = () => import('./StationSmall.svelte');
 const conditions: Lazy = () => import('../popups/Conditions.svelte');
 
@@ -49,7 +50,7 @@ export const WIDGETS: WidgetDef[] = (
     { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide', widget: () => import('./Hourly.svelte'), popup: conditions },
     { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium', widget: () => import('./Wind.svelte'), popup: conditions },
     { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall', widget: () => import('./Daily.svelte'), popup: conditions },
-    { id: 'radar', slug: 'radar', title: 'Nedbørsradar', icon: 'map', size: 'tall', widget: () => import('./Radar.svelte') },
+    { id: 'radar', slug: 'radar', title: 'Nedbørsradar', icon: 'map', size: 'tall', widget: () => import('./Radar.svelte'), popup: () => import('../popups/RadarPopup.svelte'), popupSize: 'large' },
     { id: 'moon', slug: 'maane', title: 'Måne', icon: 'moon', size: 'medium', widget: () => import('./Moon.svelte'), popup: () => import('../popups/MoonPopup.svelte') },
     { id: 'sun', slug: 'sol', title: 'Solnedgang', liveTitle: sunTitle, icon: 'sunset', size: 'small', widget: () => import('./Sun.svelte'), popup: () => import('../popups/SunPopup.svelte') },
     { id: 'uv', slug: 'uv', title: 'UV-indeks', icon: 'sun', size: 'small', widget: () => import('./Uv.svelte'), popup: conditions },
@@ -62,6 +63,6 @@ export const WIDGETS: WidgetDef[] = (
     { id: 'lightning', slug: 'lyn', title: 'Lyn', icon: 'bolt', size: 'small', widget: small, popup: () => import('../popups/LightningPopup.svelte') },
     { id: 'solar', slug: 'solstraaling', title: 'Solstråling', icon: 'sun', size: 'small', widget: small, popup: conditions },
   ] satisfies Omit<WidgetDef, 'popup' | 'phase'>[] | Partial<WidgetDef>[]
-).map((w) => ({ phase: 4, popup: popupPlaceholder, ...w }) as WidgetDef);
+).map((w) => ({ phase: 4, ...w }) as WidgetDef);
 
 export type WidgetId = WidgetDef['id'];

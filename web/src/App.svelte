@@ -28,7 +28,7 @@
 </main>
 
 {#if openDef?.popup}
-  <Modal title={openDef.title} icon={openDef.icon} onclose={() => ui.close()}>
+  <Modal title={openDef.title} icon={openDef.icon} size={openDef.popupSize} onclose={() => ui.close()}>
     {#await openDef.popup() then mod}
       <mod.default def={openDef} />
     {/await}

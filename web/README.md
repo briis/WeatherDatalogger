@@ -19,7 +19,7 @@ Browser ──► Caddy (weather-web LXC)
 | 1 — Struktur | API-endpoints (`/forecast`, `/history`, `/daily`, WS header-auth), datalag (WebSocket + REST-fallback, forecast-polling), da-DK formatering, design-tokens, responsivt grid, popup-skal, LXC/deploy | ✅ |
 | 2 — Hovedside | Hero med kompakt header ved scroll, animeret himmel (skyer, regn, sne, stjerner, lyn, tåge, sol/skumring), vejrtype fra station + prognose, offline/forældet-banner, PWA | ✅ |
 | 3 — Widgets | Timeprognose (temp/nedbør/vind-faner, sol-markører), 10-dages med temperaturbjælker, Vind med kompas, Luftkvalitet, Føles som, UV, Sol med solbane, Måne med fase-tegning, Nedbør, Sigtbarhed, Luftfugtighed, Lufttryk med måler, Lyn, Solstråling, Gennemsnit (klimanormal 1991–2020) og Nedbørsradar (DMI) | ✅ |
-| 4 — Popups | Fælles vejrforhold-popup (dag-vælger, målingsmenu, graf målt → prognose, opsummering, forklaring). Klar: Timeprognose, 10-dages (åbner valgt dag), Vind, Føles som, Nedbør, Luftfugtighed, Lufttryk, UV-indeks, Solstråling, Sigtbarhed — samt egne popupper for Sol (solbane, dagslængde), Måne (faser, 30-dages kalender), Luftkvalitet (CAQI-skala, 24 t.), Gennemsnit (måneden mod normalen) og Lyn. Følger: Radar-animation | 🚧 |
+| 4 — Popups | Fælles vejrforhold-popup (dag-vælger, målingsmenu, graf målt → prognose, opsummering, forklaring). Klar: Timeprognose, 10-dages (åbner valgt dag), Vind, Føles som, Nedbør, Luftfugtighed, Lufttryk, UV-indeks, Solstråling, Sigtbarhed — samt egne popupper for Sol (solbane, dagslængde), Måne (faser, 30-dages kalender), Luftkvalitet (CAQI-skala, 24 t.), Gennemsnit (måneden mod normalen) og Lyn, og Nedbørsradar (animation af de sidste 2 timer, tidslinje, zoom, farveforklaring) | ✅ |
 
 ## Struktur
 
