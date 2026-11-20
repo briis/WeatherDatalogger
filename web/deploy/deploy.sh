@@ -78,7 +78,10 @@ echo "$VERSION ($SHA, $BRANCH) $(date -Iseconds)" >"$RELEASE/VERSION.txt"
 
 ln -sfn "$RELEASE" "$WEB_ROOT/current.tmp"
 mv -T "$WEB_ROOT/current.tmp" "$WEB_ROOT/current"
-[[ "${RELOAD_CADDY:-}" == 1 ]] && systemctl reload caddy
+if [[ "${RELOAD_CADDY:-}" == 1 ]]; then
+  # Graceful reload; fall back to a restart (e.g. a running config without the admin API)
+  systemctl reload caddy || systemctl restart caddy
+fi
 
 # Prune old releases
 ls -1dt "$WEB_ROOT"/releases/*/ | tail -n +$((KEEP + 1)) | xargs -r rm -rf

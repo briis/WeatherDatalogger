@@ -12,7 +12,9 @@
 #                         Caddy should do TLS itself (or keep :80 behind NPM)
 
 {
-	admin off
+	# Admin API stays on (localhost:2019 only) — `systemctl reload caddy`
+	# pushes the new config through it; with `admin off` reloads fail.
+	admin localhost:2019
 }
 
 {$WEATHER_SITE_ADDRESS::80} {

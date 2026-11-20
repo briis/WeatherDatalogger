@@ -76,7 +76,7 @@ echo "==> First deploy"
 /usr/local/sbin/weather-web-deploy
 
 systemctl enable --now caddy
-systemctl reload-or-restart caddy
+systemctl reload caddy || systemctl restart caddy
 
 IP=$(hostname -I | awk '{print $1}')
 cat <<EOF
