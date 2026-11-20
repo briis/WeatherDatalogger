@@ -1,0 +1,58 @@
+# /etc/caddy/Caddyfile — weather-web LXC
+#
+# Serves the built frontend and reverse-proxies the handful of read-only API
+# endpoints it needs to the WeatherDatalogger API, injecting the API key
+# server-side. The browser never sees the key; anything outside the
+# whitelist below gets a 404 (so /docs, /openapi.json etc. stay internal).
+#
+# Values come from /etc/weather-web/env (see install.sh):
+#   WEATHER_API_UPSTREAM  e.g. 192.168.1.50:8000
+#   WEATHER_API_KEY       the [api] api_key from the datalogger's config.ini
+#   WEATHER_SITE_ADDRESS  ":80" on the LAN; later e.g. "vejr.briis.com" if
+#                         Caddy should do TLS itself (or keep :80 behind NPM)
+
+{
+	admin off
+}
+
+{$WEATHER_SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	@api {
+		method GET
+		path /api/v1/health /api/v1/current /api/v1/forecast /api/v1/history /api/v1/daily /api/v1/ws/current
+	}
+	handle @api {
+		reverse_proxy {$WEATHER_API_UPSTREAM} {
+			header_up X-API-Key {$WEATHER_API_KEY}
+			header_up -Cookie
+		}
+	}
+
+	handle /api/* {
+		respond 404
+	}
+
+	handle {
+		root * /var/www/weather/current
+		# Content-hashed assets can be cached forever; index.html never
+		header /assets/* Cache-Control "public, max-age=31536000, immutable"
+		header / Cache-Control "no-cache"
+		header /index.html Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+		level WARN
+	}
+}

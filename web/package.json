@@ -1,0 +1,29 @@
+{
+  "name": "weatherdatalogger-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Apple Weather-style Danish web frontend for WeatherDatalogger",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+  },
+  "dependencies": {
+    "suncalc": "^1.9.0",
+    "uplot": "^1.6.32"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tsconfig/svelte": "^5.0.9",
+    "@types/suncalc": "^1.9.2",
+    "svelte": "^5.58.1",
+    "svelte-check": "^4.7.8",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8"
+  }
+}

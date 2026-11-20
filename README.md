@@ -61,7 +61,8 @@ Ready to set it up? Jump to [Installation](#installation-debian--proxmox-lxc).
 
 | Directory | Purpose | Status |
 |---|---|---|
-| [`weatherdatalogger/api/`](weatherdatalogger/api/) | REST + WebSocket API — read-only access to `combined_realtime`/`combined_realtime_stats` for dashboards/apps | Active, optional |
+| [`weatherdatalogger/api/`](weatherdatalogger/api/) | REST + WebSocket API — read-only access to `combined_realtime`/`combined_realtime_stats`, forecast and `history_charting` for dashboards/apps | Active, optional |
+| [`web/`](web/) | Danish Apple Weather-style web frontend (Svelte, served by Caddy in its own LXC) on top of the API | In development, optional |
 
 ---
 
