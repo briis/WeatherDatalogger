@@ -32,7 +32,6 @@ export interface WidgetDef {
   phase: number;
 }
 
-const placeholder: Lazy = () => import('./Placeholder.svelte');
 const popupPlaceholder: Lazy = () => import('../popups/PopupPlaceholder.svelte');
 const small: Lazy = () => import('./StationSmall.svelte');
 
@@ -49,7 +48,7 @@ export const WIDGETS: WidgetDef[] = (
     { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide', widget: () => import('./Hourly.svelte') },
     { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium', widget: () => import('./Wind.svelte') },
     { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall', widget: () => import('./Daily.svelte') },
-    { id: 'map', slug: 'kort', title: 'Vindkort', icon: 'map', size: 'tall', widget: placeholder, phase: 3 },
+    { id: 'radar', slug: 'radar', title: 'Nedbørsradar', icon: 'map', size: 'tall', widget: () => import('./Radar.svelte') },
     { id: 'moon', slug: 'maane', title: 'Måne', icon: 'moon', size: 'medium', widget: () => import('./Moon.svelte') },
     { id: 'sun', slug: 'sol', title: 'Solnedgang', liveTitle: sunTitle, icon: 'sunset', size: 'small', widget: () => import('./Sun.svelte') },
     { id: 'uv', slug: 'uv', title: 'UV-indeks', icon: 'sun', size: 'small', widget: () => import('./Uv.svelte') },

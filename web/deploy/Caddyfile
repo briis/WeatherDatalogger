@@ -33,6 +33,14 @@
 		respond 404
 	}
 
+	# DMI radar frames rendered by weather-radar.timer (web/radar/)
+	handle /radar/* {
+		root * /var/lib/weather-web
+		header /radar/frames.json Cache-Control "no-cache"
+		header /radar/*.png Cache-Control "public, max-age=86400, immutable"
+		file_server
+	}
+
 	handle {
 		root * /var/www/weather/current
 		# Content-hashed assets can be cached forever; index.html never

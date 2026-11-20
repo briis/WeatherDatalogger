@@ -22,7 +22,7 @@ BRANCH="${BRANCH:-main}"
 
 echo "==> Installing packages"
 apt-get update -qq
-apt-get install -y -qq caddy nodejs npm git rsync curl ca-certificates
+apt-get install -y -qq caddy nodejs npm git rsync curl ca-certificates python3-venv
 
 # `pct enter` passes the host's LANG (usually en_US.UTF-8) into the CT, where
 # it isn't generated → "Can't set locale" warnings from apt/perl. Generate it.

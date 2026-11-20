@@ -8,10 +8,13 @@ import { fileURLToPath } from 'node:url';
 // Configure in web/.env.local (never committed):
 //   API_TARGET=http://192.168.1.x:8000
 //   API_KEY=...
+//   RADAR_TARGET=http://192.168.1.113   (the weather-web LXC)
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const target = env.API_TARGET ?? 'http://localhost:8000';
   const apiKey = env.API_KEY ?? '';
+  // Radar frames come from the weather-web LXC (or any host serving /radar/)
+  const radarTarget = env.RADAR_TARGET ?? 'http://localhost:8090';
 
   return {
     plugins: [svelte()],
@@ -27,6 +30,7 @@ export default defineConfig(({ mode }) => {
           ws: true,
           headers: { 'X-API-Key': apiKey },
         },
+        '/radar': { target: radarTarget, changeOrigin: true },
       },
     },
     build: {

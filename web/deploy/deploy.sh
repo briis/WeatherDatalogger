@@ -42,6 +42,35 @@ install -m 0755 deploy/deploy.sh /usr/local/sbin/weather-web-deploy
 # `pct enter` gives a minimal PATH without /usr/local/sbin — link it into /usr/sbin too
 ln -sf /usr/local/sbin/weather-web-deploy /usr/sbin/weather-web-deploy
 
+# ── Radar worker (DMI radar → PNG frames) ────────────────────────────────
+echo "==> Radar worker"
+dpkg -s python3-venv >/dev/null 2>&1 || apt-get install -y -qq python3-venv
+id weatherradar >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin weatherradar
+install -d -m 0755 -o weatherradar -g weatherradar /var/lib/weather-web/radar
+install -d -m 0755 /opt/weather-web/radar
+install -m 0644 radar/radar_worker.py radar/requirements.txt /opt/weather-web/radar/
+[[ -f /etc/weather-web/radar.ini ]] || install -m 0644 radar/radar.example.ini /etc/weather-web/radar.ini
+if [[ ! -x /opt/weather-web/radar-venv/bin/python3 ]]; then
+  python3 -m venv /opt/weather-web/radar-venv
+fi
+REQ_HASH=$(sha256sum radar/requirements.txt | cut -d' ' -f1)
+if [[ "$(cat /opt/weather-web/radar-venv/.req-hash 2>/dev/null)" != "$REQ_HASH" ]]; then
+  /opt/weather-web/radar-venv/bin/pip install -q --upgrade pip
+  /opt/weather-web/radar-venv/bin/pip install -q -r radar/requirements.txt
+  echo "$REQ_HASH" >/opt/weather-web/radar-venv/.req-hash
+fi
+UNITS_CHANGED=0
+for u in deploy/systemd/weather-radar.service deploy/systemd/weather-radar.timer; do
+  if ! cmp -s "$u" "/etc/systemd/system/$(basename "$u")"; then
+    install -m 0644 "$u" /etc/systemd/system/
+    UNITS_CHANGED=1
+  fi
+done
+[[ $UNITS_CHANGED == 1 ]] && systemctl daemon-reload
+systemctl enable --now weather-radar.timer >/dev/null
+# Render once now so the map has a frame right after a fresh install
+systemctl start --no-block weather-radar.service
+
 RELEASE="$WEB_ROOT/releases/$(date +%Y%m%d-%H%M%S)-$SHA"
 rsync -a --delete dist/ "$RELEASE/"
 VERSION=$(cat package.json | grep -m1 '"version"' | cut -d'"' -f4)
