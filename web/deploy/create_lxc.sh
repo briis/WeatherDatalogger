@@ -51,8 +51,12 @@ echo "    CT $CTID on $STORAGE, template from $TEMPLATE_STORAGE"
 
 echo "==> Finding latest Debian 13 template"
 pveam update >/dev/null
-TEMPLATE="$(pveam available --section system | awk '/debian-13-standard/ {print $2}' | sort -V | tail -1)"
-[[ -n "$TEMPLATE" ]] || { echo "No debian-13-standard template found"; exit 1; }
+# pveam lists every architecture — pick the host's (amd64/arm64), never "the
+# last one", or the CT fails to start with "Exec format error"
+ARCH="$(dpkg --print-architecture)"
+TEMPLATE="$(pveam available --section system | awk -v a="_${ARCH}.tar" '/debian-13-standard/ && index($2, a) {print $2}' | sort -V | tail -1)"
+[[ -n "$TEMPLATE" ]] || { echo "No debian-13-standard template for $ARCH found"; exit 1; }
+echo "    $TEMPLATE"
 if ! pveam list "$TEMPLATE_STORAGE" | grep -q "$TEMPLATE"; then
   pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
 fi
