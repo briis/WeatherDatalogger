@@ -24,6 +24,13 @@ echo "==> Installing packages"
 apt-get update -qq
 apt-get install -y -qq caddy nodejs npm git rsync curl ca-certificates
 
+# `pct enter` passes the host's LANG (usually en_US.UTF-8) into the CT, where
+# it isn't generated → "Can't set locale" warnings from apt/perl. Generate it.
+apt-get install -y -qq locales
+sed -i 's/^# *\(en_US.UTF-8\)/\1/; s/^# *\(da_DK.UTF-8\)/\1/' /etc/locale.gen
+locale-gen >/dev/null
+update-locale LANG=en_US.UTF-8
+
 echo "==> Directories"
 install -d -m 0755 "$WEB_ROOT/releases" /opt/weather-web
 install -d -m 0750 -o root -g caddy "$ENV_DIR"

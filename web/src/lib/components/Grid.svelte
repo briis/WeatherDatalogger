@@ -7,13 +7,17 @@
   import Card from './Card.svelte';
   import { WIDGETS } from '$lib/widgets/registry';
   import { ui } from '$lib/stores/ui.svelte';
+  import { scene } from '$lib/weather/scene.svelte';
+
+  // Re-evaluated every minute via scene.now
+  const titleOf = (def: (typeof WIDGETS)[number]) => (scene.now, def.liveTitle?.() ?? def.title);
 </script>
 
 <div class="grid">
   {#each WIDGETS as def (def.id)}
     <div class="cell {def.size}">
       <Card
-        title={def.title}
+        title={titleOf(def)}
         icon={def.icon}
         onopen={def.popup ? () => ui.open(def.id) : undefined}
       >

@@ -11,7 +11,7 @@
   const history = cachedLoad('history:24:temp', () => api.history(24, ['air_temperature_c']));
 </script>
 
-<p>Popup for <strong>{def.title}</strong> bygges i fase 4 — med dag-vælger, graf og forklaring.</p>
+<p>Popup for <strong>{def.title}</strong> bygges i fase {def.phase} — med dag-vælger, graf og forklaring.</p>
 
 {#await history}
   <p class="muted">Henter historik…</p>

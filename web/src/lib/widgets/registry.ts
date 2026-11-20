@@ -11,6 +11,7 @@
 
 import type { Component } from 'svelte';
 import type { IconName } from '$lib/components/icons';
+import { sunInfo } from '$lib/astro';
 
 export type WidgetSize = 'small' | 'medium' | 'wide' | 'tall';
 
@@ -25,35 +26,42 @@ export interface WidgetDef {
   size: WidgetSize;
   widget: Lazy;
   popup?: Lazy;
-  /** Phase in which the real implementation lands (for the placeholder). */
+  /** Header text that changes with time (e.g. Solnedgang ↔ Solopgang). */
+  liveTitle?: () => string;
+  /** Phase in which the real implementation lands (for placeholders). */
   phase: number;
 }
 
 const placeholder: Lazy = () => import('./Placeholder.svelte');
 const popupPlaceholder: Lazy = () => import('../popups/PopupPlaceholder.svelte');
+const small: Lazy = () => import('./StationSmall.svelte');
 
-export const WIDGETS = [
-  { id: 'airquality', slug: 'luftkvalitet', title: 'Luftkvalitet', icon: 'aqi', size: 'medium' },
-  { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide' },
-  { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium' },
-  { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall' },
-  { id: 'map', slug: 'kort', title: 'Vindkort', icon: 'map', size: 'tall' },
-  { id: 'moon', slug: 'maane', title: 'Måne', icon: 'moon', size: 'medium' },
-  { id: 'sun', slug: 'sol', title: 'Solnedgang', icon: 'sunset', size: 'small' },
-  { id: 'uv', slug: 'uv', title: 'UV-indeks', icon: 'sun', size: 'small' },
-  { id: 'feelslike', slug: 'foeles-som', title: 'Føles som', icon: 'thermometer', size: 'small' },
-  { id: 'averages', slug: 'gennemsnit', title: 'Gennemsnit', icon: 'chart', size: 'small' },
-  { id: 'precipitation', slug: 'nedboer', title: 'Nedbør', icon: 'drop', size: 'small' },
-  { id: 'visibility', slug: 'sigtbarhed', title: 'Sigtbarhed', icon: 'eye', size: 'small' },
-  { id: 'humidity', slug: 'luftfugtighed', title: 'Luftfugtighed', icon: 'humidity', size: 'small' },
-  { id: 'pressure', slug: 'lufttryk', title: 'Lufttryk', icon: 'gauge', size: 'small' },
-  { id: 'lightning', slug: 'lyn', title: 'Lyn', icon: 'bolt', size: 'small' },
-  { id: 'solar', slug: 'solstraaling', title: 'Solstråling', icon: 'sun', size: 'small' },
-].map((w) => ({
-  ...w,
-  phase: 3,
-  widget: placeholder,
-  popup: popupPlaceholder,
-})) as WidgetDef[];
+/** Sol: the header names the next event, like Apple's. */
+function sunTitle(): string {
+  const { sunrise, sunset } = sunInfo();
+  const now = new Date();
+  return now > sunrise && now < sunset ? 'Solnedgang' : 'Solopgang';
+}
 
-export type WidgetId = (typeof WIDGETS)[number]['id'];
+export const WIDGETS: WidgetDef[] = (
+  [
+    { id: 'airquality', slug: 'luftkvalitet', title: 'Luftkvalitet', icon: 'aqi', size: 'medium', widget: () => import('./AirQuality.svelte') },
+    { id: 'hourly', slug: 'timeprognose', title: 'Timeprognose', icon: 'clock', size: 'wide', widget: () => import('./Hourly.svelte') },
+    { id: 'wind', slug: 'vind', title: 'Vind', icon: 'wind', size: 'medium', widget: () => import('./Wind.svelte') },
+    { id: 'daily', slug: 'prognose', title: '10-dages prognose', icon: 'calendar', size: 'tall', widget: () => import('./Daily.svelte') },
+    { id: 'map', slug: 'kort', title: 'Vindkort', icon: 'map', size: 'tall', widget: placeholder, phase: 3 },
+    { id: 'moon', slug: 'maane', title: 'Måne', icon: 'moon', size: 'medium', widget: () => import('./Moon.svelte') },
+    { id: 'sun', slug: 'sol', title: 'Solnedgang', liveTitle: sunTitle, icon: 'sunset', size: 'small', widget: () => import('./Sun.svelte') },
+    { id: 'uv', slug: 'uv', title: 'UV-indeks', icon: 'sun', size: 'small', widget: () => import('./Uv.svelte') },
+    { id: 'feelslike', slug: 'foeles-som', title: 'Føles som', icon: 'thermometer', size: 'small', widget: small },
+    { id: 'averages', slug: 'gennemsnit', title: 'Gennemsnit', icon: 'chart', size: 'small', widget: () => import('./Averages.svelte') },
+    { id: 'precipitation', slug: 'nedboer', title: 'Nedbør', icon: 'drop', size: 'small', widget: small },
+    { id: 'visibility', slug: 'sigtbarhed', title: 'Sigtbarhed', icon: 'eye', size: 'small', widget: small },
+    { id: 'humidity', slug: 'luftfugtighed', title: 'Luftfugtighed', icon: 'humidity', size: 'small', widget: small },
+    { id: 'pressure', slug: 'lufttryk', title: 'Lufttryk', icon: 'gauge', size: 'small', widget: () => import('./Pressure.svelte') },
+    { id: 'lightning', slug: 'lyn', title: 'Lyn', icon: 'bolt', size: 'small', widget: small },
+    { id: 'solar', slug: 'solstraaling', title: 'Solstråling', icon: 'sun', size: 'small', widget: small },
+  ] satisfies Omit<WidgetDef, 'popup' | 'phase'>[] | Partial<WidgetDef>[]
+).map((w) => ({ phase: 4, popup: popupPlaceholder, ...w }) as WidgetDef);
+
+export type WidgetId = WidgetDef['id'];

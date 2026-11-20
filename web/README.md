@@ -18,7 +18,7 @@ Browser ──► Caddy (weather-web LXC)
 |---|---|---|
 | 1 — Struktur | API-endpoints (`/forecast`, `/history`, `/daily`, WS header-auth), datalag (WebSocket + REST-fallback, forecast-polling), da-DK formatering, design-tokens, responsivt grid, popup-skal, LXC/deploy | ✅ |
 | 2 — Hovedside | Hero med kompakt header ved scroll, animeret himmel (skyer, regn, sne, stjerner, lyn, tåge, sol/skumring), vejrtype fra station + prognose, offline/forældet-banner, PWA | ✅ |
-| 3 — Widgets | Timeprognose, 10-dages, Vind, Luftkvalitet, Føles som, UV, Sol, Måne, Nedbør, Sigtbarhed, Luftfugtighed, Lufttryk, Lyn, Solstråling, Gennemsnit, Vindkort | ⏳ |
+| 3 — Widgets | Timeprognose (temp/nedbør/vind-faner, sol-markører), 10-dages med temperaturbjælker, Vind med kompas, Luftkvalitet, Føles som, UV, Sol med solbane, Måne med fase-tegning, Nedbør, Sigtbarhed, Luftfugtighed, Lufttryk med måler, Lyn, Solstråling, Gennemsnit (klimanormal 1991–2020) — Vindkort afventer valg af kilde | ✅ |
 | 4 — Popups | Dag-vælger, graf (målt → prognose), forklaringstekster pr. widget | ⏳ |
 
 ## Struktur
@@ -43,6 +43,16 @@ web/
 ```
 
 Ny widget = én linje i `registry.ts` + `widgets/X.svelte` + `popups/X.svelte`.
+
+### Datakilder pr. widget
+
+| Widget | Kilde |
+|---|---|
+| Timeprognose, 10-dages, Sigtbarhed | Open-Meteo via API'et (`/forecast`); "Nu" og dagens H/L fra stationen |
+| Vind, Føles som, Luftfugtighed, Lufttryk, Nedbør (i dag), UV, Solstråling, Lyn | Stationen (`combined_realtime` + `_stats`) |
+| Luftkvalitet | AirLink/aqmonitor; sammenligning med i går fra `/daily` |
+| Sol, Måne | Beregnet lokalt (SunCalc) |
+| Gennemsnit | Dagens højeste vs. normal for datoen (±7 dage, 1991–2020) hentet direkte fra Open-Meteos historiske arkiv og cachet i browseren |
 
 ### Himlen
 

@@ -57,7 +57,7 @@
 
 <div class="ph">
   <div class="value">{preview}</div>
-  <div class="note">Widget kommer i fase {def.phase}</div>
+  <div class="note">{def.id === 'map' ? 'Kortkilde vælges (Windy eller DMI-radar)' : `Widget kommer i fase ${def.phase}`}</div>
 </div>
 
 <style>
