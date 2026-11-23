@@ -133,7 +133,7 @@ function model(d) {
   const hours = ((d.fc && d.fc.hourly) || [])
     .map((h) => ({ t: parseUtc(h.forecast_time), temp: h.temperature_c, cond: h.weather_condition, pop: h.precipitation_probability_pct }))
     .filter((h) => h.t && h.t > now - 30 * 60e3)
-    .slice(0, 6);
+    .slice(0, 5);
   const todayKey = now.toISOString().slice(0, 10);
   const days = ((d.fc && d.fc.daily) || [])
     .map((x) => ({ key: x.forecast_time.slice(0, 10), hi: x.temperature_high_c, lo: x.temperature_low_c, cond: x.weather_condition, pop: x.precipitation_probability_pct }))
@@ -155,10 +155,16 @@ function model(d) {
 }
 
 // ── Drawing helpers ─────────────────────────────────────────────────────
+// Small text and icons are scaled up on the home screen; the big temperature
+// and the lock-screen widgets keep their sizes. Tweak SCALE to taste.
+const SCALE = 1.2;
+let S = 1;
+const sz = (n) => (n <= 18 ? Math.round(n * S) : n);
 const WHITE = Color.white();
 const DIM = new Color("#ffffff", 0.75);
 
 function txt(stack, s, size, weight = "regular", color = WHITE) {
+  size = sz(size);
   const t = stack.addText(String(s));
   t.font = weight === "light" ? Font.lightSystemFont(size)
     : weight === "medium" ? Font.mediumSystemFont(size)
@@ -171,6 +177,7 @@ function txt(stack, s, size, weight = "regular", color = WHITE) {
 }
 
 function sym(stack, name, size, color = WHITE) {
+  size = sz(size);
   const sf = SFSymbol.named(name) || SFSymbol.named("cloud.fill");
   sf.applyFont(Font.systemFont(size));
   const img = stack.addImage(sf.image);
@@ -223,14 +230,14 @@ function dayRows(w, m) {
   for (const [i, d] of m.days.entries()) {
     const row = w.addStack();
     row.centerAlignContent();
-    const l = row.addStack(); l.size = new Size(44, 0); txt(l, dayLabel(d.key, i), 13, "medium");
-    const s = row.addStack(); s.size = new Size(28, 0); sym(s, symbolName(d.cond, false), 14);
-    const p = row.addStack(); p.size = new Size(34, 0);
+    const l = row.addStack(); l.size = new Size(sz(44), 0); txt(l, dayLabel(d.key, i), 13, "medium");
+    const s = row.addStack(); s.size = new Size(sz(28), 0); sym(s, symbolName(d.cond, false), 14);
+    const p = row.addStack(); p.size = new Size(sz(34), 0);
     if ((d.pop || 0) >= 30) txt(p, Math.round(d.pop) + "%", 11, "semibold", new Color("#8fd0ff"));
-    const lo = row.addStack(); lo.size = new Size(30, 0); lo.addSpacer(); txt(lo, r0(d.lo), 13, "medium", DIM);
+    const lo = row.addStack(); lo.size = new Size(sz(30), 0); lo.addSpacer(); txt(lo, r0(d.lo), 13, "medium", DIM);
     row.addSpacer(6);
     // temperature bar
-    const W = 90;
+    const W = S > 1 ? 70 : 90;
     const bar = row.addStack(); bar.size = new Size(W, 4); bar.cornerRadius = 2; bar.backgroundColor = new Color("#ffffff", 0.2);
     if (d.lo != null && d.hi != null) {
       const x0 = ((d.lo - min) / span) * W, x1 = ((d.hi - min) / span) * W;
@@ -241,8 +248,8 @@ function dayRows(w, m) {
     }
     bar.addSpacer();
     row.addSpacer(6);
-    const hi = row.addStack(); hi.size = new Size(30, 0); txt(hi, r0(d.hi), 13, "medium"); hi.addSpacer();
-    if (i < m.days.length - 1) w.addSpacer(5);
+    const hi = row.addStack(); hi.size = new Size(sz(30), 0); txt(hi, r0(d.hi), 13, "medium"); hi.addSpacer();
+    if (i < m.days.length - 1) w.addSpacer(4);
   }
 }
 
@@ -340,6 +347,7 @@ function errorWidget(e) {
 // ── Main ────────────────────────────────────────────────────────────────
 let widget;
 const fam = config.widgetFamily || "large"; // in-app preview: large
+if (!fam.startsWith("accessory")) S = SCALE;
 try {
   const m = model(await load());
   widget = { small, medium, large, extraLarge: large, accessoryRectangular: lockRect, accessoryCircular: lockCircle, accessoryInline: lockInline }[fam](m);
