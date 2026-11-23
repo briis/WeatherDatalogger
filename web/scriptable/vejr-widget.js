@@ -45,7 +45,12 @@ const parseUtc = (ts) => {
   const d = new Date(/([zZ]|[+-]\d\d:?\d\d)$/.test(ts) ? ts : ts + "Z");
   return isNaN(d) ? null : d;
 };
-const r0 = (v) => (v == null ? "–" : Math.round(v) + "°");
+// Typographic minus, like Apple's "−1°" (and no "-0°")
+const r0 = (v) => {
+  if (v == null) return "–";
+  const n = Math.round(v);
+  return (n < 0 ? "\u2212" + -n : String(n)) + "°";
+};
 
 // ── Condition → text, symbol, sky ───────────────────────────────────────
 const TEXT = {
@@ -265,12 +270,27 @@ function base(m) {
   return w;
 }
 
+// Apple Weather's small layout: place, big thin temperature, then the
+// condition icon and "high low" at the bottom.
 function small(m) {
   const w = base(m);
-  w.setPadding(14, 14, 14, 14);
-  header(w, m, false);
+  w.setPadding(16, 16, 15, 16);
+  S = 1; // own sizes, matched to Apple's widget
+  txt(w, PLACE + (m.stale ? " ·" : ""), 17, "semibold");
+  txt(w, r0(m.temp), 46, "light");
   w.addSpacer();
-  footerLines(w, m, true);
+  const row = w.addStack();
+  row.centerAlignContent();
+  sym(row, symbolName(m.cond, m.night), 20);
+  if (m.outlookShort) {
+    row.addSpacer(6);
+    txt(row, m.outlookShort, 13, "semibold");
+  }
+  w.addSpacer(3);
+  const hl = w.addStack();
+  txt(hl, r0(m.hi), 17, "medium");
+  hl.addSpacer(7);
+  txt(hl, r0(m.lo), 17, "medium", DIM);
   return w;
 }
 
