@@ -1,11 +1,16 @@
 <!--
   Page background: a sky gradient picked from the scene (condition family ×
   time of day), written as CSS variables on <body> so app.css can fade
-  between them, plus the animated WeatherFx layer on top.
+  between them, plus two animated layers: SkyClouds (WebGL volumetric clouds and stars)
+  and WeatherFx on top (glow, rain, snow, fog, lightning; it also draws
+  simple 2D clouds when WebGL isn't available).
 -->
 <script lang="ts">
   import { scene, type SkyFamily, type TimeOfDay } from '$lib/weather/scene.svelte';
   import WeatherFx from './WeatherFx.svelte';
+  import SkyClouds from './SkyClouds.svelte';
+
+  let glClouds = $state(false);
 
   type Sky = [top: string, bottom: string];
 
@@ -56,4 +61,5 @@
   });
 </script>
 
-<WeatherFx family={scene.family} tod={scene.tod} condition={scene.condition} />
+<SkyClouds family={scene.family} tod={scene.tod} preview={scene.preview.sky != null} bind:active={glClouds} />
+<WeatherFx family={scene.family} tod={scene.tod} condition={scene.condition} {glClouds} />

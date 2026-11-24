@@ -13,12 +13,20 @@
   import type { WeatherCondition } from '$lib/api/types';
   import { live } from '$lib/stores/weather.svelte';
   import type { SkyFamily, TimeOfDay } from '$lib/weather/scene.svelte';
+  import { fx } from '$lib/weather/fx';
 
   let {
     family,
     tod,
     condition,
-  }: { family: SkyFamily; tod: TimeOfDay; condition: WeatherCondition | null } = $props();
+    glClouds = false,
+  }: {
+    family: SkyFamily;
+    tod: TimeOfDay;
+    condition: WeatherCondition | null;
+    /** SkyClouds (WebGL) draws clouds and stars — skip the 2D versions */
+    glClouds?: boolean;
+  } = $props();
 
   let canvas: HTMLCanvasElement;
 
@@ -88,6 +96,7 @@
     const fam = family;
     const time = tod;
     const cond = condition;
+    const gl = glClouds;
     const ctx = canvas.getContext('2d')!;
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -124,7 +133,7 @@
       const area = (W * H) / (1280 * 800);
 
       stars =
-        night && (fam === 'clear' || fam === 'partly')
+        !gl && night && (fam === 'clear' || fam === 'partly')
           ? Array.from({ length: Math.round(140 * area * (fam === 'partly' ? 0.5 : 1)) }, () => ({
               x: rand(0, W),
               y: rand(0, H * 0.75),
@@ -134,7 +143,7 @@
             }))
           : [];
 
-      clouds = Array.from({ length: Math.round(cloudCount * Math.max(0.6, Math.sqrt(area))) }, () => {
+      clouds = Array.from({ length: gl ? 0 : Math.round(cloudCount * Math.max(0.6, Math.sqrt(area))) }, () => {
         const w = rand(260, 560) * Math.max(0.7, Math.min(1.3, W / 1100));
         return {
           x: rand(-w, W),
@@ -254,11 +263,12 @@
           nextFlash = t + rand(4000, 11000);
         }
         if (flash > 0.01) {
-          ctx.fillStyle = `rgba(235,240,255,${flash * 0.35})`;
+          ctx.fillStyle = `rgba(235,240,255,${flash * (gl ? 0.18 : 0.35)})`;
           ctx.fillRect(0, 0, W, H);
           // flicker: quick double-flash decay
           flash *= flash > 0.5 ? 0.82 : 0.9;
         }
+        fx.flash = flash > 0.01 ? flash : 0;
       }
 
       if (!reduced) raf = requestAnimationFrame(frame);
@@ -287,6 +297,7 @@
 
     return () => {
       cancelAnimationFrame(raf);
+      fx.flash = 0;
       removeEventListener('resize', onResize);
       document.removeEventListener('visibilitychange', onVisibility);
     };
